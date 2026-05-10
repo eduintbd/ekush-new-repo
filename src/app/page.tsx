@@ -49,6 +49,8 @@ export default function Home() {
 
         <p className="mt-10 text-xs text-zinc-500">
           Initial build — see <code className="font-mono">README.md</code> for status.
+          Sign-in is gated by Supabase Auth + the Profile.role enum
+          (admin, accountant, auditor, selling_agent).
         </p>
       </div>
     </main>

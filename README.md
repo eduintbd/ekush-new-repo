@@ -55,6 +55,7 @@ docs/
 | 2. Migrations + Chart of Accounts seed | done (seed file ready; needs DB to apply) |
 | 3. /journals + /journals/new | not started |
 | 4. /trial-balance | done (page renders; awaiting live data) |
+| 4a. Supabase Auth + role gates | done (auth-not-configured banner; redirects verified) |
 | 5. IS / BS / CE — `statement_mapping.ts` | done (BS balances; workbook tax bug surfaced — see file header) |
 | 5a. IS / BS UI pages | not started |
 | 6. Notes 4–27 | not started |

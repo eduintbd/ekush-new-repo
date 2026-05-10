@@ -8,6 +8,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { formatBdt } from "@/lib/format";
 import { getTrialBalance, type TrialBalanceReport } from "@/lib/trial-balance";
+import { requireStaff } from "@/lib/auth";
 
 type Search = { fy?: string };
 
@@ -35,6 +36,7 @@ export default async function TrialBalancePage({
 }: {
   searchParams: Promise<Search>;
 }) {
+  await requireStaff();
   const sp = await searchParams;
   const fiscalYears = await loadFiscalYears();
 
