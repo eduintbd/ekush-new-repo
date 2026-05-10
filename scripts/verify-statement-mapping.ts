@@ -127,6 +127,11 @@ async function main() {
       Math.abs(balance) < 1 ? "✓ balanced (< BDT 1)" : "✗ OUT OF BALANCE"
     }`,
   );
+
+  if (Math.abs(balance) >= 1) {
+    console.error("\nFATAL: balance sheet does not balance — mapping is broken.");
+    process.exit(1);
+  }
 }
 
 main().catch((e) => {

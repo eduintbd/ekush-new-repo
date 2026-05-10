@@ -15,6 +15,15 @@
 //   (net debit) and L (net credit) are mutually exclusive: K = max(0, ΣH−ΣI),
 //   L = max(0, ΣI−ΣH). The spec sometimes uses gross H/I instead — those
 //   formulas use grossDebit / grossCredit helpers and are commented inline.
+//
+// KNOWN WORKBOOK ISSUE (March 2026): the source workbook's IS!H24 pulls tax
+// from `'[6]Notes. (2)'!F12` — a STALE EXTERNAL workbook reference (link 6),
+// not the local Notes. (2). The local Notes. (2)!F12 = ₹19.07 L (correct
+// current-period provision computed from Capital Gain × 15% + Dividend × 20%
+// + source tax on Mgmt Fee). The external (cached) value = ₹6.01 L. We use
+// the local correctly-computed value; the workbook's IS tax line is wrong.
+// As a result, our Provision for Income Tax = ₹38.95 L vs workbook ₹25.89 L.
+// Both balance internally — only the magnitude differs.
 
 // ─── Inputs ──────────────────────────────────────────────────────
 
@@ -470,8 +479,11 @@ export function buildBalanceSheet(
   ];
 
   // Current liabilities
+  // Spec formula: L27 − IS!H24. Workbook stores IS!H24 as NEGATIVE (tax is a
+  // reduction of profit), so −(negative) = +. We store currentPeriodTaxExpense
+  // as a positive magnitude, so we add directly.
   const provisionForIncomeTax =
-    netC(tb, ACCOUNT.provisionForIncomeTax) - ext.currentPeriodTaxExpense;
+    netC(tb, ACCOUNT.provisionForIncomeTax) + ext.currentPeriodTaxExpense;
 
   const liabilityForOtherExpenses =
     netC(tb, ACCOUNT.auditFeeAccrued)            // L23
