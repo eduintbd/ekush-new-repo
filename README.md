@@ -53,17 +53,17 @@ docs/
 | --- | --- |
 | 1. Bootstrap | done |
 | 2. Migrations + Chart of Accounts seed | done (seed file ready; needs DB to apply) |
-| 3. /journals + /journals/new | not started |
+| 3. /journals + /journals/new | done (compound entry, balance check, audit triggers SQL) |
 | 4. /trial-balance | done (page renders; awaiting live data) |
 | 4a. Supabase Auth + role gates | done (auth-not-configured banner; redirects verified) |
 | 5. IS / BS / CE — `statement_mapping.ts` | done (BS balances; workbook tax bug surfaced — see file header) |
 | 5a. IS / BS UI pages | not started |
 | 6. Notes 4–27 | not started |
 | 7. /annexures | not started |
-| 8. Year-end Excel export | not started |
-| 9. Agent admin (`/agents`) | not started |
-| 10. Ekush Web investor API mock | not started |
-| 11. Agent portal + commission engine | not started |
+| 8. Year-end Excel export | done (xlsx with CoA/Journals/TB-C/IS./BS.; CE/Notes/Annexure stubbed) |
+| 9. Agent admin (`/admin/agents`) | done (list, invite, detail, approve/suspend/reinstate, terms history) |
+| 10. Ekush Web investor API mock | done (deterministic mock; SB0001 = canonical demo cohort) |
+| 11. Agent portal + commission engine | done (engine: upfront/trail/clawback per spec §8; agent UI; quarterly cron) |
 | 12. MFA, backups, log drains | not started |
 
 See `docs/X_System_Claude_Code_Prompt.docx` for the full brief; do not paraphrase — replicate the workbook line-by-line.
