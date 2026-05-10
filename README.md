@@ -55,7 +55,8 @@ docs/
 | 2. Migrations + Chart of Accounts seed | in progress |
 | 3. /journals + /journals/new | not started |
 | 4. /trial-balance | not started |
-| 5. IS / BS / CE | not started |
+| 5. IS / BS / CE — `statement_mapping.ts` | done (BS off by ₹38 L vs workbook — pending reconciliation) |
+| 5a. IS / BS UI pages | not started |
 | 6. Notes 4–27 | not started |
 | 7. /annexures | not started |
 | 8. Year-end Excel export | not started |

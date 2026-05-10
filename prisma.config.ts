@@ -10,6 +10,9 @@ export default defineConfig({
   },
   datasource: {
     url: process.env["DATABASE_URL"],
-    directUrl: process.env["DIRECT_URL"],
+    // Supabase: when using the pooler in DATABASE_URL, set DIRECT_URL to the
+    // direct (non-pooled) connection. Wire this in when we adopt Prisma 7's
+    // adapter pattern; for now, point DATABASE_URL straight at the direct
+    // connection during migrations.
   },
 });
