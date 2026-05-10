@@ -1,0 +1,271 @@
+// X-System (ekush-erp) — back-office accounting + selling-agent module
+// for Ekush Wealth Management Limited (the AMC, not the funds it manages).
+//
+// Models below are derived from the project brief in
+// docs/X_System_Claude_Code_Prompt.docx §5. Schema is plain Postgres so the
+// dataset is portable between Supabase and a self-hosted instance.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Auth bridge ─────────────────────────────────────────────────
+// auth.users lives in Supabase's managed schema; we mirror id + role here.
+// One Supabase user → one Profile. Role gates which portal they may access.
+
+enum UserRole {
+  admin
+  accountant
+  selling_agent
+  auditor
+}
+
+model Profile {
+  id        String   @id @db.Uuid // mirrors auth.users.id
+  email     String   @unique
+  fullName  String?  @map("full_name")
+  role      UserRole
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  agent SellingAgent? @relation("AgentProfile")
+
+  @@map("profiles")
+}
+
+// ─── Accounting (back-office) ────────────────────────────────────
+
+model ChartOfAccount {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sl            Int
+  name          String   @unique // FK target for Journal.accountName
+  normalBalance String   @map("normal_balance") // 'DEBIT' | 'CREDIT'
+  category      String?
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  journals Journal[]
+
+  @@index([sl])
+  @@map("chart_of_accounts")
+}
+
+model FiscalYear {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  label     String    @unique // 'FY2025-26'
+  startsOn  DateTime  @map("starts_on") @db.Date
+  endsOn    DateTime  @map("ends_on") @db.Date
+  isClosed  Boolean   @default(false) @map("is_closed")
+  closedAt  DateTime? @map("closed_at")
+  closedBy  String?   @map("closed_by") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  journals Journal[]
+
+  @@map("fiscal_years")
+}
+
+model Journal {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  entryDate    DateTime @map("entry_date") @db.Date
+  description  String?
+  txnType      String?  @map("txn_type") // 'OB','c','j', etc.
+  accountName  String   @map("account_name")
+  debit        Decimal  @default(0) @db.Decimal(18, 2)
+  credit       Decimal  @default(0) @db.Decimal(18, 2)
+  fiscalYearId String   @map("fiscal_year_id") @db.Uuid
+  batchId      String?  @map("batch_id") @db.Uuid
+  investorCode String?  @map("investor_code")
+  agentId      String?  @map("agent_id") @db.Uuid
+  fundCode     String?  @map("fund_code") // 'EFUF','EGF','ESRF'
+  createdBy    String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  account    ChartOfAccount @relation(fields: [accountName], references: [name], onUpdate: Cascade, onDelete: Restrict)
+  fiscalYear FiscalYear     @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  agent      SellingAgent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([entryDate])
+  @@index([accountName])
+  @@index([fiscalYearId])
+  @@index([batchId])
+  @@map("journals")
+}
+
+// ─── Selling-agent (commission engine) ───────────────────────────
+
+enum AgentStatus {
+  pending
+  approved
+  suspended
+  terminated
+}
+
+model SellingAgent {
+  id         String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code       String      @unique // 'SB0001'
+  fullName   String      @map("full_name")
+  email      String      @unique
+  phone      String?
+  status     AgentStatus @default(pending)
+  userId     String?     @unique @map("user_id") @db.Uuid // FK to Profile.id once approved
+  approvedAt DateTime?   @map("approved_at")
+  approvedBy String?     @map("approved_by") @db.Uuid
+  createdAt  DateTime    @default(now()) @map("created_at")
+  updatedAt  DateTime    @updatedAt @map("updated_at")
+
+  profile        Profile?            @relation("AgentProfile", fields: [userId], references: [id], onDelete: SetNull)
+  terms          AgentTerm[]
+  investors      AgentInvestor[]
+  commissionRuns CommissionRun[]
+  accruals       CommissionAccrual[]
+  journals       Journal[]
+
+  @@map("selling_agents")
+}
+
+enum FundCategory {
+  equity
+  fixed_income
+}
+
+model AgentTerm {
+  id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId          String       @map("agent_id") @db.Uuid
+  fundCategory     FundCategory @map("fund_category")
+  upfrontPct       Decimal      @map("upfront_pct") @db.Decimal(6, 4) // 0.0020 = 0.20%
+  trailY1PctPa     Decimal      @map("trail_y1_pct_pa") @db.Decimal(6, 4)
+  trailY2PlusPctPa Decimal      @map("trail_y2plus_pct_pa") @db.Decimal(6, 4)
+  trailFrequency   String       @default("quarterly") @map("trail_frequency")
+  clawbackMonths   Int          @default(6) @map("clawback_months")
+  clawbackPct      Decimal      @default(1.0000) @map("clawback_pct") @db.Decimal(5, 4)
+  effectiveFrom    DateTime     @map("effective_from") @db.Date
+  effectiveTo      DateTime?    @map("effective_to") @db.Date
+  createdBy        String?      @map("created_by") @db.Uuid
+  createdAt        DateTime     @default(now()) @map("created_at")
+
+  agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, fundCategory, effectiveFrom])
+  @@map("agent_terms")
+}
+
+model AgentInvestor {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId              String   @map("agent_id") @db.Uuid
+  investorCode         String   @map("investor_code") // matches Ekush Web
+  fundCode             String   @map("fund_code") // 'EFUF','EGF','ESRF'
+  sourcedOn            DateTime @map("sourced_on") @db.Date
+  initialUnits         Decimal  @map("initial_units") @db.Decimal(18, 4)
+  initialGrossAmount   Decimal  @map("initial_gross_amount") @db.Decimal(18, 2)
+  unitPriceAtSourcing  Decimal  @map("unit_price_at_sourcing") @db.Decimal(10, 4)
+  isDirectSubscription Boolean  @default(false) @map("is_direct_subscription")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  agent          SellingAgent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  commissionRuns CommissionRun[]
+
+  @@unique([investorCode, fundCode, sourcedOn])
+  @@index([agentId])
+  @@map("agent_investors")
+}
+
+model NavSnapshot {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fundCode     String   @map("fund_code")
+  snapshotDate DateTime @map("snapshot_date") @db.Date
+  unitNav      Decimal  @map("unit_nav") @db.Decimal(10, 4)
+  source       String   @default("manual")
+  createdBy    String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([fundCode, snapshotDate])
+  @@map("nav_snapshots")
+}
+
+enum CommissionType {
+  upfront
+  trail
+  clawback
+}
+
+enum CommissionStatus {
+  accrued
+  approved
+  paid
+  reversed
+}
+
+model CommissionRun {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId         String           @map("agent_id") @db.Uuid
+  agentInvestorId String?          @map("agent_investor_id") @db.Uuid
+  type            CommissionType
+  periodStart     DateTime?        @map("period_start") @db.Date
+  periodEnd       DateTime?        @map("period_end") @db.Date
+  baseAmount      Decimal          @map("base_amount") @db.Decimal(18, 2)
+  rateApplied     Decimal          @map("rate_applied") @db.Decimal(8, 6)
+  amount          Decimal          @db.Decimal(18, 2)
+  status          CommissionStatus @default(accrued)
+  paidOn          DateTime?        @map("paid_on") @db.Date
+  journalBatchId  String?          @map("journal_batch_id") @db.Uuid
+  notes           String?
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  agent         SellingAgent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agentInvestor AgentInvestor? @relation(fields: [agentInvestorId], references: [id], onDelete: SetNull)
+
+  // Idempotency for the quarterly run job
+  @@unique([agentInvestorId, type, periodStart, periodEnd], name: "uniq_run_period")
+  @@index([agentId, status])
+  @@map("commission_runs")
+}
+
+// Daily snapshot fed by the cron job that produces the agent dashboard's
+// "accrued today" / "this quarter to date" numbers. Reconciled against
+// CommissionRun rows at quarter close.
+model CommissionAccrual {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId          String   @map("agent_id") @db.Uuid
+  snapshotDate     DateTime @map("snapshot_date") @db.Date
+  upfrontTodayBdt  Decimal  @default(0) @map("upfront_today_bdt") @db.Decimal(18, 2)
+  trailTodayBdt    Decimal  @default(0) @map("trail_today_bdt") @db.Decimal(18, 2)
+  quarterToDateBdt Decimal  @default(0) @map("quarter_to_date_bdt") @db.Decimal(18, 2)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, snapshotDate])
+  @@map("commission_accruals")
+}
+
+// ─── Audit ───────────────────────────────────────────────────────
+// Trigger-fed log of every mutation on journals, agent_terms,
+// commission_runs, fiscal_years. Auditors will ask for it.
+
+model AuditLog {
+  id          BigInt   @id @default(autoincrement())
+  at          DateTime @default(now())
+  actor       String?  @db.Uuid
+  action      String // 'journal.create','journal.update','agent.approve', etc.
+  targetTable String?  @map("target_table")
+  targetId    String?  @map("target_id") @db.Uuid
+  before      Json?
+  after       Json?
+  ip          String?
+
+  @@index([at])
+  @@index([action])
+  @@index([targetTable, targetId])
+  @@map("audit_log")
+}

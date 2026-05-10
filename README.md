@@ -1,36 +1,67 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Ekush ERP — X-System
 
-## Getting Started
+Back-office accounting + selling-agent commission portal for **Ekush Wealth Management Limited** (the AMC, not the funds it manages).
 
-First, run the development server:
+Replaces `F.S March 2026.xlsx` as the day-to-day book of account. Accountants enter journals through a UI; the system auto-derives Trial Balance, Income Statement, Balance Sheet, Statement of Changes in Equity, Notes, and Annexures. Year-end exports a `.xlsx` that mirrors the original workbook so auditors cannot tell it was DB-generated.
+
+A separate selling-agent portal computes upfront, quarterly trail, and clawback commissions per the Selling Agent Agreement.
+
+> Standalone repo. **Not** linked to `eduintbd/ekush` or its Vercel projects. Investor data for the agent portal is mocked against the future Ekush Web API contract until the integration is wired in a later phase.
+
+## Stack
+
+- Next.js 16 (App Router) + React 19 + TypeScript
+- Tailwind v4
+- Prisma 5 + Postgres
+- Supabase Auth (staff `/login` + selling agents `/agent/login`)
+- exceljs for the year-end workbook export
+- Vercel Cron for the daily accrual + quarterly trail jobs
+
+## Getting started
 
 ```bash
+cp .env.example .env.local
+npm install
+npx prisma migrate dev
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Project layout
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+prisma/
+  schema.prisma          all models per spec §5
+  seed/                  Chart of Accounts seed (extracted from F.S March 2026.xlsx)
+src/
+  app/                   App Router routes
+    (admin)/             staff portal: /journals, /trial-balance, /balance-sheet, …
+    (agent)/             agent portal: /agent, /agent/investors, /agent/commissions
+    api/                 API routes incl. /api/exports/year-end
+  lib/
+    prisma.ts
+    supabase/            createSupabaseServerClient / createSupabaseBrowserClient
+    statement_mapping.ts account → IS/BS/CE/Notes line mapping (per spec §5.11)
+    format.ts            BDT formatting (Indian numbering system)
+docs/
+  X_System_Claude_Code_Prompt.docx   project brief (source of truth)
+  F.S March 2026.xlsx                reference workbook the export must reproduce
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Build status
 
-## Learn More
+| Spec phase | Status |
+| --- | --- |
+| 1. Bootstrap | done |
+| 2. Migrations + Chart of Accounts seed | in progress |
+| 3. /journals + /journals/new | not started |
+| 4. /trial-balance | not started |
+| 5. IS / BS / CE | not started |
+| 6. Notes 4–27 | not started |
+| 7. /annexures | not started |
+| 8. Year-end Excel export | not started |
+| 9. Agent admin (`/agents`) | not started |
+| 10. Ekush Web investor API mock | not started |
+| 11. Agent portal + commission engine | not started |
+| 12. MFA, backups, log drains | not started |
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See `docs/X_System_Claude_Code_Prompt.docx` for the full brief; do not paraphrase — replicate the workbook line-by-line.
