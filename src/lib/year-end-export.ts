@@ -12,6 +12,7 @@ import { getStatements } from "@/lib/statements";
 import { buildNotes, type Note } from "@/lib/notes";
 import { getNotesData } from "@/lib/notes-data";
 import { getAnnexureB, type AnnexureB } from "@/lib/annexures";
+import type { ChangesInEquity } from "@/lib/statement_mapping";
 
 const HEADER_FILL: ExcelJS.FillPattern = {
   type: "pattern",
@@ -32,6 +33,7 @@ export async function buildYearEndWorkbook(fiscalYearId: string): Promise<Buffer
     external,
     incomeStatement: is1,
     balanceSheet: bs,
+    changesInEquity: ce,
   } = await getStatements(fiscalYearId);
   const accounts = await prisma.chartOfAccount.findMany({ orderBy: { sl: "asc" } });
   const journals = await prisma.journal.findMany({
@@ -195,10 +197,8 @@ export async function buildYearEndWorkbook(fiscalYearId: string): Promise<Buffer
   const annexureB = await getAnnexureB(fiscalYearId);
   writeAnnexureMarchSheet(wb, annexureB);
 
-  // CE — placeholder until equity_movements schema lands.
-  const ce = wb.addWorksheet("CE");
-  ce.getCell("A1").value = "CE — placeholder. Fill out as schema lands.";
-  ce.getCell("A1").font = { italic: true, color: { argb: "FF6B7280" } };
+  // CE — Statement of Changes in Equity.
+  writeChangesInEquitySheet(wb, ce);
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
@@ -357,4 +357,47 @@ function writeAnnexureMarchSheet(wb: ExcelJS.Workbook, ax: AnnexureB) {
   sh.getColumn(1).width = 22;
   sh.getColumn(2).width = 32;
   for (const col of [3, 4, 5, 6, 7, 8]) sh.getColumn(col).width = 16;
+}
+
+function writeChangesInEquitySheet(wb: ExcelJS.Workbook, ce: ChangesInEquity) {
+  const sh = wb.addWorksheet("CE");
+  sh.getCell("B2").value = "Ekush Wealth Management Limited";
+  sh.getCell("B2").font = { bold: true, size: 12 };
+  sh.getCell("B3").value = "Statement of Changes in Equity";
+  sh.getCell("B3").font = { bold: true };
+  sh.getCell("B4").value = `For the period ended ${ce.current.closingDate.toISOString().slice(0, 10)}`;
+
+  const headerRow = sh.getRow(6);
+  ["Particular", "Paid-up Capital", "Fair Value Reserve", "Retained Earnings", "Total"].forEach(
+    (h, i) => {
+      const c = headerRow.getCell(i + 2);
+      c.value = h;
+      c.font = { bold: true };
+      c.fill = HEADER_FILL;
+    },
+  );
+
+  let r = 7;
+  for (const row of ce.current.rows) {
+    const xlRow = sh.getRow(r);
+    xlRow.getCell(2).value = row.label;
+    xlRow.getCell(3).value = row.paidUpCapital;
+    xlRow.getCell(4).value = row.fairValueReserve;
+    xlRow.getCell(5).value = row.retainedEarnings;
+    xlRow.getCell(6).value = row.total;
+    [3, 4, 5, 6].forEach((c) => (xlRow.getCell(c).numFmt = BDT_FORMAT));
+    if (row.subtotal) {
+      [2, 3, 4, 5, 6].forEach((c) => (xlRow.getCell(c).font = { bold: true }));
+    }
+    r++;
+  }
+
+  if (ce.needsInputs.length > 0) {
+    r++;
+    sh.getCell(`B${r}`).value = `Inputs needed: ${ce.needsInputs.join("; ")}`;
+    sh.getCell(`B${r}`).font = { italic: true, color: { argb: "FF92400E" } };
+  }
+
+  sh.getColumn(2).width = 48;
+  for (const col of [3, 4, 5, 6]) sh.getColumn(col).width = 22;
 }

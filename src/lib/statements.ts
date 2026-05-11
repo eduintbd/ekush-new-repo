@@ -14,9 +14,12 @@ import { getTrialBalance, toMappingTrialBalance, type TrialBalanceReport } from 
 import {
   buildIncomeStatement,
   buildBalanceSheet,
+  buildChangesInEquity,
+  ACCOUNT,
   type ExternalInputs,
   type IncomeStatement,
   type BalanceSheet,
+  type ChangesInEquity,
   type TrialBalance,
 } from "@/lib/statement_mapping";
 import { getUnrealisedFairValueLoss } from "@/lib/annexures";
@@ -38,6 +41,7 @@ export type Statements = {
   external: ExternalInputs;
   incomeStatement: IncomeStatement;
   balanceSheet: BalanceSheet;
+  changesInEquity: ChangesInEquity;
 };
 
 const ZERO_OVERRIDES: Required<StatementOverrides> = {
@@ -83,5 +87,43 @@ export async function getStatements(
   );
   const balanceSheet = buildBalanceSheet(tbMap, external);
 
-  return { fiscalYear, trialBalance, tbMap, external, incomeStatement, balanceSheet };
+  // Opening balances for the three equity accounts feed the CE rollforward.
+  const equityOpenings = await safeQuery(() =>
+    prisma.accountOpeningBalance.findMany({
+      where: {
+        fiscalYearId,
+        accountName: { in: [ACCOUNT.shareCapital, ACCOUNT.fairValueReserve, ACCOUNT.retainedEarning] },
+      },
+      select: { accountName: true, openingCredit: true },
+    }),
+  );
+  const obByName = new Map((equityOpenings ?? []).map((r) => [r.accountName, Number(r.openingCredit)]));
+  const changesInEquity = buildChangesInEquity(
+    tbMap,
+    incomeStatement,
+    {
+      shareCapital: obByName.get(ACCOUNT.shareCapital),
+      fairValueReserve: obByName.get(ACCOUNT.fairValueReserve),
+      retainedEarning: obByName.get(ACCOUNT.retainedEarning),
+    },
+    fiscalYear,
+  );
+
+  return {
+    fiscalYear,
+    trialBalance,
+    tbMap,
+    external,
+    incomeStatement,
+    balanceSheet,
+    changesInEquity,
+  };
+}
+
+async function safeQuery<T>(fn: () => Promise<T>): Promise<T | null> {
+  try {
+    return await fn();
+  } catch {
+    return null;
+  }
 }

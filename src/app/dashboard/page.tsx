@@ -67,6 +67,7 @@ export default async function DashboardPage() {
           <NavCard href="/journals" title="Journals" desc="Browse and enter compound journal entries (coming soon)." disabled />
           <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position." />
           <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI." />
+          <NavCard href="/changes-in-equity" title="Changes in Equity" desc="Rollforward of paid-up capital, fair value reserve, retained earnings." />
           <NavCard href="/notes" title="Notes" desc="Notes 4–27 to the financial statements." />
           <NavCard href="/annexures" title="Annexures" desc="Annexure-B: per-instrument investment holdings + unrealised G/L." />
           <NavCard href="/agents" title="Selling agents" desc="Approve, suspend, manage terms history (coming soon)." disabled />

@@ -60,7 +60,8 @@ docs/
 | 5a. IS / BS UI pages | done (`/income-statement`, `/balance-sheet`; external inputs via `?taxProvision=&fvLoss=&fvRecv=` until Notes/Annexure schema lands) |
 | 6. Notes 4–27 | done (`/notes` renders all 24 notes; rollforward + per-fund + per-instrument breakdowns now data-driven via `AccountOpeningBalance`, `FixedAsset`, `Shareholder`, `EmployeeDisclosure`, `Journal.instrumentCode`) |
 | 7. /annexures | done (Annexure-B from `InvestmentHolding`; computed unrealised G/L feeds IS OCI + Note 24 automatically; Annexure-A PPE register now backed by `FixedAsset`) |
-| 8. Year-end Excel export | done (xlsx with CoA/Journals/TB-C/IS./BS./Notes./Annexure march; CE stubbed) |
+| 8. Year-end Excel export | done (xlsx with CoA/Journals/TB-C/IS./BS./CE/Notes./Annexure march — CE rollforward derived from opening balances + IS) |
+| 8a. /changes-in-equity UI | done (paid-up capital / fair-value reserve / retained-earnings rollforward; reconciles against BS equity total) |
 | 9. Agent admin (`/admin/agents`) | done (list, invite, detail, approve/suspend/reinstate, terms history) |
 | 10. Ekush Web investor API mock | done (deterministic mock; SB0001 = canonical demo cohort) |
 | 11. Agent portal + commission engine | done (engine: upfront/trail/clawback per spec §8; agent UI; quarterly cron) |

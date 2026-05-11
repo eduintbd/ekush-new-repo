@@ -521,13 +521,19 @@ export function buildBalanceSheet(
 }
 
 // ─── Statement of Changes in Equity ──────────────────────────────
-// Spec §4 row description — columns: Paid-up Capital, Fair Value Reserve,
+// Spec §5.11 CE sheet — columns: Paid-up Capital, Fair Value Reserve,
 // Retained Earnings, Total. Rows: opening, dividend paid, share issue,
-// comprehensive income, OCI, closing.
+// comprehensive income, prior-year adjustment, OCI, closing.
 //
-// Minimal scaffold — accountants currently track these movements outside
-// TB-C (in the CE sheet). We need a CE-movement table in the schema before
-// this can compute end-to-end. Tracked under task #8.
+// All inputs derive from data the system already has:
+//   - opening balances per equity account → from AccountOpeningBalance
+//   - profit for the period → from IS (drives RE)
+//   - OCI total → from IS (drives FVR)
+//   - dividend paid / share issue → from journal activity against the
+//     equity accounts during the period (gross debit/credit minus the
+//     IS-driven movements)
+//   - prior-year adjustment to RE → any RE TB movement not explained by
+//     the current-period profit
 
 export type ChangesInEquityRow = {
   label: string;
@@ -535,15 +541,143 @@ export type ChangesInEquityRow = {
   fairValueReserve: number;
   retainedEarnings: number;
   total: number;
+  /** Bold + top-rule rendering for opening/closing balances. */
+  subtotal?: boolean;
+};
+
+export type ChangesInEquityPeriod = {
+  /** Display label for the opening date — workbook says "Balance as at <date>". */
+  openingDate: Date;
+  /** Display label for the closing date. */
+  closingDate: Date;
+  rows: ChangesInEquityRow[];
+  /** Closing equity per the rollforward; reconcile against BS equity total. */
+  closingTotal: number;
 };
 
 export type ChangesInEquity = {
-  rows: ChangesInEquityRow[];
+  current: ChangesInEquityPeriod;
+  /** Inputs the caller couldn't supply (e.g. opening balances missing). */
+  needsInputs: string[];
+};
+
+/** Minimal shape of an opening-balance row. Defined here so this module
+ * stays free of Prisma types — callers pass plain data. */
+export type EquityOpeningBalances = {
+  shareCapital: number | undefined;
+  fairValueReserve: number | undefined;
+  retainedEarning: number | undefined;
 };
 
 export function buildChangesInEquity(
-  /* tb: TrialBalance, ext: ExternalInputs */
+  tb: TrialBalance,
+  is1: IncomeStatement,
+  opening: EquityOpeningBalances,
+  fiscalYear: { startsOn: Date; endsOn: Date },
 ): ChangesInEquity {
-  // Stub. Full implementation requires a `equity_movements` table.
-  return { rows: [] };
+  const needsInputs: string[] = [];
+
+  // Opening balances — fall back to TB net credit when no opening_balances
+  // row was recorded (zero-history case during initial migration).
+  let openingSc = opening.shareCapital;
+  if (openingSc === undefined) {
+    openingSc = netC(tb, ACCOUNT.shareCapital);
+    needsInputs.push("Opening balance row for 'Share Capital' in `account_opening_balances`");
+  }
+  let openingFvr = opening.fairValueReserve;
+  if (openingFvr === undefined) {
+    openingFvr = netC(tb, ACCOUNT.fairValueReserve);
+    needsInputs.push("Opening balance row for 'Fair Value Reserve' in `account_opening_balances`");
+  }
+  let openingRe = opening.retainedEarning;
+  if (openingRe === undefined) {
+    openingRe = netC(tb, ACCOUNT.retainedEarning);
+    needsInputs.push("Opening balance row for 'Retained Earning' in `account_opening_balances`");
+  }
+
+  // Journal activity on the equity accounts during the period. Share issue =
+  // gross credit on Share Capital. Dividend declared = gross debit on
+  // Retained Earnings minus current-period close transfer (which our system
+  // does NOT post — profit is held in the IS and flows to RE at year-end).
+  const shareIssue = grossC(tb, ACCOUNT.shareCapital);
+  const dividendPaid = grossD(tb, ACCOUNT.retainedEarning);
+
+  // Profit for the period → Retained Earnings.
+  const profit = is1.profitForPeriod;
+
+  // OCI total → Fair Value Reserve.
+  const ociTotal = is1.oci.reduce((s, l) => s + l.amount, 0);
+
+  // Prior-year adjustment = anything in TB's RE balance not explained by
+  // opening + period activity. Captures opening-balance corrections etc.
+  const reTbBalance = netC(tb, ACCOUNT.retainedEarning);
+  const priorYearAdjustment = reTbBalance - openingRe + dividendPaid;
+
+  // Build the rows. Workbook order: Opening, Dividend Paid, Share Issue,
+  // Comprehensive Income, Prior-Year Adjustment, OCI, Closing.
+  const openingRow: ChangesInEquityRow = {
+    label: `Balance as at ${formatDate(addDays(fiscalYear.startsOn, -1))}`,
+    paidUpCapital: openingSc,
+    fairValueReserve: openingFvr,
+    retainedEarnings: openingRe,
+    total: openingSc + openingFvr + openingRe,
+    subtotal: true,
+  };
+
+  const activityRows: ChangesInEquityRow[] = [
+    row("Dividend Paid", 0, 0, -dividendPaid),
+    row("Share Issue During the Period", shareIssue, 0, 0),
+    row("Comprehensive Income/Loss During the Year", 0, 0, profit),
+    row("Prior Year Adjustment", 0, 0, priorYearAdjustment),
+    row("Other Comprehensive Income/Loss", 0, ociTotal, 0),
+  ];
+
+  const closingSc = openingSc + shareIssue;
+  const closingFvr = openingFvr + ociTotal;
+  const closingRe = openingRe - dividendPaid + profit + priorYearAdjustment;
+  const closingTotal = closingSc + closingFvr + closingRe;
+  const closingRow: ChangesInEquityRow = {
+    label: `Balance as at ${formatDate(fiscalYear.endsOn)}`,
+    paidUpCapital: closingSc,
+    fairValueReserve: closingFvr,
+    retainedEarnings: closingRe,
+    total: closingTotal,
+    subtotal: true,
+  };
+
+  return {
+    current: {
+      openingDate: addDays(fiscalYear.startsOn, -1),
+      closingDate: fiscalYear.endsOn,
+      rows: [openingRow, ...activityRows, closingRow],
+      closingTotal,
+    },
+    needsInputs,
+  };
+}
+
+function row(
+  label: string,
+  paidUpCapital: number,
+  fairValueReserve: number,
+  retainedEarnings: number,
+): ChangesInEquityRow {
+  return {
+    label,
+    paidUpCapital,
+    fairValueReserve,
+    retainedEarnings,
+    total: paidUpCapital + fairValueReserve + retainedEarnings,
+  };
+}
+
+function addDays(d: Date, days: number): Date {
+  const out = new Date(d);
+  out.setUTCDate(out.getUTCDate() + days);
+  return out;
+}
+
+function formatDate(d: Date): string {
+  const month = d.toLocaleString("en-US", { month: "long", timeZone: "UTC" });
+  return `${month} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
 }
