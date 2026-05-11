@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { prisma } from "@/lib/prisma";
+import { prisma, withActor } from "@/lib/prisma";
 import { requireRole, canEdit } from "@/lib/auth";
 
 const Line = z.object({
@@ -92,24 +92,28 @@ export async function createJournal(formData: FormData): Promise<void> {
     if (!foundSet.has(a)) back({ kind: "unknown_account", account: a });
   }
 
-  // Single batch_id ties lines together for compound entries.
+  // Single batch_id ties lines together for compound entries. Wrapped in
+  // withActor so the audit-log trigger records `profile.id` against each
+  // journal.create row.
   const batchId = randomUUID();
-  await prisma.journal.createMany({
-    data: data.lines.map((l) => ({
-      entryDate: entry,
-      description: data.description,
-      txnType: data.txnType,
-      accountName: l.accountName,
-      debit: l.debit,
-      credit: l.credit,
-      fiscalYearId: data.fiscalYearId,
-      batchId,
-      investorCode: data.investorCode,
-      fundCode: data.fundCode,
-      instrumentCode: data.instrumentCode,
-      createdBy: profile.id,
-    })),
-  });
+  await withActor(profile.id, (tx) =>
+    tx.journal.createMany({
+      data: data.lines.map((l) => ({
+        entryDate: entry,
+        description: data.description,
+        txnType: data.txnType,
+        accountName: l.accountName,
+        debit: l.debit,
+        credit: l.credit,
+        fiscalYearId: data.fiscalYearId,
+        batchId,
+        investorCode: data.investorCode,
+        fundCode: data.fundCode,
+        instrumentCode: data.instrumentCode,
+        createdBy: profile.id,
+      })),
+    }),
+  );
 
   revalidatePath("/journals");
   revalidatePath("/trial-balance");

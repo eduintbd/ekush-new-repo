@@ -112,8 +112,9 @@ Application code uses `console.log` / `console.error` in server actions and API 
 
 - `journal.create` / `journal.update` — audit trail mirror (the DB `audit_log` table is the source of truth; logs are a redundant copy).
 - `agent.approve` / `agent.suspend` / `agent.reinstate` — onboarding lifecycle.
-- `commission.run` — quarterly trail job output.
-- `mfa.enrolled` / `mfa.unenroll` / `mfa.verify_fail` — security events (TODO: add explicit log lines in the MFA actions).
+- `commission.run` — quarterly trail job output (emitted at the end of `POST /api/cron/quarterly-trail`).
+- `mfa.enrolled` / `mfa.unenroll` / `mfa.verify_fail` — security events emitted by `src/app/account/mfa/actions.ts` and `src/app/login/mfa/actions.ts`.
+- `tb.out_of_balance` / `tb.check_failed` — trial-balance integrity (emitted by `POST /api/cron/tb-check`; see §5).
 
 ### Health-probe ingestion
 
@@ -127,6 +128,25 @@ Application code uses `console.log` / `console.error` in server actions and API 
 | --- | --- | --- |
 | DB connectivity | `/api/health` | 2 consecutive failures |
 | Auth misconfiguration | `/api/health` (`auth: 'unconfigured'`) | Any occurrence in prod |
-| TB out of balance | (planned) cron task | Any occurrence |
+| TB out of balance | `tb.out_of_balance` log lines from `/api/cron/tb-check` | Any occurrence |
 | Quarterly trail run failed | `commission.run` log lines | Missing for >24h after quarter-end |
 | MFA bypass attempts | `mfa.verify_fail` log lines | >5 / user / hour |
+
+---
+
+## 5. Trial-balance integrity cron
+
+`POST /api/cron/tb-check` walks every open `FiscalYear`, runs the trial-balance aggregation, and emits one of two log lines per FY:
+
+- `event: "tb.out_of_balance"` — net debit total ≠ net credit total. Includes `delta`, `netDebit`, `netCredit`, `fiscalYearLabel`. Log drains should match on `event` and page on-call.
+- `event: "tb.check_failed"` — the aggregation threw (DB down, schema issue). Includes the error message.
+
+Schedule hourly via Vercel Cron or an external scheduler:
+
+```bash
+# Vercel cron-spec or external scheduler
+curl -X POST https://<host>/api/cron/tb-check \
+     -H "X-Cron-Secret: $CRON_SECRET"
+```
+
+Closed fiscal years are skipped — once a year is closed, mutations are blocked at the DB trigger level (`xsystem_journals_fy_closed_guard`), so the TB cannot drift.

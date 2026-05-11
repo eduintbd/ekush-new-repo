@@ -6,7 +6,9 @@
 --
 -- The actor field is set from a session-local variable
 -- xsystem.actor_uuid that the application sets at the start of each
--- transaction (see src/lib/prisma.ts setActor helper — TODO).
+-- transaction via the `withActor()` helper in src/lib/prisma.ts. Routes
+-- that mutate without going through `withActor` (e.g. background crons)
+-- will record a NULL actor — that's intentional.
 
 CREATE OR REPLACE FUNCTION xsystem_audit_trigger()
 RETURNS trigger

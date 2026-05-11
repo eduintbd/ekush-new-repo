@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
+import { prisma, withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
 
 const DEFAULT_TERM_EQUITY = {
@@ -19,12 +19,12 @@ const DEFAULT_TERM_FIXED_INCOME = {
 export async function approveAgent(id: string): Promise<void> {
   const me = await requireRole(["admin"]);
   const today = new Date();
-  await prisma.$transaction([
-    prisma.sellingAgent.update({
+  await withActor(me.id, async (tx) => {
+    await tx.sellingAgent.update({
       where: { id },
       data: { status: "approved", approvedAt: today, approvedBy: me.id },
-    }),
-    prisma.agentTerm.create({
+    });
+    await tx.agentTerm.create({
       data: {
         agentId: id,
         fundCategory: "equity",
@@ -32,8 +32,8 @@ export async function approveAgent(id: string): Promise<void> {
         effectiveFrom: today,
         createdBy: me.id,
       },
-    }),
-    prisma.agentTerm.create({
+    });
+    await tx.agentTerm.create({
       data: {
         agentId: id,
         fundCategory: "fixed_income",
@@ -41,22 +41,26 @@ export async function approveAgent(id: string): Promise<void> {
         effectiveFrom: today,
         createdBy: me.id,
       },
-    }),
-  ]);
+    });
+  });
   revalidatePath("/admin/agents");
   revalidatePath(`/admin/agents/${id}`);
 }
 
 export async function suspendAgent(id: string): Promise<void> {
-  await requireRole(["admin"]);
-  await prisma.sellingAgent.update({ where: { id }, data: { status: "suspended" } });
+  const me = await requireRole(["admin"]);
+  await withActor(me.id, (tx) =>
+    tx.sellingAgent.update({ where: { id }, data: { status: "suspended" } }),
+  );
   revalidatePath("/admin/agents");
   revalidatePath(`/admin/agents/${id}`);
 }
 
 export async function reinstateAgent(id: string): Promise<void> {
-  await requireRole(["admin"]);
-  await prisma.sellingAgent.update({ where: { id }, data: { status: "approved" } });
+  const me = await requireRole(["admin"]);
+  await withActor(me.id, (tx) =>
+    tx.sellingAgent.update({ where: { id }, data: { status: "approved" } }),
+  );
   revalidatePath("/admin/agents");
   revalidatePath(`/admin/agents/${id}`);
 }

@@ -54,9 +54,13 @@ export async function verifyEnrolment(formData: FormData): Promise<void> {
     code,
   });
   if (verifyErr) {
+    const { data: u } = await supabase.auth.getUser();
+    console.warn(JSON.stringify({ event: "mfa.verify_fail", phase: "enrolment", userId: u.user?.id, factorId, at: new Date().toISOString() }));
     redirect("/account/mfa?error=That+code+did+not+match.+Try+the+latest+code+from+your+app.");
   }
 
+  const { data: u } = await supabase.auth.getUser();
+  console.log(JSON.stringify({ event: "mfa.enrolled", userId: u.user?.id, factorId, at: new Date().toISOString() }));
   revalidatePath("/account/mfa");
   redirect("/account/mfa?ok=Enrolled");
 }
@@ -72,6 +76,8 @@ export async function unenrol(formData: FormData): Promise<void> {
   if (error) {
     redirect(`/account/mfa?error=${encodeURIComponent(error.message)}`);
   }
+  const { data: u } = await supabase.auth.getUser();
+  console.log(JSON.stringify({ event: "mfa.unenroll", userId: u.user?.id, factorId, at: new Date().toISOString() }));
   revalidatePath("/account/mfa");
   redirect("/account/mfa?ok=Removed");
 }

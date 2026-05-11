@@ -54,6 +54,8 @@ export async function verifyChallenge(formData: FormData): Promise<void> {
     code,
   });
   if (verifyErr) {
+    const { data: u } = await supabase.auth.getUser();
+    console.warn(JSON.stringify({ event: "mfa.verify_fail", phase: "challenge", portal, userId: u.user?.id, factorId, at: new Date().toISOString() }));
     redirect(`${errorReturn}?error=That+code+did+not+match.${next ? `&next=${encodeURIComponent(next)}` : ""}`);
   }
 

@@ -104,5 +104,18 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  console.log(
+    JSON.stringify({
+      event: "commission.run",
+      type: "quarterly-trail",
+      quarterStart: body.quarterStart,
+      quarterEnd: body.quarterEnd,
+      created,
+      skipped,
+      agents: agents.length,
+      at: new Date().toISOString(),
+    }),
+  );
+
   return NextResponse.json({ created, skipped, quarter: body });
 }
