@@ -1,16 +1,18 @@
-// POST /api/cron/tb-check
+// GET / POST /api/cron/tb-check
 // Iterates open fiscal years and verifies that each one's trial balance
 // balances (Σ net debit ≈ Σ net credit). Logs an alertable error on any
 // imbalance so the log drain / Datadog can page on-call. Returns a JSON
 // summary suitable for cron-monitor scraping.
 //
-// Auth: shared-secret header X-Cron-Secret matching CRON_SECRET env var.
-// Schedule: hourly is reasonable. The check is cheap on small datasets;
+// Auth: `Authorization: Bearer $CRON_SECRET` (Vercel Cron) or
+// `x-cron-secret: $CRON_SECRET` (manual / external scheduler).
+// Schedule: hourly via vercel.json. Check is cheap on small datasets;
 // for >100k journals the groupBy may want a SQL view.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTrialBalance } from "@/lib/trial-balance";
+import { authoriseCron } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,8 +26,8 @@ type FyResult = {
   balanced: boolean;
 };
 
-export async function POST(req: NextRequest) {
-  if (req.headers.get("x-cron-secret") !== process.env.CRON_SECRET) {
+async function handle(req: NextRequest) {
+  if (!authoriseCron(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -84,4 +86,11 @@ export async function POST(req: NextRequest) {
     outOfBalance,
     results,
   });
+}
+
+export async function GET(req: NextRequest) {
+  return handle(req);
+}
+export async function POST(req: NextRequest) {
+  return handle(req);
 }

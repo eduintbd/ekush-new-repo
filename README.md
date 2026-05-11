@@ -65,6 +65,6 @@ docs/
 | 9. Agent admin (`/admin/agents`) | done (list, invite, detail, approve/suspend/reinstate, terms history) |
 | 10. Ekush Web investor API mock | done (deterministic mock; SB0001 = canonical demo cohort) |
 | 11. Agent portal + commission engine | done (engine: upfront/trail/clawback per spec §8; agent UI; quarterly cron) |
-| 12. MFA, backups, log drains | done (TOTP MFA enrolment + step-up enforced on admin/accountant; `/api/health` for monitoring; backups + log-drain procedures documented in `OPERATIONS.md`) |
+| 12. MFA, backups, log drains | done (TOTP MFA + recovery codes; `/api/health` for monitoring; three Vercel-scheduled crons — tb-check / daily-accrual / quarterly-trail — wired in `vercel.json`; backups + log-drain procedures documented in `OPERATIONS.md`) |
 
 See `docs/X_System_Claude_Code_Prompt.docx` for the full brief; do not paraphrase — replicate the workbook line-by-line.

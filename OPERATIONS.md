@@ -140,19 +140,37 @@ Application code uses `console.log` / `console.error` in server actions and API 
 
 ---
 
-## 5. Trial-balance integrity cron
+## 5. Scheduled jobs (Vercel Cron)
 
-`POST /api/cron/tb-check` walks every open `FiscalYear`, runs the trial-balance aggregation, and emits one of two log lines per FY:
+`vercel.json` schedules three jobs. Each accepts both `Authorization: Bearer $CRON_SECRET` (Vercel default) and `x-cron-secret: $CRON_SECRET` (manual / external scheduler).
 
-- `event: "tb.out_of_balance"` — net debit total ≠ net credit total. Includes `delta`, `netDebit`, `netCredit`, `fiscalYearLabel`. Log drains should match on `event` and page on-call.
+| Path | Cron | What |
+| --- | --- | --- |
+| `/api/cron/tb-check` | `0 * * * *` (hourly) | Walks open fiscal years; emits `tb.out_of_balance` when net debit ≠ net credit. |
+| `/api/cron/daily-accrual` | `0 2 * * *` (02:00 UTC daily) | Snapshots each approved agent's accrual state into `CommissionAccrual` (today's upfront + trail; quarter-to-date). |
+| `/api/cron/quarterly-trail` | `0 3 1 1,4,7,10 *` (03:00 UTC on the 1st of Jan/Apr/Jul/Oct) | Computes `CommissionRun` rows for the just-completed calendar quarter. Auto-derives the quarter from the firing date when called with no params. |
+
+### tb-check log lines
+
+- `event: "tb.out_of_balance"` — includes `delta`, `netDebit`, `netCredit`, `fiscalYearLabel`. Log drains should match on `event` and page on-call.
 - `event: "tb.check_failed"` — the aggregation threw (DB down, schema issue). Includes the error message.
 
-Schedule hourly via Vercel Cron or an external scheduler:
+Closed fiscal years are skipped — once a year is closed, mutations are blocked at the DB trigger level (`xsystem_journals_fy_closed_guard`), so the TB cannot drift.
+
+### Manual invocation
 
 ```bash
-# Vercel cron-spec or external scheduler
+# Run the TB check now
 curl -X POST https://<host>/api/cron/tb-check \
-     -H "X-Cron-Secret: $CRON_SECRET"
-```
+     -H "x-cron-secret: $CRON_SECRET"
 
-Closed fiscal years are skipped — once a year is closed, mutations are blocked at the DB trigger level (`xsystem_journals_fy_closed_guard`), so the TB cannot drift.
+# Snapshot agent accruals for today
+curl -X POST https://<host>/api/cron/daily-accrual \
+     -H "x-cron-secret: $CRON_SECRET"
+
+# Run the quarterly trail for an explicit window (overrides auto-derivation)
+curl -X POST https://<host>/api/cron/quarterly-trail \
+     -H "x-cron-secret: $CRON_SECRET" \
+     -H "content-type: application/json" \
+     -d '{"quarterStart":"2026-01-01","quarterEnd":"2026-04-01"}'
+```

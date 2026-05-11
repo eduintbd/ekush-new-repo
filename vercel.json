@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/tb-check",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/daily-accrual",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/quarterly-trail",
+      "schedule": "0 3 1 1,4,7,10 *"
+    }
+  ]
+}

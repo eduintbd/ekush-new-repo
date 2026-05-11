@@ -1,9 +1,18 @@
-// POST /api/cron/quarterly-trail
+// GET / POST /api/cron/quarterly-trail
 // Computes a CommissionRun row for every (agent, agent_investor) combo
-// for the supplied quarter. Idempotent: the (agent_investor_id, type,
+// for the requested quarter. Idempotent: the (agent_investor_id, type,
 // period_start, period_end) unique constraint blocks duplicates.
 //
-// Auth: simple shared-secret header X-Cron-Secret. Add CRON_SECRET to env.
+// Auth: `Authorization: Bearer $CRON_SECRET` (Vercel Cron) or
+// `x-cron-secret: $CRON_SECRET` (manual / external scheduler).
+//
+// Quarter selection:
+//   - GET with no params → just-completed calendar quarter (intended use
+//     when Vercel Cron fires on the 1st of Apr/Jul/Oct/Jan).
+//   - POST with `{ quarterStart, quarterEnd }` body or GET with the
+//     same as query params → run for the explicit window.
+//
+// Schedule: 02:00 UTC on the 1st of each quarter via vercel.json.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -14,27 +23,61 @@ import {
 } from "@/lib/commission-engine";
 import { fetchInvestorsForAgent } from "@/lib/ekush-web/client";
 import type { FundCode } from "@/lib/ekush-web/types";
+import { authoriseCron, lastCompletedQuarter, todayUtc } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function POST(req: NextRequest) {
-  if (req.headers.get("x-cron-secret") !== process.env.CRON_SECRET) {
+async function resolveQuarter(req: NextRequest): Promise<
+  | { qStart: Date; qEnd: Date; quarterStart: string; quarterEnd: string }
+  | { error: string }
+> {
+  // POST with JSON body
+  if (req.method === "POST") {
+    const body = (await req.json().catch(() => ({}))) as {
+      quarterStart?: string;
+      quarterEnd?: string;
+    };
+    if (body.quarterStart && body.quarterEnd) {
+      return {
+        qStart: new Date(`${body.quarterStart}T00:00:00Z`),
+        qEnd: new Date(`${body.quarterEnd}T00:00:00Z`),
+        quarterStart: body.quarterStart,
+        quarterEnd: body.quarterEnd,
+      };
+    }
+  }
+  // GET — try query params first; else auto-derive last completed quarter.
+  const url = new URL(req.url);
+  const qs = url.searchParams.get("quarterStart");
+  const qe = url.searchParams.get("quarterEnd");
+  if (qs && qe) {
+    return {
+      qStart: new Date(`${qs}T00:00:00Z`),
+      qEnd: new Date(`${qe}T00:00:00Z`),
+      quarterStart: qs,
+      quarterEnd: qe,
+    };
+  }
+  const q = lastCompletedQuarter(todayUtc());
+  return {
+    qStart: q.start,
+    qEnd: q.end,
+    quarterStart: q.start.toISOString().slice(0, 10),
+    quarterEnd: q.end.toISOString().slice(0, 10),
+  };
+}
+
+async function handle(req: NextRequest) {
+  if (!authoriseCron(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const body = (await req.json().catch(() => ({}))) as {
-    quarterStart?: string;
-    quarterEnd?: string;
-  };
-  if (!body.quarterStart || !body.quarterEnd) {
-    return NextResponse.json(
-      { error: "quarterStart and quarterEnd (YYYY-MM-DD) required" },
-      { status: 400 },
-    );
+  const resolved = await resolveQuarter(req);
+  if ("error" in resolved) {
+    return NextResponse.json({ error: resolved.error }, { status: 400 });
   }
-  const qStart = new Date(`${body.quarterStart}T00:00:00Z`);
-  const qEnd = new Date(`${body.quarterEnd}T00:00:00Z`);
+  const { qStart, qEnd, quarterStart, quarterEnd } = resolved;
 
   const agents = await prisma.sellingAgent.findMany({
     where: { status: "approved" },
@@ -108,8 +151,8 @@ export async function POST(req: NextRequest) {
     JSON.stringify({
       event: "commission.run",
       type: "quarterly-trail",
-      quarterStart: body.quarterStart,
-      quarterEnd: body.quarterEnd,
+      quarterStart,
+      quarterEnd,
       created,
       skipped,
       agents: agents.length,
@@ -117,5 +160,16 @@ export async function POST(req: NextRequest) {
     }),
   );
 
-  return NextResponse.json({ created, skipped, quarter: body });
+  return NextResponse.json({
+    created,
+    skipped,
+    quarter: { quarterStart, quarterEnd },
+  });
+}
+
+export async function GET(req: NextRequest) {
+  return handle(req);
+}
+export async function POST(req: NextRequest) {
+  return handle(req);
 }

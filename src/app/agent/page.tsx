@@ -7,22 +7,18 @@ import { requireAgent } from "@/lib/auth";
 import { signOut } from "@/app/login/actions";
 import { prisma } from "@/lib/prisma";
 import { formatBdt } from "@/lib/format";
-
-/** Quarter window [start, end) for the date d (UTC). Quarters are
- * Jan-Mar / Apr-Jun / Jul-Sep / Oct-Dec — calendar quarters, not fiscal. */
-function currentQuarter(d: Date): { start: Date; end: Date; label: string } {
-  const y = d.getUTCFullYear();
-  const q = Math.floor(d.getUTCMonth() / 3); // 0..3
-  const start = new Date(Date.UTC(y, q * 3, 1));
-  const end = new Date(Date.UTC(y, q * 3 + 3, 1));
-  return { start, end, label: `Q${q + 1} ${y}` };
-}
+import { calendarQuarter, todayUtc } from "@/lib/cron-auth";
 
 async function loadKpis(agentId: string) {
-  const quarter = currentQuarter(new Date());
-  const [investorAum, accruedThisQ, lastPaid] = await Promise.all([
+  const quarter = calendarQuarter(todayUtc());
+  // Prefer the daily-accrual snapshot (cheap to read); fall back to live
+  // CommissionRun aggregation if no snapshot has run yet.
+  const [investorAum, latestAccrual, accruedThisQLive, lastPaid] = await Promise.all([
     prisma.agentInvestor
       .aggregate({ where: { agentId }, _sum: { initialGrossAmount: true } })
+      .catch(() => null),
+    prisma.commissionAccrual
+      .findFirst({ where: { agentId }, orderBy: [{ snapshotDate: "desc" }] })
       .catch(() => null),
     prisma.commissionRun
       .aggregate({
@@ -43,10 +39,16 @@ async function loadKpis(agentId: string) {
       .catch(() => null),
   ]);
 
+  const accruedThisQuarter =
+    latestAccrual && latestAccrual.snapshotDate >= quarter.start
+      ? Number(latestAccrual.quarterToDateBdt)
+      : Number(accruedThisQLive?._sum.amount ?? 0);
+
   return {
     quarter,
     initialAum: Number(investorAum?._sum.initialGrossAmount ?? 0),
-    accruedThisQuarter: Number(accruedThisQ?._sum.amount ?? 0),
+    accruedThisQuarter,
+    accrualSnapshotAt: latestAccrual?.snapshotDate ?? null,
     lastPaid,
   };
 }
@@ -144,7 +146,11 @@ async function KpiCards({ agentId }: { agentId: string }) {
       <Card
         label={`Accrued ${k.quarter.label}`}
         value={`BDT ${formatBdt(k.accruedThisQuarter)}`}
-        sub="Commission runs landing in this calendar quarter"
+        sub={
+          k.accrualSnapshotAt
+            ? `Snapshot ${k.accrualSnapshotAt.toISOString().slice(0, 10)}`
+            : "Commission runs landing in this calendar quarter"
+        }
       />
       <Card label="Last paid run" value={lastPaidLabel} sub={`BDT ${lastPaidAmount}`} />
     </div>
