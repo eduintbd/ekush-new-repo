@@ -1,16 +1,18 @@
-// /annexures — Annexure-B (Investments) per spec §5.11. Mirrors the
-// workbook's "Annexure march" sheet: per-instrument holdings grouped by
-// category, with cost, market value, and unrealised gain/(loss). The
-// total unrealised G/L flows into IS OCI (Note 24) automatically via
-// getStatements.
-//
-// Annexure-A (PPE register) is referenced by Note 4 but not yet schema-
-// backed; we surface it as a "not yet" callout.
+// /annexures — Annexure-A (PPE register) + Annexure-B (Investments) per
+// spec §5.11. Annexure-A pulls from FixedAsset + FixedAssetDepreciation;
+// Annexure-B mirrors the workbook's "Annexure march" sheet (per-instrument
+// holdings grouped by category). The total unrealised G/L on B flows into
+// IS OCI (Note 24) automatically via getStatements.
 
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { formatBdt } from "@/lib/format";
-import { getAnnexureB, type AnnexureGroup } from "@/lib/annexures";
+import {
+  getAnnexureA,
+  getAnnexureB,
+  type AnnexureAGroup,
+  type AnnexureGroup,
+} from "@/lib/annexures";
 import { requireStaff } from "@/lib/auth";
 
 type Search = { fy?: string };
@@ -45,11 +47,15 @@ export default async function AnnexuresPage({
   const selectedId = sp.fy ?? fiscalYears[0].id;
   const fyLabel = fiscalYears.find((y) => y.id === selectedId)?.label ?? "";
 
-  let annexure;
+  let annexureA, annexureB;
   try {
-    annexure = await getAnnexureB(selectedId);
+    [annexureA, annexureB] = await Promise.all([
+      getAnnexureA(selectedId),
+      getAnnexureB(selectedId),
+    ]);
   } catch {
-    annexure = null;
+    annexureA = null;
+    annexureB = null;
   }
 
   return (
@@ -70,13 +76,19 @@ export default async function AnnexuresPage({
           <FiscalYearPicker years={fiscalYears} selectedId={selectedId} />
         </div>
 
-        <AnnexureASection />
+        {annexureA ? (
+          <AnnexureASection groups={annexureA.groups} totals={annexureA.totals} fyLabel={fyLabel} />
+        ) : (
+          <p className="mt-8 text-sm text-zinc-500">
+            Could not load Annexure-A — FixedAsset table may not exist yet.
+          </p>
+        )}
 
-        {annexure ? (
+        {annexureB ? (
           <AnnexureBSection
-            asOfDate={annexure.asOfDate}
-            groups={annexure.groups}
-            totals={annexure.totals}
+            asOfDate={annexureB.asOfDate}
+            groups={annexureB.groups}
+            totals={annexureB.totals}
             fyLabel={fyLabel}
           />
         ) : (
@@ -95,21 +107,124 @@ export default async function AnnexuresPage({
   );
 }
 
-// ─── Annexure-A (PPE) placeholder ─────────────────────────────────
+// ─── Annexure-A (PPE register) ────────────────────────────────────
 
-function AnnexureASection() {
+function AnnexureASection({
+  groups,
+  totals,
+  fyLabel,
+}: {
+  groups: AnnexureAGroup[];
+  totals: { cost: number; accumulatedDepreciation: number; periodDepreciation: number; wdv: number };
+  fyLabel: string;
+}) {
+  const isEmpty = groups.every((g) => g.rows.length === 0);
+
   return (
-    <section className="mt-8 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
-        Annexure-A: Property, Plant and Equipment
-      </h2>
-      <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-        Inputs needed: PPE register (asset class, cost, addition, disposal,
-        accumulated depreciation, depreciation rate). Schema lands with the
-        PPE-register migration; surfaced today as a placeholder so Notes 4 + 22
-        can finalise.
-      </div>
+    <section className="mt-8 rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <header className="flex items-center justify-between border-b border-zinc-200 bg-zinc-50 px-5 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+        <div>
+          <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
+            Annexure-A: Property, Plant and Equipment
+          </h2>
+          <p className="mt-0.5 text-xs text-zinc-500">{fyLabel}</p>
+        </div>
+        {!isEmpty && (
+          <span className="inline-flex items-center rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+            WDV: BDT {formatBdt(totals.wdv)}
+          </span>
+        )}
+      </header>
+
+      {isEmpty ? (
+        <div className="px-5 py-10 text-center text-sm text-zinc-500">
+          No fixed-asset rows recorded yet. Assets are entered via Prisma
+          Studio (<code className="font-mono">npm run db:studio</code>) or
+          seeded into the <code className="font-mono">fixed_assets</code> table;
+          per-FY depreciation goes into <code className="font-mono">fixed_asset_depreciations</code>.
+          Once populated, totals feed Notes 4 (PPE) and 22 (Depreciation) automatically.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
+            <thead className="bg-zinc-50 text-[11px] uppercase tracking-wider text-zinc-500 dark:bg-zinc-950">
+              <tr>
+                <th className="px-4 py-2 text-left font-semibold">Asset</th>
+                <th className="px-4 py-2 text-left font-semibold">Acquired</th>
+                <th className="px-4 py-2 text-right font-semibold">Rate %/pa</th>
+                <th className="px-4 py-2 text-right font-semibold">Cost</th>
+                <th className="px-4 py-2 text-right font-semibold">Accumulated Depr.</th>
+                <th className="px-4 py-2 text-right font-semibold">Charged this FY</th>
+                <th className="px-4 py-2 text-right font-semibold">WDV</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {groups.map((g) =>
+                g.rows.length === 0 ? null : <AssetGroupRows key={g.assetClass} group={g} />,
+              )}
+            </tbody>
+            <tfoot className="bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900">
+              <tr className="font-semibold">
+                <td className="px-4 py-2.5">Grand Total</td>
+                <td />
+                <td />
+                <td className="px-4 py-2.5 text-right tabular-nums">{formatBdt(totals.cost)}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums">{formatBdt(totals.accumulatedDepreciation)}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums">{formatBdt(totals.periodDepreciation)}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums">{formatBdt(totals.wdv)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
     </section>
+  );
+}
+
+function AssetGroupRows({ group }: { group: AnnexureAGroup }) {
+  return (
+    <>
+      <tr className="bg-zinc-50/60 dark:bg-zinc-950/60">
+        <td colSpan={7} className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+          {group.label}
+        </td>
+      </tr>
+      {group.rows.map((r) => (
+        <tr key={r.id}>
+          <td className="px-4 py-2 pl-8">
+            {r.name}
+            {r.disposedOn && (
+              <span className="ml-2 inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                disposed {r.disposedOn.toISOString().slice(0, 10)}
+              </span>
+            )}
+          </td>
+          <td className="px-4 py-2 text-xs text-zinc-500">{r.acquiredOn.toISOString().slice(0, 10)}</td>
+          <td className="px-4 py-2 text-right tabular-nums">
+            {r.depreciationRatePctPa === null ? "—" : `${r.depreciationRatePctPa.toFixed(2)}%`}
+          </td>
+          <td className="px-4 py-2 text-right tabular-nums">{formatBdt(r.cost)}</td>
+          <td className="px-4 py-2 text-right tabular-nums">{formatBdt(r.accumulatedDepreciation)}</td>
+          <td className="px-4 py-2 text-right tabular-nums">
+            {r.periodDepreciation === 0 ? "—" : formatBdt(r.periodDepreciation)}
+          </td>
+          <td className="px-4 py-2 text-right tabular-nums">{formatBdt(r.wdv)}</td>
+        </tr>
+      ))}
+      <tr className="bg-zinc-50/50 dark:bg-zinc-950/50">
+        <td className="px-4 py-2 pl-8 text-sm italic text-zinc-600 dark:text-zinc-400">
+          Subtotal — {group.label}
+        </td>
+        <td />
+        <td />
+        <td className="px-4 py-2 text-right font-medium tabular-nums">{formatBdt(group.subtotals.cost)}</td>
+        <td className="px-4 py-2 text-right font-medium tabular-nums">{formatBdt(group.subtotals.accumulatedDepreciation)}</td>
+        <td className="px-4 py-2 text-right font-medium tabular-nums">
+          {group.subtotals.periodDepreciation === 0 ? "—" : formatBdt(group.subtotals.periodDepreciation)}
+        </td>
+        <td className="px-4 py-2 text-right font-medium tabular-nums">{formatBdt(group.subtotals.wdv)}</td>
+      </tr>
+    </>
   );
 }
 

@@ -1,14 +1,11 @@
-// Annexure-B (Investments) — per spec §5.11 Annexure march sheet.
-// Reads InvestmentHolding rows for a fiscal year and groups them by
-// category, computing per-row totalCost / marketValue / unrealisedGain
-// and per-category subtotals.
+// Annexure-A (PPE register) + Annexure-B (Investments) — per spec §5.11.
 //
-// The sum of unrealised G/L across all categories feeds the IS OCI
-// (unrealisedFairValueLoss). Until holdings are entered, the sum is 0
-// and the IS/BS/Notes pages fall back to query-string overrides.
+// Annexure-A reads FixedAsset + FixedAssetDepreciation grouped by asset class.
+// Annexure-B reads InvestmentHolding grouped by category. The sum of
+// unrealised G/L across categories feeds the IS OCI (unrealisedFairValueLoss).
 
 import { prisma } from "@/lib/prisma";
-import type { InvestmentCategory } from "@/generated/prisma";
+import type { AssetClass, InvestmentCategory } from "@/generated/prisma";
 
 export type AnnexureRow = {
   id: string;
@@ -156,4 +153,143 @@ export async function getUnrealisedFairValueLoss(fiscalYearId: string): Promise<
   } catch {
     return 0;
   }
+}
+
+// ─── Annexure-A (PPE register) ───────────────────────────────────
+
+const ASSET_CLASS_ORDER: AssetClass[] = [
+  "computers",
+  "office_decoration",
+  "office_equipment",
+  "other",
+];
+
+const ASSET_CLASS_LABEL: Record<AssetClass, string> = {
+  computers: "Computers",
+  office_decoration: "Office Decoration",
+  office_equipment: "Office Equipment",
+  other: "Other",
+};
+
+export type AnnexureARow = {
+  id: string;
+  name: string;
+  acquiredOn: Date;
+  cost: number;
+  /** Running accumulated depreciation through the period end. */
+  accumulatedDepreciation: number;
+  /** Depreciation charged in the report's FY (from FixedAssetDepreciation). */
+  periodDepreciation: number;
+  /** cost − accumulatedDepreciation */
+  wdv: number;
+  depreciationRatePctPa: number | null;
+  disposedOn: Date | null;
+};
+
+export type AnnexureAGroup = {
+  assetClass: AssetClass;
+  label: string;
+  rows: AnnexureARow[];
+  subtotals: {
+    cost: number;
+    accumulatedDepreciation: number;
+    periodDepreciation: number;
+    wdv: number;
+  };
+};
+
+export type AnnexureA = {
+  groups: AnnexureAGroup[];
+  totals: {
+    cost: number;
+    accumulatedDepreciation: number;
+    periodDepreciation: number;
+    wdv: number;
+  };
+};
+
+const EMPTY_A: AnnexureA = {
+  groups: ASSET_CLASS_ORDER.map((c) => ({
+    assetClass: c,
+    label: ASSET_CLASS_LABEL[c],
+    rows: [],
+    subtotals: { cost: 0, accumulatedDepreciation: 0, periodDepreciation: 0, wdv: 0 },
+  })),
+  totals: { cost: 0, accumulatedDepreciation: 0, periodDepreciation: 0, wdv: 0 },
+};
+
+/**
+ * PPE register for the given fiscal year, grouped by asset class. Returns
+ * an empty (zero-row) shell if the FixedAsset table is missing (pre-migration)
+ * or if no assets have been entered yet — page renders an inputs-needed banner.
+ */
+export async function getAnnexureA(fiscalYearId: string): Promise<AnnexureA> {
+  let assets;
+  let depreciations;
+  try {
+    [assets, depreciations] = await Promise.all([
+      prisma.fixedAsset.findMany({
+        orderBy: [{ assetClass: "asc" }, { acquiredOn: "asc" }],
+      }),
+      prisma.fixedAssetDepreciation.findMany({
+        where: { fiscalYearId },
+        select: { fixedAssetId: true, amount: true },
+      }),
+    ]);
+  } catch {
+    return EMPTY_A;
+  }
+
+  if (assets.length === 0) return EMPTY_A;
+
+  const depByAsset = new Map(
+    depreciations.map((d) => [d.fixedAssetId, Number(d.amount)]),
+  );
+
+  const byClass = new Map<AssetClass, AnnexureARow[]>();
+  for (const c of ASSET_CLASS_ORDER) byClass.set(c, []);
+
+  for (const a of assets) {
+    const cost = Number(a.cost);
+    const accumulatedDepreciation = Number(a.accumulatedDepreciation);
+    const periodDepreciation = depByAsset.get(a.id) ?? 0;
+    const row: AnnexureARow = {
+      id: a.id,
+      name: a.name,
+      acquiredOn: a.acquiredOn,
+      cost,
+      accumulatedDepreciation,
+      periodDepreciation,
+      wdv: cost - accumulatedDepreciation,
+      depreciationRatePctPa: a.depreciationRatePctPa === null ? null : Number(a.depreciationRatePctPa),
+      disposedOn: a.disposedOn,
+    };
+    byClass.get(a.assetClass)!.push(row);
+  }
+
+  const groups: AnnexureAGroup[] = ASSET_CLASS_ORDER.map((c) => {
+    const rows = byClass.get(c) ?? [];
+    const subtotals = rows.reduce(
+      (s, r) => ({
+        cost: s.cost + r.cost,
+        accumulatedDepreciation: s.accumulatedDepreciation + r.accumulatedDepreciation,
+        periodDepreciation: s.periodDepreciation + r.periodDepreciation,
+        wdv: s.wdv + r.wdv,
+      }),
+      { cost: 0, accumulatedDepreciation: 0, periodDepreciation: 0, wdv: 0 },
+    );
+    return { assetClass: c, label: ASSET_CLASS_LABEL[c], rows, subtotals };
+  });
+
+  const totals = groups.reduce(
+    (s, g) => ({
+      cost: s.cost + g.subtotals.cost,
+      accumulatedDepreciation: s.accumulatedDepreciation + g.subtotals.accumulatedDepreciation,
+      periodDepreciation: s.periodDepreciation + g.subtotals.periodDepreciation,
+      wdv: s.wdv + g.subtotals.wdv,
+    }),
+    { cost: 0, accumulatedDepreciation: 0, periodDepreciation: 0, wdv: 0 },
+  );
+
+  return { groups, totals };
 }

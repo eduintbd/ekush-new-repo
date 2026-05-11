@@ -1,7 +1,7 @@
 // Builds the year-end .xlsx that mirrors F.S March 2026.xlsx (spec §9).
 // Sheets in this order: Chart of Accounts, Journals, TB-C, BS., IS., CE,
-// Notes., Annexure march. Header / formula structure replicated cell-for-
-// cell so the auditor opens the file and sees the workbook they expect.
+// Notes., Annexure-A, Annexure march. Header / formula structure replicated
+// cell-for-cell so the auditor opens the file and sees the workbook they expect.
 //
 // Implementation uses exceljs (already a dep). Formulas are written as
 // strings; Excel/LibreOffice recalculates on open.
@@ -11,7 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { getStatements } from "@/lib/statements";
 import { buildNotes, type Note } from "@/lib/notes";
 import { getNotesData } from "@/lib/notes-data";
-import { getAnnexureB, type AnnexureB } from "@/lib/annexures";
+import { getAnnexureA, getAnnexureB, type AnnexureA, type AnnexureB } from "@/lib/annexures";
 import type { ChangesInEquity } from "@/lib/statement_mapping";
 
 const HEADER_FILL: ExcelJS.FillPattern = {
@@ -192,6 +192,10 @@ export async function buildYearEndWorkbook(fiscalYearId: string): Promise<Buffer
     data: notesData,
   });
   writeNotesSheet(wb, notes);
+
+  // Annexure-A — PPE register from FixedAsset + FixedAssetDepreciation.
+  const annexureA = await getAnnexureA(fiscalYearId);
+  writeAnnexureASheet(wb, annexureA);
 
   // Annexure march — Annexure-B (Investments) from InvestmentHolding.
   const annexureB = await getAnnexureB(fiscalYearId);
@@ -400,4 +404,88 @@ function writeChangesInEquitySheet(wb: ExcelJS.Workbook, ce: ChangesInEquity) {
 
   sh.getColumn(2).width = 48;
   for (const col of [3, 4, 5, 6]) sh.getColumn(col).width = 22;
+}
+
+function writeAnnexureASheet(wb: ExcelJS.Workbook, ax: AnnexureA) {
+  const sh = wb.addWorksheet("Annexure-A");
+  sh.getCell("H1").value = "Annexure-A";
+  sh.getCell("H1").font = { bold: true };
+  sh.getCell("B2").value = "Ekush Wealth Management Limited";
+  sh.getCell("B2").font = { bold: true };
+  sh.getCell("B3").value = "Property, Plant and Equipment";
+  sh.getCell("B3").font = { bold: true };
+
+  const headerRow = sh.getRow(5);
+  [
+    "",
+    "Asset",
+    "Acquired",
+    "Rate %/pa",
+    "Cost",
+    "Accumulated Depr.",
+    "Charged this FY",
+    "WDV",
+  ].forEach((h, i) => {
+    const c = headerRow.getCell(i + 1);
+    c.value = h;
+    if (h) {
+      c.font = { bold: true };
+      c.fill = HEADER_FILL;
+    }
+  });
+
+  let r = 6;
+  for (const g of ax.groups) {
+    if (g.rows.length === 0) continue;
+    sh.getCell(`A${r}`).value = g.label;
+    sh.getCell(`A${r}`).font = { bold: true };
+    r++;
+    for (const row of g.rows) {
+      sh.getCell(`B${r}`).value = row.disposedOn
+        ? `${row.name} (disposed ${row.disposedOn.toISOString().slice(0, 10)})`
+        : row.name;
+      sh.getCell(`C${r}`).value = row.acquiredOn.toISOString().slice(0, 10);
+      sh.getCell(`D${r}`).value = row.depreciationRatePctPa;
+      sh.getCell(`E${r}`).value = row.cost;
+      sh.getCell(`F${r}`).value = row.accumulatedDepreciation;
+      sh.getCell(`G${r}`).value = row.periodDepreciation;
+      sh.getCell(`H${r}`).value = row.wdv;
+      [`E${r}`, `F${r}`, `G${r}`, `H${r}`].forEach((c) => (sh.getCell(c).numFmt = BDT_FORMAT));
+      r++;
+    }
+    // Subtotal
+    sh.getCell(`B${r}`).value = `Subtotal — ${g.label}`;
+    sh.getCell(`B${r}`).font = { italic: true };
+    sh.getCell(`E${r}`).value = g.subtotals.cost;
+    sh.getCell(`F${r}`).value = g.subtotals.accumulatedDepreciation;
+    sh.getCell(`G${r}`).value = g.subtotals.periodDepreciation;
+    sh.getCell(`H${r}`).value = g.subtotals.wdv;
+    [`E${r}`, `F${r}`, `G${r}`, `H${r}`].forEach((c) => {
+      sh.getCell(c).numFmt = BDT_FORMAT;
+      sh.getCell(c).font = { italic: true };
+    });
+    r++;
+  }
+
+  if (ax.groups.every((g) => g.rows.length === 0)) {
+    sh.getCell(`B${r}`).value = "No fixed-asset rows recorded for this fiscal year.";
+    sh.getCell(`B${r}`).font = { italic: true, color: { argb: "FF6B7280" } };
+  } else {
+    // Grand total
+    sh.getCell(`B${r}`).value = "Grand Total";
+    sh.getCell(`B${r}`).font = { bold: true };
+    sh.getCell(`E${r}`).value = ax.totals.cost;
+    sh.getCell(`F${r}`).value = ax.totals.accumulatedDepreciation;
+    sh.getCell(`G${r}`).value = ax.totals.periodDepreciation;
+    sh.getCell(`H${r}`).value = ax.totals.wdv;
+    [`E${r}`, `F${r}`, `G${r}`, `H${r}`].forEach((c) => {
+      sh.getCell(c).numFmt = BDT_FORMAT;
+      sh.getCell(c).font = { bold: true };
+    });
+  }
+
+  sh.getColumn(1).width = 22;
+  sh.getColumn(2).width = 36;
+  sh.getColumn(3).width = 12;
+  for (const col of [4, 5, 6, 7, 8]) sh.getColumn(col).width = 16;
 }

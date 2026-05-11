@@ -1,7 +1,7 @@
-// /dashboard — staff portal landing (spec §6.1).
-// Spec calls for: FY summary card, journals last-10, alerts (TB out of balance,
-// BS out of balance, suspense > 0). Stub for now — fills out as the
-// data sources land.
+// /dashboard — staff portal landing (spec §6.1). Quick links to the
+// staff-facing pages. The FY summary card / journals last-10 / alert
+// tiles called for in the spec are a follow-up; the underlying pages
+// each render their own status on entry.
 
 import Link from "next/link";
 import { requireStaff } from "@/lib/auth";
@@ -59,18 +59,16 @@ export default async function DashboardPage() {
             Two-factor authentication recommended. <Link href="/account/mfa" className="underline">Enrol now</Link>.
           </div>
         ))}
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Quick links — full dashboard coming as the data lands.
-        </p>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">Quick links.</p>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <NavCard href="/trial-balance" title="Trial Balance" desc="Per-account net debit / net credit for the selected fiscal year." />
-          <NavCard href="/journals" title="Journals" desc="Browse and enter compound journal entries (coming soon)." disabled />
+          <NavCard href="/journals" title="Journals" desc="Browse and enter compound journal entries." />
           <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position." />
           <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI." />
           <NavCard href="/changes-in-equity" title="Changes in Equity" desc="Rollforward of paid-up capital, fair value reserve, retained earnings." />
           <NavCard href="/notes" title="Notes" desc="Notes 4–27 to the financial statements." />
           <NavCard href="/annexures" title="Annexures" desc="Annexure-B: per-instrument investment holdings + unrealised G/L." />
-          <NavCard href="/agents" title="Selling agents" desc="Approve, suspend, manage terms history (coming soon)." disabled />
+          <NavCard href="/admin/agents" title="Selling agents" desc="Approve, suspend, manage terms history." />
         </div>
       </div>
     </main>
