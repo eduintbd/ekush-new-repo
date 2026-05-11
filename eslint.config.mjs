@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Prisma-generated client lives under src/ to match `output` in
+    // schema.prisma. We never edit it; linting it generates ~485 errors
+    // on minified JS.
+    "src/generated/**",
   ]),
 ]);
 
