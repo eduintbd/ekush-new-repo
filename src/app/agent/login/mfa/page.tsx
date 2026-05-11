@@ -3,6 +3,8 @@
 // reached if requireAgent detects an enrolled factor and the session
 // has not yet stepped up to AAL2.
 
+import Link from "next/link";
+import { adminClientAvailable } from "@/lib/supabase/admin";
 import { verifyChallenge, signOutFromChallenge } from "@/app/login/mfa/actions";
 
 type Search = { next?: string; error?: string };
@@ -15,6 +17,7 @@ export default async function AgentMfaChallengePage({
   searchParams: Promise<Search>;
 }) {
   const sp = await searchParams;
+  const recoveryEnabled = adminClientAvailable();
   return (
     <main className="min-h-screen bg-gradient-to-br from-emerald-50 via-zinc-50 to-emerald-50 px-6 py-16 dark:from-emerald-950 dark:via-zinc-950 dark:to-emerald-950">
       <div className="mx-auto max-w-md">
@@ -57,6 +60,17 @@ export default async function AgentMfaChallengePage({
             Verify
           </button>
         </form>
+
+        {recoveryEnabled && (
+          <p className="mt-6 text-xs text-zinc-500">
+            <Link
+              href="/login/mfa/recovery?portal=agent"
+              className="underline hover:text-zinc-700 dark:hover:text-zinc-300"
+            >
+              Lost your authenticator? Use a recovery code →
+            </Link>
+          </p>
+        )}
 
         <form action={signOutFromChallenge} className="mt-6">
           <button

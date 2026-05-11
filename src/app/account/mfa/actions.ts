@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { generateRecoveryCodes } from "@/lib/mfa";
 
 /**
  * Begin TOTP enrolment. Returns the unverified factor id, the SVG QR
@@ -80,4 +81,34 @@ export async function unenrol(formData: FormData): Promise<void> {
   console.log(JSON.stringify({ event: "mfa.unenroll", userId: u.user?.id, factorId, at: new Date().toISOString() }));
   revalidatePath("/account/mfa");
   redirect("/account/mfa?ok=Removed");
+}
+
+/**
+ * Generate a fresh batch of recovery codes for the signed-in user. Burns
+ * any previously-unused codes. Returns the plaintext codes — the caller
+ * must display them once (the DB only stores hashes).
+ *
+ * Requires the user to be at AAL2 (i.e. they already proved MFA in this
+ * session) so an attacker who steals an AAL1 session can't issue new
+ * codes and lock the legitimate user out.
+ */
+export async function generateRecoveryCodesAction(): Promise<
+  { ok: true; codes: string[] } | { ok: false; error: string }
+> {
+  const supabase = await createSupabaseServerClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { ok: false, error: "Not signed in." };
+
+  const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (aal?.currentLevel !== "aal2") {
+    return {
+      ok: false,
+      error: "Step up to AAL2 first — verify your authenticator before generating codes.",
+    };
+  }
+
+  const codes = await generateRecoveryCodes(u.user.id);
+  console.log(JSON.stringify({ event: "mfa.recovery_codes_generated", userId: u.user.id, count: codes.length, at: new Date().toISOString() }));
+  revalidatePath("/account/mfa");
+  return { ok: true, codes };
 }

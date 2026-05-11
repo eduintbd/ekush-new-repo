@@ -395,6 +395,29 @@ model CommissionAccrual {
   @@map("commission_accruals")
 }
 
+// ─── MFA recovery codes ──────────────────────────────────────────
+// Single-use backup codes that let a user regain access if they lose
+// their TOTP device. On match, the recovery flow uses the Supabase
+// service-role client to unenrol all of the user's MFA factors and
+// signs them out; they then re-enrol on next sign-in.
+//
+// Codes are stored as bcrypt hashes — never in plaintext. The plaintext
+// is shown to the user once at generation and never again.
+
+model MfaRecoveryCode {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid // mirrors auth.users.id
+  codeHash  String    @map("code_hash")
+  /// Set when the code is redeemed. NULL = still available.
+  usedAt    DateTime? @map("used_at")
+  /// Optional convenience marker so the UI can show "code #3 was used".
+  label     String?
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, usedAt])
+  @@map("mfa_recovery_codes")
+}
+
 // ─── Audit ───────────────────────────────────────────────────────
 // Trigger-fed log of every mutation on journals, agent_terms,
 // commission_runs, fiscal_years. Auditors will ask for it.

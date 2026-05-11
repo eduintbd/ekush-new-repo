@@ -5,9 +5,11 @@
 import Link from "next/link";
 import { requireAuthenticated } from "@/lib/auth";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { getMfaStatus, mfaRequiredForRole } from "@/lib/mfa";
+import { getMfaStatus, mfaRequiredForRole, countActiveRecoveryCodes } from "@/lib/mfa";
+import { adminClientAvailable } from "@/lib/supabase/admin";
 import { unenrol } from "./actions";
 import { EnrolFlow } from "./enrol-flow";
+import { RecoveryCodesSection } from "./recovery-codes-section";
 
 type Search = { reason?: string; ok?: string; error?: string };
 
@@ -26,6 +28,8 @@ export default async function MfaPage({
   const required = mfaRequiredForRole(profile.role);
   const requiredAndMissing =
     required && status.verifiedFactors.length === 0;
+  const recoveryCount = status.verifiedFactors.length > 0 ? await countActiveRecoveryCodes(profile.id) : 0;
+  const recoveryAvailable = adminClientAvailable();
 
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
@@ -94,6 +98,22 @@ export default async function MfaPage({
             </h2>
             <EnrolFlow unverifiedFactors={status.unverifiedFactors} />
           </section>
+        )}
+
+        {status.verifiedFactors.length > 0 && (
+          recoveryAvailable ? (
+            <RecoveryCodesSection existingCount={recoveryCount} />
+          ) : (
+            <section className="mt-8">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500">
+                Recovery codes
+              </h2>
+              <p className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+                Recovery codes require the <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code> env var.
+                Set it in your deployment to enable self-service recovery; otherwise use the admin-reset path in <code className="font-mono">OPERATIONS.md</code> §1.3.
+              </p>
+            </section>
+          )
         )}
 
         {status.unverifiedFactors.length > 0 && status.verifiedFactors.length > 0 && (

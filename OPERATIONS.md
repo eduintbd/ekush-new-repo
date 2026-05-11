@@ -32,13 +32,19 @@ In the Supabase dashboard (Authentication → Multi-Factor Authentication):
 
 ### Recovery
 
-There is no built-in "remember this device" — every sign-in re-challenges. To recover a locked-out admin:
+There is no built-in "remember this device" — every sign-in re-challenges.
+
+**Self-service (recovery codes).** Users can generate single-use recovery codes from `/account/mfa` once they are at AAL2. Each user gets 10 codes; regenerating burns any unused ones. Codes are bcrypt-hashed in `mfa_recovery_codes`; plaintext is shown once at generation and never again.
+
+To use a code: sign in with password as normal → on the MFA challenge page, click **"Lost your authenticator? Use a recovery code →"** (visible only when `SUPABASE_SERVICE_ROLE_KEY` is set in env). Enter the code; the server hashes it, finds the match, uses the service-role client to unenrol every MFA factor on the account, marks the code consumed, and signs the user out. Next sign-in goes through `/account/mfa` to enrol a fresh device.
+
+**Admin reset (fallback).** When the user has no remaining recovery codes:
 
 1. Sign in with another admin → go to `/admin/agents/<userId>` (or Supabase dashboard).
 2. In Supabase dashboard → Authentication → Users → select the user → **Delete MFA factors**.
 3. User signs in with password only, is bounced to `/account/mfa?reason=required`, and re-enrols.
 
-Recovery codes are not yet implemented — track as a follow-up if needed.
+**Required config.** Recovery-code redemption requires `SUPABASE_SERVICE_ROLE_KEY`. When the env var is unset, the recovery section on `/account/mfa` displays a notice and the recovery link on the challenge page is hidden — fall back to admin reset.
 
 ---
 
@@ -113,7 +119,7 @@ Application code uses `console.log` / `console.error` in server actions and API 
 - `journal.create` / `journal.update` — audit trail mirror (the DB `audit_log` table is the source of truth; logs are a redundant copy).
 - `agent.approve` / `agent.suspend` / `agent.reinstate` — onboarding lifecycle.
 - `commission.run` — quarterly trail job output (emitted at the end of `POST /api/cron/quarterly-trail`).
-- `mfa.enrolled` / `mfa.unenroll` / `mfa.verify_fail` — security events emitted by `src/app/account/mfa/actions.ts` and `src/app/login/mfa/actions.ts`.
+- `mfa.enrolled` / `mfa.unenroll` / `mfa.verify_fail` / `mfa.recovery_codes_generated` / `mfa.recovery_consumed` — security events emitted by `src/app/account/mfa/actions.ts`, `src/app/login/mfa/actions.ts`, and `src/app/login/mfa/recovery/actions.ts`.
 - `tb.out_of_balance` / `tb.check_failed` — trial-balance integrity (emitted by `POST /api/cron/tb-check`; see §5).
 
 ### Health-probe ingestion

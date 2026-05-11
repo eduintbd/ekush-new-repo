@@ -2,6 +2,8 @@
 // Required for admin + accountant; also reached by anyone who has a
 // verified factor and lands here from the sign-in action.
 
+import Link from "next/link";
+import { adminClientAvailable } from "@/lib/supabase/admin";
 import { verifyChallenge, signOutFromChallenge } from "./actions";
 
 type Search = { next?: string; error?: string };
@@ -14,6 +16,7 @@ export default async function StaffMfaChallengePage({
   searchParams: Promise<Search>;
 }) {
   const sp = await searchParams;
+  const recoveryEnabled = adminClientAvailable();
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-16 dark:bg-zinc-950">
       <div className="mx-auto max-w-md">
@@ -54,6 +57,17 @@ export default async function StaffMfaChallengePage({
             Verify
           </button>
         </form>
+
+        {recoveryEnabled && (
+          <p className="mt-6 text-xs text-zinc-500">
+            <Link
+              href="/login/mfa/recovery?portal=staff"
+              className="underline hover:text-zinc-700 dark:hover:text-zinc-300"
+            >
+              Lost your authenticator? Use a recovery code →
+            </Link>
+          </p>
+        )}
 
         <form action={signOutFromChallenge} className="mt-6">
           <button
