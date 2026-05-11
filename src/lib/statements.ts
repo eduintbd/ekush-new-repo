@@ -1,13 +1,17 @@
-// Single entry point for "give me IS + BS for fiscal year X". Wraps the
+// Single entry point for "give me IS + BS + CE for fiscal year X". Wraps the
 // trial-balance fetch, the ExternalInputs wiring, and the two-pass
 // dependency between IS (computes net profit / tax) and BS (consumes them).
 //
-// External inputs:
-//   - unrealisedFairValueLoss: derived from InvestmentHolding rows if any
-//     exist (Annexure-B), else 0. Override via the `overrides` arg to test
-//     workbook scenarios.
-//   - currentTaxProvision, fairValueReceivableAdjustment: no schema yet
-//     (Notes (2) + Annexure receivable adj). 0 until overridden.
+// External inputs (accountant-supplied; not derivable from TB):
+//   - unrealisedFairValueLoss: derived from InvestmentHolding rows when
+//     Annexure-B is populated; falls back to 0. Override available for
+//     scenario testing.
+//   - mgmtFeeTaxAtSource: TDS already withheld on Mgmt Fee receipts during
+//     the period. We auto-derive the cap-gain + dividend tax pieces, but
+//     this minimum-tax piece needs the accountant because we don't yet
+//     track per-receipt TDS.
+//   - fairValueReceivableAdjustment: Annexure!M131 mark-to-fair-value on
+//     a sundry receivable. Accountant judgement call.
 
 import { prisma } from "@/lib/prisma";
 import { getTrialBalance, toMappingTrialBalance, type TrialBalanceReport } from "@/lib/trial-balance";
@@ -29,7 +33,7 @@ import type { FiscalYear } from "@/generated/prisma";
 export type StatementOverrides = Partial<
   Pick<
     ExternalInputs,
-    "unrealisedFairValueLoss" | "currentTaxProvision" | "fairValueReceivableAdjustment"
+    "unrealisedFairValueLoss" | "mgmtFeeTaxAtSource" | "fairValueReceivableAdjustment"
   >
 >;
 
@@ -46,7 +50,7 @@ export type Statements = {
 
 const ZERO_OVERRIDES: Required<StatementOverrides> = {
   unrealisedFairValueLoss: 0,
-  currentTaxProvision: 0,
+  mgmtFeeTaxAtSource: 0,
   fairValueReceivableAdjustment: 0,
 };
 

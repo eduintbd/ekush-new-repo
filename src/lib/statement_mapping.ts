@@ -42,11 +42,16 @@ export type TrialBalance = Map<string, AccountAggregate>;
 
 /** Inputs that don't come from the trial balance. */
 export type ExternalInputs = {
-  /** Annexure march!K27 — unrealised loss on listed shares (positive amount). */
+  /** Annexure march!K27 — unrealised loss on listed shares (positive amount).
+   * Auto-derived from `InvestmentHolding` rows when present. */
   unrealisedFairValueLoss: number;
-  /** Notes.(2)!F12 — current-tax provision for the period. */
-  currentTaxProvision: number;
-  /** Annexure!M131 — fair-value adjustment to sundry receivables. */
+  /** Notes.(2)!F11 — source-tax already withheld on Management Fee receipts
+   * during the period. BD tax law treats this as the minimum tax on mgmt
+   * fee income; we add it to the auto-derived cap-gain / dividend tax to get
+   * the full current-tax provision. Accountant-supplied; 0 when not provided. */
+  mgmtFeeTaxAtSource: number;
+  /** Annexure!M131 — fair-value adjustment to sundry receivables. Accountant-
+   * supplied; no schema target yet. */
   fairValueReceivableAdjustment: number;
   /** Used only by BS Retained Earnings line: net profit from the period IS. */
   currentPeriodNetProfit: number;
@@ -350,12 +355,22 @@ export function buildIncomeStatement(
 
   const profitBeforeTax = totalOperatingIncome - ga - financialExpenseMagnitude;
 
-  // Income Tax Expense — uses Notes.(2)!F12 current-tax provision.
+  // Income Tax Expense — auto-derived from Notes.(2)!F12 formula:
+  //   F8 = capitalGain × 15%     (BD long-term capital-gain rate on listed shares)
+  //   F9 = dividendIncome × 20%  (BD withholding rate on dividends)
+  //   F11 = source tax on Mgmt Fee at receipt (minimum tax on mgmt fee income)
+  //   F12 = SUM(F8:F11)
+  // The cap-gain + dividend pieces are fully derivable from the TB; the
+  // mgmt-fee TDS amount needs the accountant to supply it because we don't
+  // yet track per-receipt TDS in the journal model. Defaults to 0.
+  const capitalGainTax = capitalGain * 0.15;
+  const dividendTax = dividendIncome * 0.20;
+  const currentTaxProvision = capitalGainTax + dividendTax + ext.mgmtFeeTaxAtSource;
   const taxExpense: StatementLine[] = [
-    { label: "Current Tax Expense", amount: ext.currentTaxProvision },
+    { label: "Current Tax Expense", amount: currentTaxProvision },
   ];
 
-  const profitForPeriod = profitBeforeTax - ext.currentTaxProvision;
+  const profitForPeriod = profitBeforeTax - currentTaxProvision;
 
   // OCI
   // Unrealised loss on listed shares = −Annexure march!K27 (negative because it's a loss)

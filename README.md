@@ -57,7 +57,7 @@ docs/
 | 4. /trial-balance | done (page renders; awaiting live data) |
 | 4a. Supabase Auth + role gates | done (auth-not-configured banner; redirects verified) |
 | 5. IS / BS / CE — `statement_mapping.ts` | done (BS balances; workbook tax bug surfaced — see file header) |
-| 5a. IS / BS UI pages | done (`/income-statement`, `/balance-sheet`; external inputs via `?taxProvision=&fvLoss=&fvRecv=` until Notes/Annexure schema lands) |
+| 5a. IS / BS UI pages | done (`/income-statement`, `/balance-sheet`; current-tax provision auto-derived per Notes (2) formula — only `?mgmtFeeTax=&fvLoss=&fvRecv=` remain as accountant inputs) |
 | 6. Notes 4–27 | done (`/notes` renders all 24 notes; rollforward + per-fund + per-instrument breakdowns now data-driven via `AccountOpeningBalance`, `FixedAsset`, `Shareholder`, `EmployeeDisclosure`, `Journal.instrumentCode`) |
 | 7. /annexures | done (Annexure-B from `InvestmentHolding`; computed unrealised G/L feeds IS OCI + Note 24 automatically; Annexure-A PPE register now backed by `FixedAsset`) |
 | 8. Year-end Excel export | done (xlsx with CoA/Journals/TB-C/IS./BS./CE/Notes./Annexure march — CE rollforward derived from opening balances + IS) |

@@ -5,8 +5,8 @@
 // prior-year adjustment, OCI, closing.
 //
 // All inputs derive from data the system already has (opening balances +
-// IS profit / OCI + journal activity on equity accounts). External inputs
-// like `currentTaxProvision` propagate through IS.profitForPeriod.
+// IS profit / OCI + journal activity on equity accounts). Accountant
+// overrides (`mgmtFeeTax`, `fvLoss`, `fvRecv`) propagate through IS.
 
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
@@ -17,7 +17,7 @@ import type { ChangesInEquity, ChangesInEquityRow } from "@/lib/statement_mappin
 
 type Search = {
   fy?: string;
-  taxProvision?: string;
+  mgmtFeeTax?: string;
   fvLoss?: string;
   fvRecv?: string;
 };
@@ -35,12 +35,18 @@ async function loadFiscalYears(): Promise<Array<{ id: string; label: string }> |
 
 function parseOverrides(sp: Search): StatementOverrides {
   const out: StatementOverrides = {};
-  const tax = Number(sp.taxProvision);
-  if (Number.isFinite(tax)) out.currentTaxProvision = tax;
-  const loss = Number(sp.fvLoss);
-  if (Number.isFinite(loss)) out.unrealisedFairValueLoss = loss;
-  const recv = Number(sp.fvRecv);
-  if (Number.isFinite(recv)) out.fairValueReceivableAdjustment = recv;
+  if (sp.mgmtFeeTax !== undefined && sp.mgmtFeeTax !== "") {
+    const v = Number(sp.mgmtFeeTax);
+    if (Number.isFinite(v)) out.mgmtFeeTaxAtSource = v;
+  }
+  if (sp.fvLoss !== undefined && sp.fvLoss !== "") {
+    const v = Number(sp.fvLoss);
+    if (Number.isFinite(v)) out.unrealisedFairValueLoss = v;
+  }
+  if (sp.fvRecv !== undefined && sp.fvRecv !== "") {
+    const v = Number(sp.fvRecv);
+    if (Number.isFinite(v)) out.fairValueReceivableAdjustment = v;
+  }
   return out;
 }
 
@@ -216,8 +222,8 @@ function FiscalYearPicker({
           </option>
         ))}
       </select>
-      {overrides.currentTaxProvision !== undefined && (
-        <input type="hidden" name="taxProvision" value={overrides.currentTaxProvision} />
+      {overrides.mgmtFeeTaxAtSource !== undefined && (
+        <input type="hidden" name="mgmtFeeTax" value={overrides.mgmtFeeTaxAtSource} />
       )}
       {overrides.unrealisedFairValueLoss !== undefined && (
         <input type="hidden" name="fvLoss" value={overrides.unrealisedFairValueLoss} />

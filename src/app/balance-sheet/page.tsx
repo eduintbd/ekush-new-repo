@@ -1,10 +1,9 @@
 // /balance-sheet — Statement of Financial Position for the selected fiscal
 // year (spec §5.11 BS sheet). Mirrors the workbook BS. tab.
 //
-// External inputs (currentTaxProvision, fairValueReceivableAdjustment) come
-// from Notes. (2) + Annexure march which don't have a schema yet (tasks 6 +
-// 7). Until then, accept query-string overrides:
-//   /balance-sheet?fy=…&taxProvision=1907000&fvRecv=…
+// Current-tax provision auto-derives from TB; mgmt-fee TDS and fair-value
+// receivable adjustment remain accountant inputs. Pass:
+//   /balance-sheet?fy=…&mgmtFeeTax=661963&fvRecv=…
 
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
@@ -15,7 +14,7 @@ import type { BalanceSheet, StatementLine } from "@/lib/statement_mapping";
 
 type Search = {
   fy?: string;
-  taxProvision?: string;
+  mgmtFeeTax?: string;
   fvLoss?: string;
   fvRecv?: string;
 };
@@ -33,12 +32,18 @@ async function loadFiscalYears(): Promise<Array<{ id: string; label: string }> |
 
 function parseOverrides(sp: Search): StatementOverrides {
   const out: StatementOverrides = {};
-  const tax = Number(sp.taxProvision);
-  if (Number.isFinite(tax)) out.currentTaxProvision = tax;
-  const loss = Number(sp.fvLoss);
-  if (Number.isFinite(loss)) out.unrealisedFairValueLoss = loss;
-  const recv = Number(sp.fvRecv);
-  if (Number.isFinite(recv)) out.fairValueReceivableAdjustment = recv;
+  if (sp.mgmtFeeTax !== undefined && sp.mgmtFeeTax !== "") {
+    const v = Number(sp.mgmtFeeTax);
+    if (Number.isFinite(v)) out.mgmtFeeTaxAtSource = v;
+  }
+  if (sp.fvLoss !== undefined && sp.fvLoss !== "") {
+    const v = Number(sp.fvLoss);
+    if (Number.isFinite(v)) out.unrealisedFairValueLoss = v;
+  }
+  if (sp.fvRecv !== undefined && sp.fvRecv !== "") {
+    const v = Number(sp.fvRecv);
+    if (Number.isFinite(v)) out.fairValueReceivableAdjustment = v;
+  }
   return out;
 }
 
@@ -218,8 +223,8 @@ function ExternalInputsBanner({ overrides }: { overrides: StatementOverrides }) 
   if (hasOverrides) {
     return (
       <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-        Using URL-supplied overrides for external inputs:{" "}
-        {overrides.currentTaxProvision !== undefined && `currentTaxProvision=${overrides.currentTaxProvision} `}
+        Using URL-supplied overrides for accountant inputs:{" "}
+        {overrides.mgmtFeeTaxAtSource !== undefined && `mgmtFeeTaxAtSource=${overrides.mgmtFeeTaxAtSource} `}
         {overrides.unrealisedFairValueLoss !== undefined && `unrealisedFairValueLoss=${overrides.unrealisedFairValueLoss} `}
         {overrides.fairValueReceivableAdjustment !== undefined && `fairValueReceivableAdjustment=${overrides.fairValueReceivableAdjustment}`}
       </p>
@@ -227,8 +232,8 @@ function ExternalInputsBanner({ overrides }: { overrides: StatementOverrides }) 
   }
   return (
     <p className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
-      External inputs (current-tax provision, fair-value receivable adj.) are stubbed at 0 — Notes (2) + Annexure schema lands with tasks 6 + 7.
-      Pass <code className="font-mono">?taxProvision=…&fvRecv=…</code> to preview.
+      Provision for Income Tax auto-derives from IS. Mgmt-fee TDS and fair-value receivable adj. default to 0;
+      pass <code className="font-mono">?mgmtFeeTax=…&fvRecv=…</code> to override.
     </p>
   );
 }
@@ -259,8 +264,8 @@ function FiscalYearPicker({
           </option>
         ))}
       </select>
-      {overrides.currentTaxProvision !== undefined && (
-        <input type="hidden" name="taxProvision" value={overrides.currentTaxProvision} />
+      {overrides.mgmtFeeTaxAtSource !== undefined && (
+        <input type="hidden" name="mgmtFeeTax" value={overrides.mgmtFeeTaxAtSource} />
       )}
       {overrides.unrealisedFairValueLoss !== undefined && (
         <input type="hidden" name="fvLoss" value={overrides.unrealisedFairValueLoss} />

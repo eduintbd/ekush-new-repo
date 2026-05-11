@@ -67,22 +67,23 @@ async function main() {
   console.log(`TrialBalance built from TB-C: ${tb.size} accounts.`);
 
   // External inputs — pull from the appropriate cells.
-  // For the verification pass we read them directly; in production these
-  // come from the Notes / Annexure tables.
+  // - unrealisedFairValueLoss from Annexure march!K27
+  // - mgmtFeeTaxAtSource from Notes (2)!F11 (cap-gain + dividend pieces
+  //   are auto-derived inside buildIncomeStatement)
   const annexure = wb.getWorksheet("Annexure march");
   const unrealisedFairValueLoss = annexure ? num(annexure.getCell("K27").value) : 0;
   const notes2 = wb.getWorksheet("Notes. (2)") ?? wb.getWorksheet("Notes.(2)");
-  const currentTaxProvision = notes2 ? num(notes2.getCell("F12").value) : 0;
+  const mgmtFeeTaxAtSource = notes2 ? num(notes2.getCell("F11").value) : 0;
 
   const ext: ExternalInputs = {
     unrealisedFairValueLoss,
-    currentTaxProvision,
+    mgmtFeeTaxAtSource,
     fairValueReceivableAdjustment: 0, // Annexure!M131 — verify cell exists
     currentPeriodNetProfit: 0,
     currentPeriodTaxExpense: 0,
   };
   console.log(
-    `Inputs — unrealised loss: ${fmt(unrealisedFairValueLoss)}, current tax provision: ${fmt(currentTaxProvision)}`,
+    `Inputs — unrealised loss: ${fmt(unrealisedFairValueLoss)}, mgmt-fee tax at source: ${fmt(mgmtFeeTaxAtSource)}`,
   );
 
   // First pass — IS without the loop-back inputs

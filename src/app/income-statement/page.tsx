@@ -1,11 +1,10 @@
 // /income-statement — Statement of Profit or Loss + OCI for the selected
 // fiscal year (spec §5.11 IS sheet). Mirrors the workbook IS. tab.
 //
-// External inputs (currentTaxProvision, unrealisedFairValueLoss) come from
-// Notes. (2) + Annexure march which don't have a schema yet (tasks 6 + 7).
-// Until then, accept query-string overrides for preview against the
-// workbook's real numbers:
-//   /income-statement?fy=…&taxProvision=1907000&fvLoss=620000
+// Tax provision auto-derives from TB (capitalGain × 15% + dividend × 20%);
+// `mgmtFeeTax` is the only remaining accountant input — the source-tax
+// withheld on Management Fee receipts (Notes (2)!F11). Other overrides:
+//   /income-statement?fy=…&mgmtFeeTax=661963&fvLoss=620000
 
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
@@ -16,7 +15,7 @@ import type { IncomeStatement, StatementLine } from "@/lib/statement_mapping";
 
 type Search = {
   fy?: string;
-  taxProvision?: string;
+  mgmtFeeTax?: string;
   fvLoss?: string;
   fvRecv?: string;
 };
@@ -34,12 +33,18 @@ async function loadFiscalYears(): Promise<Array<{ id: string; label: string }> |
 
 function parseOverrides(sp: Search): StatementOverrides {
   const out: StatementOverrides = {};
-  const tax = Number(sp.taxProvision);
-  if (Number.isFinite(tax)) out.currentTaxProvision = tax;
-  const loss = Number(sp.fvLoss);
-  if (Number.isFinite(loss)) out.unrealisedFairValueLoss = loss;
-  const recv = Number(sp.fvRecv);
-  if (Number.isFinite(recv)) out.fairValueReceivableAdjustment = recv;
+  if (sp.mgmtFeeTax !== undefined && sp.mgmtFeeTax !== "") {
+    const v = Number(sp.mgmtFeeTax);
+    if (Number.isFinite(v)) out.mgmtFeeTaxAtSource = v;
+  }
+  if (sp.fvLoss !== undefined && sp.fvLoss !== "") {
+    const v = Number(sp.fvLoss);
+    if (Number.isFinite(v)) out.unrealisedFairValueLoss = v;
+  }
+  if (sp.fvRecv !== undefined && sp.fvRecv !== "") {
+    const v = Number(sp.fvRecv);
+    if (Number.isFinite(v)) out.fairValueReceivableAdjustment = v;
+  }
   return out;
 }
 
@@ -224,8 +229,8 @@ function ExternalInputsBanner({ overrides }: { overrides: StatementOverrides }) 
   if (hasOverrides) {
     return (
       <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-        Using URL-supplied overrides for external inputs:{" "}
-        {overrides.currentTaxProvision !== undefined && `currentTaxProvision=${overrides.currentTaxProvision} `}
+        Using URL-supplied overrides for accountant inputs:{" "}
+        {overrides.mgmtFeeTaxAtSource !== undefined && `mgmtFeeTaxAtSource=${overrides.mgmtFeeTaxAtSource} `}
         {overrides.unrealisedFairValueLoss !== undefined && `unrealisedFairValueLoss=${overrides.unrealisedFairValueLoss} `}
         {overrides.fairValueReceivableAdjustment !== undefined && `fairValueReceivableAdjustment=${overrides.fairValueReceivableAdjustment}`}
       </p>
@@ -233,8 +238,8 @@ function ExternalInputsBanner({ overrides }: { overrides: StatementOverrides }) 
   }
   return (
     <p className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
-      External inputs (current-tax provision, OCI fair-value loss) are stubbed at 0 — Notes (2) + Annexure schema lands with tasks 6 + 7.
-      Pass <code className="font-mono">?taxProvision=…&fvLoss=…</code> to preview.
+      Tax provision is auto-derived from TB (capital gain × 15% + dividend × 20%). The mgmt-fee source-tax (Notes (2)!F11) defaults to 0;
+      pass <code className="font-mono">?mgmtFeeTax=…</code> to add it, or <code className="font-mono">?fvLoss=…&fvRecv=…</code> for fair-value adjustments.
     </p>
   );
 }
@@ -265,8 +270,8 @@ function FiscalYearPicker({
           </option>
         ))}
       </select>
-      {overrides.currentTaxProvision !== undefined && (
-        <input type="hidden" name="taxProvision" value={overrides.currentTaxProvision} />
+      {overrides.mgmtFeeTaxAtSource !== undefined && (
+        <input type="hidden" name="mgmtFeeTax" value={overrides.mgmtFeeTaxAtSource} />
       )}
       {overrides.unrealisedFairValueLoss !== undefined && (
         <input type="hidden" name="fvLoss" value={overrides.unrealisedFairValueLoss} />
