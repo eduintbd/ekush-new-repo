@@ -55,10 +55,15 @@ export default async function NewJournalPage({
               ))}
             </SelectField>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Field label="Txn type" name="txnType" defaultValue="j" />
             <Field label="Fund (optional)" name="fundCode" placeholder="EFUF, EGF, ESRF" />
-            <Field label="Investor code (optional)" name="investorCode" />
+            <Field label="Investor (optional)" name="investorCode" />
+            <Field
+              label="Instrument (optional)"
+              name="instrumentCode"
+              placeholder="BRACBANK, BATBC, …"
+            />
           </div>
           <Field label="Description" name="description" />
 

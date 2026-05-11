@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
+import { getMfaStatus, hasVerifiedFactor, isStepped } from "@/lib/mfa";
 import type { UserRole } from "@/generated/prisma";
 
 const STAFF_ROLES: ReadonlyArray<UserRole> = ["admin", "accountant", "auditor"];
@@ -48,6 +49,13 @@ export async function signInStaff(formData: FormData): Promise<void> {
   // Mirror role to user_metadata so the edge middleware can route without
   // a DB lookup. Cheap on every login; profile.role is the source of truth.
   await supabase.auth.updateUser({ data: { role: profile.role } });
+
+  // If the user has a verified MFA factor and the new session is still
+  // AAL1, route them through the challenge before the destination.
+  const status = await getMfaStatus(supabase);
+  if (hasVerifiedFactor(status) && !isStepped(status)) {
+    redirect(`/login/mfa?next=${encodeURIComponent(next)}`);
+  }
 
   redirect(next);
 }

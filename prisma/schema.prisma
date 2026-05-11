@@ -51,7 +51,8 @@ model ChartOfAccount {
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
-  journals Journal[]
+  journals        Journal[]
+  openingBalances AccountOpeningBalance[]
 
   @@index([sl])
   @@map("chart_of_accounts")
@@ -68,9 +69,151 @@ model FiscalYear {
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
-  journals Journal[]
+  journals            Journal[]
+  investments         InvestmentHolding[]
+  openingBalances     AccountOpeningBalance[]
+  depreciationEntries FixedAssetDepreciation[]
+  employeeDisclosure  EmployeeDisclosure?
 
   @@map("fiscal_years")
+}
+
+// Snapshot of one investment position as at `asOfDate`. Backs the
+// Annexure-B (Investments) sheet of the year-end workbook and the
+// `/annexures` page. Aggregate sums per category should match the
+// matching TB-C investment accounts (investmentEfuf, investmentInShare,
+// etc.) — divergence indicates an unposted fair-value journal.
+enum InvestmentCategory {
+  listed_securities
+  open_end_mutual_funds
+  ipo_subscription
+  ipo_applications
+  private_placements
+}
+
+model InvestmentHolding {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fiscalYearId      String             @map("fiscal_year_id") @db.Uuid
+  asOfDate          DateTime           @map("as_of_date") @db.Date
+  category          InvestmentCategory
+  instrumentName    String             @map("instrument_name")
+  quantity          Decimal            @db.Decimal(18, 4)
+  avgCostPerUnit    Decimal            @map("avg_cost_per_unit") @db.Decimal(18, 4)
+  marketRatePerUnit Decimal?           @map("market_rate_per_unit") @db.Decimal(18, 4)
+  notes             String?
+  createdBy         String?            @map("created_by") @db.Uuid
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  fiscalYear FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+
+  @@index([fiscalYearId, asOfDate])
+  @@index([category])
+  @@map("investment_holdings")
+}
+
+// Opening balance per account per fiscal year — feeds Notes 10, 12,
+// 12.02, 14, 15.01, 24 rollforward sections. Trial balance for the
+// period closes by adding journal activity on top of this.
+model AccountOpeningBalance {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fiscalYearId  String   @map("fiscal_year_id") @db.Uuid
+  accountName   String   @map("account_name")
+  openingDebit  Decimal  @default(0) @map("opening_debit") @db.Decimal(18, 2)
+  openingCredit Decimal  @default(0) @map("opening_credit") @db.Decimal(18, 2)
+  note          String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  fiscalYear FiscalYear     @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+  account    ChartOfAccount @relation(fields: [accountName], references: [name], onUpdate: Cascade, onDelete: Restrict)
+
+  @@unique([fiscalYearId, accountName])
+  @@index([fiscalYearId])
+  @@map("account_opening_balances")
+}
+
+// Asset classes used by the PPE register (Note 4 / Note 22 / Annexure-A).
+// Mirrors the chart-of-accounts split: computers (r7), office decoration
+// (r8), office equipment (r9). 'other' is an escape hatch.
+enum AssetClass {
+  computers
+  office_decoration
+  office_equipment
+  other
+}
+
+// PPE register — one row per asset. Aggregate `cost` and
+// `accumulatedDepreciation` per class drive Note 4; per-class
+// FixedAssetDepreciation rows for the FY drive Note 22.
+model FixedAsset {
+  id                      String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assetClass              AssetClass @map("asset_class")
+  name                    String
+  acquiredOn              DateTime   @map("acquired_on") @db.Date
+  cost                    Decimal    @db.Decimal(18, 2)
+  /// Running closing balance — opening + sum(FixedAssetDepreciation)
+  /// across all FYs. Operator updates at FY-close.
+  accumulatedDepreciation Decimal    @default(0) @map("accumulated_depreciation") @db.Decimal(18, 2)
+  depreciationRatePctPa   Decimal?   @map("depreciation_rate_pct_pa") @db.Decimal(5, 2)
+  disposedOn              DateTime?  @map("disposed_on") @db.Date
+  notes                   String?
+  createdAt               DateTime   @default(now()) @map("created_at")
+  updatedAt               DateTime   @updatedAt @map("updated_at")
+
+  depreciations FixedAssetDepreciation[]
+
+  @@index([assetClass])
+  @@map("fixed_assets")
+}
+
+// Depreciation charged to one asset in one fiscal year. Per-class sums
+// for a given FY = Note 22 row values.
+model FixedAssetDepreciation {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fiscalYearId String   @map("fiscal_year_id") @db.Uuid
+  fixedAssetId String   @map("fixed_asset_id") @db.Uuid
+  amount       Decimal  @db.Decimal(18, 2)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  fiscalYear FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+  asset      FixedAsset @relation(fields: [fixedAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([fiscalYearId, fixedAssetId])
+  @@index([fiscalYearId])
+  @@map("fixed_asset_depreciations")
+}
+
+// Shareholder register — backs Note 11 (Share Capital) and supplies
+// the share count for Notes 25 (EPS) and 26 (NAV per share). A single
+// table, not fiscal-year-scoped — shareholders change rarely. Set
+// `isActive = false` to remove a shareholder while preserving history.
+model Shareholder {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName   String   @map("full_name")
+  sharesHeld Int      @map("shares_held")
+  isActive   Boolean  @default(true) @map("is_active")
+  notes      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("shareholders")
+}
+
+// Note 27: employee minimum-pay disclosure. One row per fiscal year.
+model EmployeeDisclosure {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fiscalYearId        String   @unique @map("fiscal_year_id") @db.Uuid
+  totalEmployees      Int      @map("total_employees")
+  belowMinimumWage    Int      @default(0) @map("below_minimum_wage")
+  minMonthlySalaryBdt Decimal  @map("min_monthly_salary_bdt") @db.Decimal(12, 2)
+  notes               String?
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  fiscalYear FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+
+  @@map("employee_disclosures")
 }
 
 model Journal {
@@ -86,6 +229,9 @@ model Journal {
   investorCode String?  @map("investor_code")
   agentId      String?  @map("agent_id") @db.Uuid
   fundCode     String?  @map("fund_code") // 'EFUF','EGF','ESRF'
+  /// Stock ticker for dividend lines (Note 19.01) or bank-account code for
+  /// interest-income lines (Note 20). Free-form; the note builder groups by it.
+  instrumentCode String? @map("instrument_code")
   createdBy    String?  @map("created_by") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")

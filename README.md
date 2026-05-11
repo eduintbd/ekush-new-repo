@@ -57,13 +57,13 @@ docs/
 | 4. /trial-balance | done (page renders; awaiting live data) |
 | 4a. Supabase Auth + role gates | done (auth-not-configured banner; redirects verified) |
 | 5. IS / BS / CE — `statement_mapping.ts` | done (BS balances; workbook tax bug surfaced — see file header) |
-| 5a. IS / BS UI pages | not started |
-| 6. Notes 4–27 | not started |
-| 7. /annexures | not started |
-| 8. Year-end Excel export | done (xlsx with CoA/Journals/TB-C/IS./BS.; CE/Notes/Annexure stubbed) |
+| 5a. IS / BS UI pages | done (`/income-statement`, `/balance-sheet`; external inputs via `?taxProvision=&fvLoss=&fvRecv=` until Notes/Annexure schema lands) |
+| 6. Notes 4–27 | done (`/notes` renders all 24 notes; rollforward + per-fund + per-instrument breakdowns now data-driven via `AccountOpeningBalance`, `FixedAsset`, `Shareholder`, `EmployeeDisclosure`, `Journal.instrumentCode`) |
+| 7. /annexures | done (Annexure-B from `InvestmentHolding`; computed unrealised G/L feeds IS OCI + Note 24 automatically; Annexure-A PPE register now backed by `FixedAsset`) |
+| 8. Year-end Excel export | done (xlsx with CoA/Journals/TB-C/IS./BS./Notes./Annexure march; CE stubbed) |
 | 9. Agent admin (`/admin/agents`) | done (list, invite, detail, approve/suspend/reinstate, terms history) |
 | 10. Ekush Web investor API mock | done (deterministic mock; SB0001 = canonical demo cohort) |
 | 11. Agent portal + commission engine | done (engine: upfront/trail/clawback per spec §8; agent UI; quarterly cron) |
-| 12. MFA, backups, log drains | not started |
+| 12. MFA, backups, log drains | done (TOTP MFA enrolment + step-up enforced on admin/accountant; `/api/health` for monitoring; backups + log-drain procedures documented in `OPERATIONS.md`) |
 
 See `docs/X_System_Claude_Code_Prompt.docx` for the full brief; do not paraphrase — replicate the workbook line-by-line.

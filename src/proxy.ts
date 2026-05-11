@@ -42,6 +42,10 @@ export async function proxy(req: NextRequest) {
   // in server components via src/lib/auth.ts (avoids Prisma at edge).
   const role = (user.user_metadata?.role as string | undefined) ?? null;
   const onAgentRoute = pathname.startsWith("/agent");
+  // /account/* (MFA management) is reachable by any authenticated role.
+  const onSharedRoute = pathname.startsWith("/account");
+
+  if (onSharedRoute) return res;
 
   if (onAgentRoute && role !== "selling_agent") {
     const home = req.nextUrl.clone();

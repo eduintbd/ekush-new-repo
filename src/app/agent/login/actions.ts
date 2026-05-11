@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
+import { getMfaStatus, hasVerifiedFactor, isStepped } from "@/lib/mfa";
 
 function back(error: string, next?: string): never {
   const params = new URLSearchParams({ error });
@@ -37,5 +38,12 @@ export async function signInAgent(formData: FormData): Promise<void> {
   }
 
   await supabase.auth.updateUser({ data: { role: profile.role } });
+
+  // Agents who chose to enrol MFA still get challenged on sign-in.
+  const status = await getMfaStatus(supabase);
+  if (hasVerifiedFactor(status) && !isStepped(status)) {
+    redirect(`/agent/login/mfa?next=${encodeURIComponent(next)}`);
+  }
+
   redirect(next);
 }

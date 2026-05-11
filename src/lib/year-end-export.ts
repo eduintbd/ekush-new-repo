@@ -8,12 +8,10 @@
 
 import ExcelJS from "exceljs";
 import { prisma } from "@/lib/prisma";
-import { getTrialBalance, toMappingTrialBalance } from "@/lib/trial-balance";
-import {
-  buildIncomeStatement,
-  buildBalanceSheet,
-  type ExternalInputs,
-} from "@/lib/statement_mapping";
+import { getStatements } from "@/lib/statements";
+import { buildNotes, type Note } from "@/lib/notes";
+import { getNotesData } from "@/lib/notes-data";
+import { getAnnexureB, type AnnexureB } from "@/lib/annexures";
 
 const HEADER_FILL: ExcelJS.FillPattern = {
   type: "pattern",
@@ -28,13 +26,18 @@ export async function buildYearEndWorkbook(fiscalYearId: string): Promise<Buffer
   wb.creator = "Ekush ERP X-System";
   wb.created = new Date();
 
-  const fy = await prisma.fiscalYear.findUniqueOrThrow({ where: { id: fiscalYearId } });
+  const {
+    fiscalYear: fy,
+    tbMap,
+    external,
+    incomeStatement: is1,
+    balanceSheet: bs,
+  } = await getStatements(fiscalYearId);
   const accounts = await prisma.chartOfAccount.findMany({ orderBy: { sl: "asc" } });
   const journals = await prisma.journal.findMany({
     where: { fiscalYearId },
     orderBy: [{ entryDate: "asc" }, { batchId: "asc" }],
   });
-  const tbReport = await getTrialBalance(fiscalYearId);
 
   // --- Sheet 1: Chart of Accounts -------------------------------------
   const coa = wb.addWorksheet("Chart of Accounts");
@@ -154,23 +157,8 @@ export async function buildYearEndWorkbook(fiscalYearId: string): Promise<Buffer
 
   // --- Sheets 4-6: BS / IS / CE — computed values via mapping ---------
   // The workbook formulas are reproducible from TB-C, but the spec also
-  // lets us emit the resolved values directly. We do both: emit the
-  // computed numbers (so the file opens with no #REF! even if external
-  // links break), and add a "computed by X-System" cell so the auditor
-  // knows the values are deterministic.
-  const ext: ExternalInputs = {
-    unrealisedFairValueLoss: 0,
-    currentTaxProvision: 0,
-    fairValueReceivableAdjustment: 0,
-    currentPeriodNetProfit: 0,
-    currentPeriodTaxExpense: 0,
-  };
-  const tbMap = toMappingTrialBalance(tbReport);
-  const is1 = buildIncomeStatement(tbMap, ext);
-  ext.currentPeriodNetProfit = is1.profitForPeriod;
-  ext.currentPeriodTaxExpense = is1.taxExpense.reduce((s, l) => s + l.amount, 0);
-  const bs = buildBalanceSheet(tbMap, ext);
-
+  // lets us emit the resolved values directly. We emit computed numbers so
+  // the file opens with no #REF! even if external links break.
   writeStatementSheet(wb, "IS.", "Statement of Profit or Loss and Other Comprehensive Income", [
     { section: "Operating Income", lines: is1.operatingIncome },
     { section: "Operating Expenses", lines: is1.operatingExpenses },
@@ -192,14 +180,25 @@ export async function buildYearEndWorkbook(fiscalYearId: string): Promise<Buffer
     { section: "Total Equity & Liabilities", lines: [{ label: "Total Equity & Liabilities", amount: bs.totalEquityAndLiabilities }] },
   ]);
 
-  // CE / Notes / Annexure — placeholder stubs so the workbook has the
-  // right tab list. Body fills out as the equity_movements + notes
-  // tables come online.
-  ["CE", "Notes.", "Annexure march"].forEach((name) => {
-    const s = wb.addWorksheet(name);
-    s.getCell("A1").value = `${name} — placeholder. Fill out as schema lands.`;
-    s.getCell("A1").font = { italic: true, color: { argb: "FF6B7280" } };
+  // Notes. — full notes 4.00 to 27.00, mirrors the /notes page.
+  const notesData = await getNotesData(fiscalYearId);
+  const notes = buildNotes({
+    tb: tbMap,
+    incomeStatement: is1,
+    balanceSheet: bs,
+    external,
+    data: notesData,
   });
+  writeNotesSheet(wb, notes);
+
+  // Annexure march — Annexure-B (Investments) from InvestmentHolding.
+  const annexureB = await getAnnexureB(fiscalYearId);
+  writeAnnexureMarchSheet(wb, annexureB);
+
+  // CE — placeholder until equity_movements schema lands.
+  const ce = wb.addWorksheet("CE");
+  ce.getCell("A1").value = "CE — placeholder. Fill out as schema lands.";
+  ce.getCell("A1").font = { italic: true, color: { argb: "FF6B7280" } };
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
@@ -234,4 +233,128 @@ function writeStatementSheet(
   sh.getColumn(1).width = 4;
   sh.getColumn(2).width = 50;
   sh.getColumn(7).width = 22;
+}
+
+function writeNotesSheet(wb: ExcelJS.Workbook, notes: Note[]) {
+  const sh = wb.addWorksheet("Notes.");
+  sh.getCell("A1").value = "Ekush Wealth Management Limited";
+  sh.getCell("A1").font = { bold: true, size: 12 };
+  sh.getCell("A2").value = "Notes to the Financial Statements";
+  sh.getCell("A2").font = { bold: true };
+
+  let r = 4;
+  for (const n of notes) {
+    sh.getCell(`A${r}`).value = n.number;
+    sh.getCell(`A${r}`).font = { bold: true };
+    sh.getCell(`B${r}`).value = n.reference ? `${n.title}   ${n.reference}` : n.title;
+    sh.getCell(`B${r}`).font = { bold: true };
+    sh.getCell(`B${r}`).fill = HEADER_FILL;
+    r++;
+    for (const row of n.rows) {
+      sh.getCell(`B${r}`).value = row.indent ? `   ${row.label}` : row.label;
+      if (row.subtotal) sh.getCell(`B${r}`).font = { bold: true };
+      if (row.amount !== undefined) {
+        sh.getCell(`G${r}`).value = row.amount;
+        sh.getCell(`G${r}`).numFmt = BDT_FORMAT;
+        if (row.subtotal) sh.getCell(`G${r}`).font = { bold: true };
+      }
+      r++;
+    }
+    if (n.total !== undefined) {
+      sh.getCell(`B${r}`).value = "Total";
+      sh.getCell(`B${r}`).font = { bold: true };
+      sh.getCell(`G${r}`).value = n.total;
+      sh.getCell(`G${r}`).numFmt = BDT_FORMAT;
+      sh.getCell(`G${r}`).font = { bold: true };
+      r++;
+    }
+    if (n.needsInputs && n.needsInputs.length > 0) {
+      sh.getCell(`B${r}`).value = `Inputs needed: ${n.needsInputs.join("; ")}`;
+      sh.getCell(`B${r}`).font = { italic: true, color: { argb: "FF92400E" } };
+      r++;
+    }
+    r++;
+  }
+
+  sh.getColumn(1).width = 6;
+  sh.getColumn(2).width = 60;
+  sh.getColumn(7).width = 22;
+}
+
+function writeAnnexureMarchSheet(wb: ExcelJS.Workbook, ax: AnnexureB) {
+  const sh = wb.addWorksheet("Annexure march");
+  sh.getCell("H1").value = "Annexure-B";
+  sh.getCell("H1").font = { bold: true };
+  sh.getCell("B2").value = "Ekush Wealth Management Limited";
+  sh.getCell("B2").font = { bold: true };
+  sh.getCell("B3").value = "Investments";
+  sh.getCell("B3").font = { bold: true };
+  sh.getCell("B4").value = ax.asOfDate
+    ? `As at ${ax.asOfDate.toISOString().slice(0, 10)}`
+    : "No holdings recorded";
+
+  const headerRow = sh.getRow(5);
+  ["", "Instrument Name", "Quantity", "Average Cost (Q.)", "Total Cost", "Market Rate (Q.)", "Market Value", "Unrealised Gain/(Loss)"].forEach(
+    (h, i) => {
+      const cell = headerRow.getCell(i + 1);
+      cell.value = h;
+      if (h) {
+        cell.font = { bold: true };
+        cell.fill = HEADER_FILL;
+      }
+    },
+  );
+
+  let r = 6;
+  for (const g of ax.groups) {
+    if (g.rows.length === 0) continue;
+    sh.getCell(`A${r}`).value = g.label;
+    sh.getCell(`A${r}`).font = { bold: true };
+    r++;
+    for (const row of g.rows) {
+      sh.getCell(`B${r}`).value = row.instrumentName;
+      sh.getCell(`C${r}`).value = row.quantity;
+      sh.getCell(`D${r}`).value = row.avgCostPerUnit;
+      sh.getCell(`E${r}`).value = row.totalCost;
+      sh.getCell(`F${r}`).value = row.marketRatePerUnit;
+      sh.getCell(`G${r}`).value = row.marketValue;
+      sh.getCell(`H${r}`).value = row.unrealisedGain;
+      [`D${r}`, `E${r}`, `F${r}`, `G${r}`, `H${r}`].forEach((c) => {
+        sh.getCell(c).numFmt = BDT_FORMAT;
+      });
+      r++;
+    }
+    // Subtotal row
+    sh.getCell(`B${r}`).value = `Subtotal — ${g.label}`;
+    sh.getCell(`B${r}`).font = { italic: true };
+    sh.getCell(`E${r}`).value = g.subtotals.totalCost;
+    sh.getCell(`G${r}`).value = g.subtotals.marketValue;
+    sh.getCell(`H${r}`).value = g.subtotals.unrealisedGain;
+    [`E${r}`, `G${r}`, `H${r}`].forEach((c) => {
+      sh.getCell(c).numFmt = BDT_FORMAT;
+      sh.getCell(c).font = { italic: true };
+    });
+    r++;
+  }
+
+  if (ax.groups.every((g) => g.rows.length === 0)) {
+    sh.getCell(`B${r}`).value = "No investment holdings recorded for this fiscal year.";
+    sh.getCell(`B${r}`).font = { italic: true, color: { argb: "FF6B7280" } };
+    r++;
+  } else {
+    // Grand total
+    sh.getCell(`B${r}`).value = "Grand Total";
+    sh.getCell(`B${r}`).font = { bold: true };
+    sh.getCell(`E${r}`).value = ax.totals.totalCost;
+    sh.getCell(`G${r}`).value = ax.totals.marketValue;
+    sh.getCell(`H${r}`).value = ax.totals.unrealisedGain;
+    [`E${r}`, `G${r}`, `H${r}`].forEach((c) => {
+      sh.getCell(c).numFmt = BDT_FORMAT;
+      sh.getCell(c).font = { bold: true };
+    });
+  }
+
+  sh.getColumn(1).width = 22;
+  sh.getColumn(2).width = 32;
+  for (const col of [3, 4, 5, 6, 7, 8]) sh.getColumn(col).width = 16;
 }

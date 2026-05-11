@@ -24,6 +24,12 @@ export default async function AgentDashboardPage() {
             <span className="text-zinc-600 dark:text-zinc-400">
               {profile.fullName ?? profile.email}
             </span>
+            <Link
+              href="/account/mfa"
+              className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Security
+            </Link>
             <form action={signOut}>
               <button className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
                 Sign out

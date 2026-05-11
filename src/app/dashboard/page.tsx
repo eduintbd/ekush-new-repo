@@ -6,9 +6,15 @@
 import Link from "next/link";
 import { requireStaff } from "@/lib/auth";
 import { signOut } from "@/app/login/actions";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getMfaStatus, hasVerifiedFactor, mfaRequiredForRole } from "@/lib/mfa";
 
 export default async function DashboardPage() {
   const profile = await requireStaff();
+  const supabase = await createSupabaseServerClient();
+  const mfa = await getMfaStatus(supabase);
+  const mfaEnrolled = hasVerifiedFactor(mfa);
+  const mfaRequired = mfaRequiredForRole(profile.role);
 
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
@@ -27,6 +33,12 @@ export default async function DashboardPage() {
                 {profile.role}
               </span>
             </span>
+            <Link
+              href="/account/mfa"
+              className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Security
+            </Link>
             <form action={signOut}>
               <button className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
                 Sign out
@@ -37,15 +49,26 @@ export default async function DashboardPage() {
       </header>
 
       <div className="mx-auto max-w-6xl px-6 py-10">
+        {!mfaEnrolled && (mfaRequired ? (
+          <div className="mb-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+            <span className="font-medium">Two-factor authentication is required for your role.</span>{" "}
+            <Link href="/account/mfa" className="underline">Enrol now</Link> — sign-in will start prompting on next session.
+          </div>
+        ) : (
+          <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            Two-factor authentication recommended. <Link href="/account/mfa" className="underline">Enrol now</Link>.
+          </div>
+        ))}
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
           Quick links — full dashboard coming as the data lands.
         </p>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <NavCard href="/trial-balance" title="Trial Balance" desc="Per-account net debit / net credit for the selected fiscal year." />
           <NavCard href="/journals" title="Journals" desc="Browse and enter compound journal entries (coming soon)." disabled />
-          <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position (coming soon)." disabled />
-          <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI (coming soon)." disabled />
-          <NavCard href="/notes" title="Notes" desc="Notes 4–27 (coming soon)." disabled />
+          <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position." />
+          <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI." />
+          <NavCard href="/notes" title="Notes" desc="Notes 4–27 to the financial statements." />
+          <NavCard href="/annexures" title="Annexures" desc="Annexure-B: per-instrument investment holdings + unrealised G/L." />
           <NavCard href="/agents" title="Selling agents" desc="Approve, suspend, manage terms history (coming soon)." disabled />
         </div>
       </div>

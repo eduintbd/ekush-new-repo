@@ -19,6 +19,8 @@ const Body = z.object({
   txnType: z.string().optional(),
   fundCode: z.string().optional(),
   investorCode: z.string().optional(),
+  /** Stock ticker (Note 19.01) or bank-account code (Note 20). */
+  instrumentCode: z.string().optional(),
   fiscalYearId: z.string().min(1),
   lines: z.array(Line).min(2),
 });
@@ -55,6 +57,7 @@ export async function createJournal(formData: FormData): Promise<void> {
     txnType: String(formData.get("txnType") ?? "j"),
     fundCode: String(formData.get("fundCode") ?? "") || undefined,
     investorCode: String(formData.get("investorCode") ?? "") || undefined,
+    instrumentCode: String(formData.get("instrumentCode") ?? "") || undefined,
     fiscalYearId: String(formData.get("fiscalYearId") ?? ""),
     lines,
   });
@@ -103,6 +106,7 @@ export async function createJournal(formData: FormData): Promise<void> {
       batchId,
       investorCode: data.investorCode,
       fundCode: data.fundCode,
+      instrumentCode: data.instrumentCode,
       createdBy: profile.id,
     })),
   });
