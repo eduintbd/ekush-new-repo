@@ -7,6 +7,7 @@ import Link from "next/link";
 import { requireStaff } from "@/lib/auth";
 import { signOut } from "@/app/login/actions";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { prisma } from "@/lib/prisma";
 import { getMfaStatus, hasVerifiedFactor, mfaRequiredForRole } from "@/lib/mfa";
 
 export default async function DashboardPage() {
@@ -15,6 +16,9 @@ export default async function DashboardPage() {
   const mfa = await getMfaStatus(supabase);
   const mfaEnrolled = hasVerifiedFactor(mfa);
   const mfaRequired = mfaRequiredForRole(profile.role);
+  const currentFy = await prisma.fiscalYear
+    .findFirst({ where: { isClosed: false }, orderBy: { startsOn: "desc" }, select: { id: true, label: true } })
+    .catch(() => null);
 
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
@@ -33,6 +37,15 @@ export default async function DashboardPage() {
                 {profile.role}
               </span>
             </span>
+            {currentFy && (
+              <a
+                href={`/api/exports/year-end?fiscalYearId=${currentFy.id}`}
+                className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                title={`Download ${currentFy.label} workbook (CoA / Journals / TB-C / IS / BS / CE / Notes / Annexure)`}
+              >
+                ⬇ Export {currentFy.label}.xlsx
+              </a>
+            )}
             <Link
               href="/account/mfa"
               className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
@@ -63,11 +76,55 @@ export default async function DashboardPage() {
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <NavCard href="/trial-balance" title="Trial Balance" desc="Per-account net debit / net credit for the selected fiscal year." />
           <NavCard href="/journals" title="Journals" desc="Browse and enter compound journal entries." />
+          <NavCard href="/day-book" title="Day Book" desc="All vouchers in a date range, grouped by date." />
+          <NavCard href="/ledger" title="Ledgers" desc="Per-account ledger card with running balance." />
+          <NavCard href="/cash-book" title="Cash &amp; Bank Book" desc="Closing balance for every bank, cash and mobile-money account." />
           <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position." />
           <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI." />
           <NavCard href="/changes-in-equity" title="Changes in Equity" desc="Rollforward of paid-up capital, fair value reserve, retained earnings." />
           <NavCard href="/notes" title="Notes" desc="Notes 4–27 to the financial statements." />
           <NavCard href="/annexures" title="Annexures" desc="Annexure-B: per-instrument investment holdings + unrealised G/L." />
+          <NavCard href="/cash-flow" title="Cash Flow" desc="Cash inflow/outflow by counter-account category for the period." />
+          <NavCard href="/bank-reconciliation" title="Bank Reconciliation" desc="Per-account book vs statement balance comparison." />
+          <NavCard href="/management-fees" title="Management Fees" desc="Cross-verify fund FIN_STATS mgmt-fee imports; manual edit." />
+          <NavCard href="/receivables" title="Receivables Aging" desc="0–30 / 31–60 / 61–90 / 90+ buckets, FIFO settled." />
+          {(profile.role === "admin" || profile.role === "auditor") && (
+            <NavCard href="/admin/audit" title="Audit Log" desc="Trigger-fed mutations on journals, agents, commission runs, fiscal years." />
+          )}
+          {profile.role === "admin" && (
+            <>
+              <NavCard
+                href="/admin/accounts"
+                title="Chart of accounts"
+                desc="Add, rename, deactivate ledger accounts. 132 seeded; extend as needed."
+              />
+              <NavCard
+                href="/admin/groups"
+                title="Account groups"
+                desc="Hierarchical group tree (Asset / Liability / Equity / Income / Expense) with rollup."
+              />
+              <NavCard
+                href="/admin/banks"
+                title="Bank account master"
+                desc="Structured bank metadata: account no, IFSC, opening balance, BRS start date."
+              />
+              <NavCard
+                href="/admin/cost-centres"
+                title="Cost centres"
+                desc="Dimensional tagging on journal lines for per-fund / per-department reporting."
+              />
+              <NavCard
+                href="/admin/opening-balances"
+                title="Opening balances"
+                desc="Per-FY editor for AccountOpeningBalance. Seed at year-start or via roll-forward."
+              />
+              <NavCard
+                href="/admin/fiscal-years"
+                title="Fiscal years"
+                desc="Create, close, reopen, and roll-forward closing balances to next year."
+              />
+            </>
+          )}
           <NavCard href="/admin/agents" title="Selling agents" desc="Approve, suspend, manage terms history." />
         </div>
       </div>

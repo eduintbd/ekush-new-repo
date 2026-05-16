@@ -2,16 +2,21 @@
 // for Ekush Wealth Management Limited (the AMC, not the funds it manages).
 //
 // Models below are derived from the project brief in
-// docs/X_System_Claude_Code_Prompt.docx §5. Schema is plain Postgres so the
-// dataset is portable between Supabase and a self-hosted instance.
+// docs/X_System_Claude_Code_Prompt.docx §5. All tables live in the
+// `xsystem` schema so this codebase can co-tenant in the same Postgres
+// as ekush-web (which owns `public.*`) without name collisions.
 
 generator client {
-  provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
+  provider        = "prisma-client-js"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["multiSchema"]
 }
 
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["xsystem"]
 }
 
 // ─── Auth bridge ─────────────────────────────────────────────────
@@ -23,6 +28,8 @@ enum UserRole {
   accountant
   selling_agent
   auditor
+
+  @@schema("xsystem")
 }
 
 model Profile {
@@ -37,9 +44,49 @@ model Profile {
   agent SellingAgent? @relation("AgentProfile")
 
   @@map("profiles")
+  @@schema("xsystem")
 }
 
 // ─── Accounting (back-office) ────────────────────────────────────
+
+// Account groups (Tally-style): hierarchical buckets that classify
+// chart-of-accounts entries for financial-statement rollups. Examples:
+// "Assets > Current assets > Cash and bank balances", "Liabilities >
+// Current liabilities > Accruals", "Income > Operating income".
+//
+// `nature` drives statement placement: ASSET/LIABILITY/EQUITY land on
+// the Balance Sheet; INCOME/EXPENSE on the Income Statement.
+
+enum GroupNature {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+
+  @@schema("xsystem")
+}
+
+model AccountGroup {
+  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String       @unique
+  parentId     String?      @map("parent_id") @db.Uuid
+  nature       GroupNature
+  /// Display order within siblings (lower = earlier).
+  sortOrder    Int          @default(0) @map("sort_order")
+  description  String?
+  isReserved   Boolean      @default(false) @map("is_reserved") // seeded vs user-created
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  parent   AccountGroup?    @relation("GroupHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children AccountGroup[]   @relation("GroupHierarchy")
+  accounts ChartOfAccount[]
+
+  @@index([parentId])
+  @@map("account_groups")
+  @@schema("xsystem")
+}
 
 model ChartOfAccount {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -47,15 +94,21 @@ model ChartOfAccount {
   name          String   @unique // FK target for Journal.accountName
   normalBalance String   @map("normal_balance") // 'DEBIT' | 'CREDIT'
   category      String?
+  /// FK to AccountGroup. Nullable during migration; new accounts must set it.
+  groupId       String?  @map("group_id") @db.Uuid
   isActive      Boolean  @default(true) @map("is_active")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
+  group           AccountGroup?           @relation(fields: [groupId], references: [id], onDelete: SetNull)
   journals        Journal[]
   openingBalances AccountOpeningBalance[]
+  bankAccount     BankAccount?            @relation("BankAccountToCoA")
 
   @@index([sl])
+  @@index([groupId])
   @@map("chart_of_accounts")
+  @@schema("xsystem")
 }
 
 model FiscalYear {
@@ -74,8 +127,10 @@ model FiscalYear {
   openingBalances     AccountOpeningBalance[]
   depreciationEntries FixedAssetDepreciation[]
   employeeDisclosure  EmployeeDisclosure?
+  bankStatements      BankStatement[]
 
   @@map("fiscal_years")
+  @@schema("xsystem")
 }
 
 // Snapshot of one investment position as at `asOfDate`. Backs the
@@ -89,6 +144,8 @@ enum InvestmentCategory {
   ipo_subscription
   ipo_applications
   private_placements
+
+  @@schema("xsystem")
 }
 
 model InvestmentHolding {
@@ -110,6 +167,7 @@ model InvestmentHolding {
   @@index([fiscalYearId, asOfDate])
   @@index([category])
   @@map("investment_holdings")
+  @@schema("xsystem")
 }
 
 // Opening balance per account per fiscal year — feeds Notes 10, 12,
@@ -131,6 +189,7 @@ model AccountOpeningBalance {
   @@unique([fiscalYearId, accountName])
   @@index([fiscalYearId])
   @@map("account_opening_balances")
+  @@schema("xsystem")
 }
 
 // Asset classes used by the PPE register (Note 4 / Note 22 / Annexure-A).
@@ -141,6 +200,8 @@ enum AssetClass {
   office_decoration
   office_equipment
   other
+
+  @@schema("xsystem")
 }
 
 // PPE register — one row per asset. Aggregate `cost` and
@@ -165,6 +226,7 @@ model FixedAsset {
 
   @@index([assetClass])
   @@map("fixed_assets")
+  @@schema("xsystem")
 }
 
 // Depreciation charged to one asset in one fiscal year. Per-class sums
@@ -182,6 +244,7 @@ model FixedAssetDepreciation {
   @@unique([fiscalYearId, fixedAssetId])
   @@index([fiscalYearId])
   @@map("fixed_asset_depreciations")
+  @@schema("xsystem")
 }
 
 // Shareholder register — backs Note 11 (Share Capital) and supplies
@@ -198,6 +261,7 @@ model Shareholder {
   updatedAt  DateTime @updatedAt @map("updated_at")
 
   @@map("shareholders")
+  @@schema("xsystem")
 }
 
 // Note 27: employee minimum-pay disclosure. One row per fiscal year.
@@ -214,27 +278,38 @@ model EmployeeDisclosure {
   fiscalYear FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
 
   @@map("employee_disclosures")
+  @@schema("xsystem")
 }
 
 model Journal {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  entryDate    DateTime @map("entry_date") @db.Date
-  description  String?
-  txnType      String?  @map("txn_type") // 'OB','c','j', etc.
-  accountName  String   @map("account_name")
-  debit        Decimal  @default(0) @db.Decimal(18, 2)
-  credit       Decimal  @default(0) @db.Decimal(18, 2)
-  fiscalYearId String   @map("fiscal_year_id") @db.Uuid
-  batchId      String?  @map("batch_id") @db.Uuid
-  investorCode String?  @map("investor_code")
-  agentId      String?  @map("agent_id") @db.Uuid
-  fundCode     String?  @map("fund_code") // 'EFUF','EGF','ESRF'
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  entryDate      DateTime @map("entry_date") @db.Date
+  description    String?
+  txnType        String?  @map("txn_type") // 'OB','c','j', etc.
+  /// Human-readable voucher number, shared across all lines of a batch.
+  /// Format: '{PREFIX}/{FY}/{####}' where PREFIX is JV / OB / RV / PV / CV
+  /// and FY is the short fiscal-year label e.g. '25-26'. Backfilled on
+  /// existing batches; new vouchers get one allocated at createJournal time.
+  voucherNo      String?  @map("voucher_no")
+  accountName    String   @map("account_name")
+  debit          Decimal  @default(0) @db.Decimal(18, 2)
+  credit         Decimal  @default(0) @db.Decimal(18, 2)
+  fiscalYearId   String   @map("fiscal_year_id") @db.Uuid
+  batchId        String?  @map("batch_id") @db.Uuid
+  investorCode   String?  @map("investor_code")
+  agentId        String?  @map("agent_id") @db.Uuid
+  fundCode       String?  @map("fund_code") // 'EFUF','EGF','ESRF'
+  /// Cost-centre tag (FK to CostCentre.code, soft — string for portability).
+  /// `fundCode` was the implicit cost dimension before we added formal cost
+  /// centres; `costCentreCode` is the explicit one for non-fund dimensions
+  /// like ADMIN, MARKETING, etc.
+  costCentreCode String?  @map("cost_centre_code")
   /// Stock ticker for dividend lines (Note 19.01) or bank-account code for
   /// interest-income lines (Note 20). Free-form; the note builder groups by it.
-  instrumentCode String? @map("instrument_code")
-  createdBy    String?  @map("created_by") @db.Uuid
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  instrumentCode String?  @map("instrument_code")
+  createdBy      String?  @map("created_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   account    ChartOfAccount @relation(fields: [accountName], references: [name], onUpdate: Cascade, onDelete: Restrict)
   fiscalYear FiscalYear     @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
@@ -244,7 +319,10 @@ model Journal {
   @@index([accountName])
   @@index([fiscalYearId])
   @@index([batchId])
+  @@index([voucherNo])
+  @@index([costCentreCode])
   @@map("journals")
+  @@schema("xsystem")
 }
 
 // ─── Selling-agent (commission engine) ───────────────────────────
@@ -254,6 +332,8 @@ enum AgentStatus {
   approved
   suspended
   terminated
+
+  @@schema("xsystem")
 }
 
 model SellingAgent {
@@ -277,11 +357,14 @@ model SellingAgent {
   journals       Journal[]
 
   @@map("selling_agents")
+  @@schema("xsystem")
 }
 
 enum FundCategory {
   equity
   fixed_income
+
+  @@schema("xsystem")
 }
 
 model AgentTerm {
@@ -303,6 +386,7 @@ model AgentTerm {
 
   @@index([agentId, fundCategory, effectiveFrom])
   @@map("agent_terms")
+  @@schema("xsystem")
 }
 
 model AgentInvestor {
@@ -323,6 +407,7 @@ model AgentInvestor {
   @@unique([investorCode, fundCode, sourcedOn])
   @@index([agentId])
   @@map("agent_investors")
+  @@schema("xsystem")
 }
 
 model NavSnapshot {
@@ -336,12 +421,15 @@ model NavSnapshot {
 
   @@unique([fundCode, snapshotDate])
   @@map("nav_snapshots")
+  @@schema("xsystem")
 }
 
 enum CommissionType {
   upfront
   trail
   clawback
+
+  @@schema("xsystem")
 }
 
 enum CommissionStatus {
@@ -349,6 +437,8 @@ enum CommissionStatus {
   approved
   paid
   reversed
+
+  @@schema("xsystem")
 }
 
 model CommissionRun {
@@ -375,6 +465,7 @@ model CommissionRun {
   @@unique([agentInvestorId, type, periodStart, periodEnd], name: "uniq_run_period")
   @@index([agentId, status])
   @@map("commission_runs")
+  @@schema("xsystem")
 }
 
 // Daily snapshot fed by the cron job that produces the agent dashboard's
@@ -393,6 +484,7 @@ model CommissionAccrual {
 
   @@unique([agentId, snapshotDate])
   @@map("commission_accruals")
+  @@schema("xsystem")
 }
 
 // ─── MFA recovery codes ──────────────────────────────────────────
@@ -416,6 +508,170 @@ model MfaRecoveryCode {
 
   @@index([userId, usedAt])
   @@map("mfa_recovery_codes")
+  @@schema("xsystem")
+}
+
+// ─── Bank account master ─────────────────────────────────────────
+// Structured bank-ledger metadata. References a CoA name (1:1) so the
+// account behaves like any other ledger for journals, but carries
+// banking-specific fields (account number, bank, branch, IFSC, BRS
+// start date) that don't belong on every CoA row.
+
+enum BankAccountType {
+  current
+  savings
+  std
+  md
+  fdr
+  mobile_money
+  other
+
+  @@schema("xsystem")
+}
+
+model BankAccount {
+  id                   String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// References ChartOfAccount.name. Each bank ledger maps to exactly one
+  /// CoA row; the CoA `name` is the human label everyone uses.
+  accountName          String          @unique @map("account_name")
+  bankName             String          @map("bank_name") // e.g. "BRAC Bank Limited"
+  branch               String?
+  accountNumber        String          @map("account_number")
+  accountType          BankAccountType @default(current) @map("account_type")
+  currency             String          @default("BDT")
+  ifsc                 String?
+  swift                String?
+  /// Opening balance from the bank's books at the system go-live date.
+  /// Used to seed BRS calculations; NOT a journal entry.
+  openingBalance       Decimal         @default(0) @map("opening_balance") @db.Decimal(18, 2)
+  /// Date from which BRS reconciliation tracking starts — earlier
+  /// transactions are assumed cleared.
+  reconciliationStart  DateTime?       @map("reconciliation_start") @db.Date
+  isActive             Boolean         @default(true) @map("is_active")
+  notes                String?
+  createdAt            DateTime        @default(now()) @map("created_at")
+  updatedAt            DateTime        @updatedAt @map("updated_at")
+
+  account ChartOfAccount @relation("BankAccountToCoA", fields: [accountName], references: [name], onUpdate: Cascade, onDelete: Restrict)
+
+  @@map("bank_accounts")
+  @@schema("xsystem")
+}
+
+// ─── Cost centres ────────────────────────────────────────────────
+// Tally-style cost-centre masters for dimensional reporting. Optional
+// hierarchy via parent_id. Tag a journal line with `costCentreCode` to
+// enable per-cost-centre P&L slicing.
+
+model CostCentre {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String   @unique // e.g. 'EFUF', 'EGF', 'ESRF', 'ADMIN', 'MARKETING'
+  name        String
+  parentId    String?  @map("parent_id") @db.Uuid
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  parent   CostCentre?  @relation("CostCentreHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children CostCentre[] @relation("CostCentreHierarchy")
+
+  @@index([parentId])
+  @@map("cost_centres")
+  @@schema("xsystem")
+}
+
+// ─── Bank Reconciliation ─────────────────────────────────────────
+// One BankStatement per (cash/bank account, period) imported from the
+// bank's xlsx/csv. Each line is matched against journal lines via
+// `matchedJournalId` (null = unmatched). The BRS = (book balance) +
+// outstanding deposits - outstanding cheques = (statement balance).
+
+model BankStatement {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Chart-of-accounts name — the AMC's bank/cash account this statement covers.
+  accountName     String   @map("account_name")
+  fiscalYearId    String   @map("fiscal_year_id") @db.Uuid
+  periodStart     DateTime @map("period_start") @db.Date
+  periodEnd       DateTime @map("period_end") @db.Date
+  openingBalance  Decimal  @default(0) @map("opening_balance") @db.Decimal(18, 2)
+  closingBalance  Decimal  @default(0) @map("closing_balance") @db.Decimal(18, 2)
+  /// Optional source-file metadata (filename, blob URL, etc.).
+  sourceFile      String?  @map("source_file")
+  notes           String?
+  uploadedBy      String?  @map("uploaded_by") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  fiscalYear FiscalYear          @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  lines      BankStatementLine[]
+
+  @@unique([accountName, periodStart, periodEnd])
+  @@index([fiscalYearId])
+  @@map("bank_statements")
+  @@schema("xsystem")
+}
+
+model BankStatementLine {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  statementId     String        @map("statement_id") @db.Uuid
+  lineDate        DateTime      @map("line_date") @db.Date
+  description     String?
+  refNo           String?       @map("ref_no")
+  /// Bank-side: positive amount means the bank credited the AMC (deposit).
+  amount          Decimal       @db.Decimal(18, 2)
+  runningBalance  Decimal?      @map("running_balance") @db.Decimal(18, 2)
+  matchedJournalId String?      @unique @map("matched_journal_id") @db.Uuid
+  clearedOn       DateTime?     @map("cleared_on") @db.Date
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  statement BankStatement @relation(fields: [statementId], references: [id], onDelete: Cascade)
+
+  @@index([statementId])
+  @@index([lineDate])
+  @@map("bank_statement_lines")
+  @@schema("xsystem")
+}
+
+// ─── Fund management-fee imports ─────────────────────────────────
+// Cross-system verification table: for each (fund, period) we pull the
+// AMC's recorded management-fee income from the fund's FIN_STATS xlsx
+// (Journals sheet, account = 'Management Fee') and compare against what
+// X-System has booked. Accountant verifies and can override the
+// computed amount via `manualAmount`.
+
+enum MgmtFeeStatus {
+  imported
+  reviewed
+  verified
+
+  @@schema("xsystem")
+}
+
+model ManagementFeeImport {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fundCode        String        @map("fund_code") // 'EFUF', 'EGF', 'ESRF'
+  periodStart     DateTime      @map("period_start") @db.Date
+  periodEnd       DateTime      @map("period_end") @db.Date
+  /// Sum of fund's 'Management Fee' debits in (periodStart, periodEnd).
+  computedAmount  Decimal       @map("computed_amount") @db.Decimal(18, 2)
+  /// Accountant override; falls back to computedAmount when null.
+  manualAmount    Decimal?      @map("manual_amount") @db.Decimal(18, 2)
+  status          MgmtFeeStatus @default(imported)
+  /// upload row id from public.daily_fund_uploads the import was sourced from.
+  sourceUploadId  String?       @map("source_upload_id")
+  sourceFileName  String?       @map("source_file_name")
+  notes           String?
+  importedAt      DateTime      @default(now()) @map("imported_at")
+  importedBy      String?       @map("imported_by") @db.Uuid
+  verifiedAt      DateTime?     @map("verified_at")
+  verifiedBy      String?       @map("verified_by") @db.Uuid
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  @@unique([fundCode, periodStart, periodEnd])
+  @@index([fundCode])
+  @@map("management_fee_imports")
+  @@schema("xsystem")
 }
 
 // ─── Audit ───────────────────────────────────────────────────────
@@ -437,4 +693,5 @@ model AuditLog {
   @@index([action])
   @@index([targetTable, targetId])
   @@map("audit_log")
+  @@schema("xsystem")
 }

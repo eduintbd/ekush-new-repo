@@ -16,8 +16,10 @@ function back(path: "/login" | "/agent/login", error: string, next?: string): ne
 
 /**
  * Staff sign-in. Verifies the Profile row exists, is active, and has a
- * staff role. Mirrors the role into Supabase user_metadata so the edge
- * middleware can route by role without hitting Prisma.
+ * staff role. Mirrors the role into Supabase user_metadata.xsystem_role
+ * so the edge middleware can route by role without hitting Prisma. We use
+ * `xsystem_role` (not `role`) to avoid colliding with ekush-web's own
+ * user_metadata.role field on the same auth.users row.
  */
 export async function signInStaff(formData: FormData): Promise<void> {
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
@@ -46,9 +48,10 @@ export async function signInStaff(formData: FormData): Promise<void> {
     );
   }
 
-  // Mirror role to user_metadata so the edge middleware can route without
-  // a DB lookup. Cheap on every login; profile.role is the source of truth.
-  await supabase.auth.updateUser({ data: { role: profile.role } });
+  // Mirror role to user_metadata.xsystem_role so the edge middleware can
+  // route without a DB lookup. Cheap on every login; profile.role is the
+  // source of truth. Namespaced field name keeps ekush-web's role intact.
+  await supabase.auth.updateUser({ data: { xsystem_role: profile.role } });
 
   // If the user has a verified MFA factor and the new session is still
   // AAL1, route them through the challenge before the destination.

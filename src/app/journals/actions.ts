@@ -18,6 +18,7 @@ const Body = z.object({
   description: z.string().optional(),
   txnType: z.string().optional(),
   fundCode: z.string().optional(),
+  costCentreCode: z.string().optional(),
   investorCode: z.string().optional(),
   /** Stock ticker (Note 19.01) or bank-account code (Note 20). */
   instrumentCode: z.string().optional(),
@@ -56,6 +57,7 @@ export async function createJournal(formData: FormData): Promise<void> {
     description: String(formData.get("description") ?? ""),
     txnType: String(formData.get("txnType") ?? "j"),
     fundCode: String(formData.get("fundCode") ?? "") || undefined,
+    costCentreCode: String(formData.get("costCentreCode") ?? "") || undefined,
     investorCode: String(formData.get("investorCode") ?? "") || undefined,
     instrumentCode: String(formData.get("instrumentCode") ?? "") || undefined,
     fiscalYearId: String(formData.get("fiscalYearId") ?? ""),
@@ -92,16 +94,34 @@ export async function createJournal(formData: FormData): Promise<void> {
     if (!foundSet.has(a)) back({ kind: "unknown_account", account: a });
   }
 
+  // Voucher prefix: OB for opening balance entries, JV for everything else.
+  // (Future RV/PV/CV when we add Receipt/Payment/Contra voucher types.)
+  const prefix = data.txnType === "OB" ? "OB" : "JV";
+  // 'FY2025-26' -> '25-26'
+  const fyMatch = fy.label.match(/(\d{2})(\d{2})-(\d{2})/);
+  const fyShort = fyMatch ? `${fyMatch[2]}-${fyMatch[3]}` : fy.label.replace(/^FY/, "");
+
   // Single batch_id ties lines together for compound entries. Wrapped in
   // withActor so the audit-log trigger records `profile.id` against each
-  // journal.create row.
+  // journal.create row. Voucher number allocated inside the transaction to
+  // avoid races between concurrent saves.
   const batchId = randomUUID();
-  await withActor(profile.id, (tx) =>
-    tx.journal.createMany({
+  await withActor(profile.id, async (tx) => {
+    const latest = await tx.$queryRawUnsafe<Array<{ max_seq: string | null }>>(
+      `SELECT MAX(SUBSTRING(voucher_no FROM '${prefix}/${fyShort}/([0-9]+)$')) AS max_seq
+       FROM xsystem.journals
+       WHERE fiscal_year_id = $1::uuid AND voucher_no LIKE '${prefix}/${fyShort}/%'`,
+      data.fiscalYearId,
+    );
+    const nextSeq = Number(latest[0]?.max_seq ?? 0) + 1;
+    const voucherNo = `${prefix}/${fyShort}/${String(nextSeq).padStart(4, "0")}`;
+
+    await tx.journal.createMany({
       data: data.lines.map((l) => ({
         entryDate: entry,
         description: data.description,
         txnType: data.txnType,
+        voucherNo,
         accountName: l.accountName,
         debit: l.debit,
         credit: l.credit,
@@ -109,11 +129,12 @@ export async function createJournal(formData: FormData): Promise<void> {
         batchId,
         investorCode: data.investorCode,
         fundCode: data.fundCode,
+        costCentreCode: data.costCentreCode,
         instrumentCode: data.instrumentCode,
         createdBy: profile.id,
       })),
-    }),
-  );
+    });
+  });
 
   revalidatePath("/journals");
   revalidatePath("/trial-balance");

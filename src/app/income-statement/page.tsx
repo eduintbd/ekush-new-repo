@@ -12,9 +12,11 @@ import { formatBdt } from "@/lib/format";
 import { getStatements, type StatementOverrides } from "@/lib/statements";
 import { requireStaff } from "@/lib/auth";
 import type { IncomeStatement, StatementLine } from "@/lib/statement_mapping";
+import { PrintButton } from "@/components/print-button";
 
 type Search = {
   fy?: string;
+  compare?: string;
   mgmtFeeTax?: string;
   fvLoss?: string;
   fvRecv?: string;
@@ -65,13 +67,19 @@ export default async function IncomeStatementPage({
   }
 
   const selectedId = sp.fy ?? fiscalYears[0].id;
+  const compareId = sp.compare && sp.compare !== selectedId ? sp.compare : undefined;
   const overrides = parseOverrides(sp);
 
   let statements;
+  let compareStatements;
   try {
-    statements = await getStatements(selectedId, overrides);
+    [statements, compareStatements] = await Promise.all([
+      getStatements(selectedId, overrides),
+      compareId ? getStatements(compareId, overrides) : Promise.resolve(null),
+    ]);
   } catch {
     statements = null;
+    compareStatements = null;
   }
 
   return (
@@ -89,17 +97,26 @@ export default async function IncomeStatementPage({
               Statement of Profit or Loss and Other Comprehensive Income
             </p>
           </div>
-          <FiscalYearPicker
-            years={fiscalYears}
-            selectedId={selectedId}
-            overrides={overrides}
-          />
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <FiscalYearPicker
+              years={fiscalYears}
+              selectedId={selectedId}
+              overrides={overrides}
+              compareId={compareId}
+            />
+            <PrintButton />
+          </div>
         </div>
 
         {statements ? (
           <>
             <ExternalInputsBanner overrides={overrides} />
-            <Report statement={statements.incomeStatement} fyLabel={statements.fiscalYear.label} />
+            <Report
+              statement={statements.incomeStatement}
+              fyLabel={statements.fiscalYear.label}
+              compareStatement={compareStatements?.incomeStatement ?? null}
+              compareLabel={compareStatements?.fiscalYear.label ?? null}
+            />
           </>
         ) : (
           <p className="mt-10 text-sm text-zinc-500">
@@ -119,16 +136,30 @@ export default async function IncomeStatementPage({
 
 // ─── Components ──────────────────────────────────────────────────
 
-function Report({ statement, fyLabel }: { statement: IncomeStatement; fyLabel: string }) {
+function Report({
+  statement,
+  fyLabel,
+  compareStatement,
+  compareLabel,
+}: {
+  statement: IncomeStatement;
+  fyLabel: string;
+  compareStatement: IncomeStatement | null;
+  compareLabel: string | null;
+}) {
   const ociTotal = statement.oci.reduce((s, l) => s + l.amount, 0);
   const tciCheck = Math.abs(
     statement.profitForPeriod + ociTotal - statement.totalComprehensiveIncome,
   ) < 1;
+  const sumLines = (lines: StatementLine[]) => lines.reduce((s, l) => s + l.amount, 0);
 
   return (
     <div className="mt-8">
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">{fyLabel}</p>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          {fyLabel}
+          {compareLabel && <> · compared with <strong>{compareLabel}</strong></>}
+        </p>
         {tciCheck ? (
           <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
             ✓ TCI reconciled
@@ -142,25 +173,35 @@ function Report({ statement, fyLabel }: { statement: IncomeStatement; fyLabel: s
 
       <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <table className="min-w-full divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
+          {compareStatement && (
+            <thead className="bg-zinc-50 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:bg-zinc-950">
+              <tr>
+                <th className="px-4 py-2 text-left">Item</th>
+                <th className="px-4 py-2 text-right">{fyLabel}</th>
+                <th className="px-4 py-2 text-right">{compareLabel}</th>
+              </tr>
+            </thead>
+          )}
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            <Section title="Operating Income" lines={statement.operatingIncome} />
+            <Section title="Operating Income" lines={statement.operatingIncome} compare={compareStatement?.operatingIncome} />
             <SubtotalRow
               label="Total Operating Income"
-              amount={statement.operatingIncome.reduce((s, l) => s + l.amount, 0)}
+              amount={sumLines(statement.operatingIncome)}
+              compareAmount={compareStatement ? sumLines(compareStatement.operatingIncome) : null}
             />
 
-            <Section title="Operating Expenses" lines={statement.operatingExpenses} negate />
-            <Section title="Financial Expenses" lines={statement.financialExpenses} negate />
+            <Section title="Operating Expenses" lines={statement.operatingExpenses} negate compare={compareStatement?.operatingExpenses} />
+            <Section title="Financial Expenses" lines={statement.financialExpenses} negate compare={compareStatement?.financialExpenses} />
 
-            <TotalRow label="Profit Before Tax" amount={statement.profitBeforeTax} />
+            <TotalRow label="Profit Before Tax" amount={statement.profitBeforeTax} compareAmount={compareStatement?.profitBeforeTax ?? null} />
 
-            <Section title="Income Tax" lines={statement.taxExpense} negate />
+            <Section title="Income Tax" lines={statement.taxExpense} negate compare={compareStatement?.taxExpense} />
 
-            <TotalRow label="Profit For the Period" amount={statement.profitForPeriod} />
+            <TotalRow label="Profit For the Period" amount={statement.profitForPeriod} compareAmount={compareStatement?.profitForPeriod ?? null} />
 
-            <Section title="Other Comprehensive Income" lines={statement.oci} />
+            <Section title="Other Comprehensive Income" lines={statement.oci} compare={compareStatement?.oci} />
 
-            <TotalRow label="Total Comprehensive Income" amount={statement.totalComprehensiveIncome} emphatic />
+            <TotalRow label="Total Comprehensive Income" amount={statement.totalComprehensiveIncome} compareAmount={compareStatement?.totalComprehensiveIncome ?? null} emphatic />
           </tbody>
         </table>
       </div>
@@ -172,37 +213,57 @@ function Section({
   title,
   lines,
   negate = false,
+  compare,
 }: {
   title: string;
   lines: StatementLine[];
   /** If true, render amounts in parentheses (expense convention). */
   negate?: boolean;
+  compare?: StatementLine[];
 }) {
   if (lines.length === 0) return null;
+  const compareMap = compare ? new Map(compare.map((l) => [l.label, l.amount])) : null;
+  const fmt = (v: number) => (v === 0 ? "—" : negate ? `(${formatBdt(v)})` : formatBdt(v));
   return (
     <>
       <tr className="bg-zinc-50 dark:bg-zinc-950">
-        <td colSpan={2} className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        <td colSpan={compareMap ? 3 : 2} className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
           {title}
         </td>
       </tr>
       {lines.map((l) => (
         <tr key={l.label}>
           <td className="px-4 py-2 pl-8">{l.label}</td>
-          <td className="px-4 py-2 text-right tabular-nums">
-            {l.amount === 0 ? "—" : negate ? `(${formatBdt(l.amount)})` : formatBdt(l.amount)}
-          </td>
+          <td className="px-4 py-2 text-right tabular-nums">{fmt(l.amount)}</td>
+          {compareMap && (
+            <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
+              {fmt(compareMap.get(l.label) ?? 0)}
+            </td>
+          )}
         </tr>
       ))}
     </>
   );
 }
 
-function SubtotalRow({ label, amount }: { label: string; amount: number }) {
+function SubtotalRow({
+  label,
+  amount,
+  compareAmount,
+}: {
+  label: string;
+  amount: number;
+  compareAmount?: number | null;
+}) {
   return (
     <tr className="bg-zinc-50/50 dark:bg-zinc-950/50">
       <td className="px-4 py-2 pl-8 text-sm italic text-zinc-600 dark:text-zinc-400">{label}</td>
       <td className="px-4 py-2 text-right font-medium tabular-nums">{formatBdt(amount)}</td>
+      {compareAmount != null && (
+        <td className="px-4 py-2 text-right font-medium tabular-nums text-zinc-500">
+          {formatBdt(compareAmount)}
+        </td>
+      )}
     </tr>
   );
 }
@@ -210,16 +271,23 @@ function SubtotalRow({ label, amount }: { label: string; amount: number }) {
 function TotalRow({
   label,
   amount,
+  compareAmount,
   emphatic = false,
 }: {
   label: string;
   amount: number;
+  compareAmount?: number | null;
   emphatic?: boolean;
 }) {
   return (
     <tr className={emphatic ? "bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900" : "bg-zinc-100 dark:bg-zinc-800"}>
       <td className="px-4 py-2.5 text-sm font-semibold">{label}</td>
       <td className="px-4 py-2.5 text-right text-sm font-semibold tabular-nums">{formatBdt(amount)}</td>
+      {compareAmount != null && (
+        <td className="px-4 py-2.5 text-right text-sm font-semibold tabular-nums opacity-70">
+          {formatBdt(compareAmount)}
+        </td>
+      )}
     </tr>
   );
 }
@@ -248,10 +316,12 @@ function FiscalYearPicker({
   years,
   selectedId,
   overrides,
+  compareId,
 }: {
   years: Array<{ id: string; label: string }>;
   selectedId: string;
   overrides: StatementOverrides;
+  compareId?: string;
 }) {
   return (
     <form action="" className="flex items-center gap-2">
@@ -268,6 +338,17 @@ function FiscalYearPicker({
           <option key={y.id} value={y.id}>
             {y.label}
           </option>
+        ))}
+      </select>
+      <label className="text-xs uppercase tracking-wide text-zinc-500">Compare</label>
+      <select
+        name="compare"
+        defaultValue={compareId ?? ""}
+        className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+      >
+        <option value="">— none —</option>
+        {years.filter((y) => y.id !== selectedId).map((y) => (
+          <option key={y.id} value={y.id}>{y.label}</option>
         ))}
       </select>
       {overrides.mgmtFeeTaxAtSource !== undefined && (

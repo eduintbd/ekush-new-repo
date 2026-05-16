@@ -19,7 +19,10 @@ export default async function AdminAgentsPage() {
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
       <div className="mx-auto max-w-6xl">
-        <div className="flex items-end justify-between gap-4">
+        <Link href="/dashboard" className="text-xs uppercase tracking-widest text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
+          ← Dashboard
+        </Link>
+        <div className="mt-3 flex items-end justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-widest text-zinc-500">Admin</p>
             <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">

@@ -14,6 +14,7 @@ import { formatBdt } from "@/lib/format";
 import { getStatements, type StatementOverrides } from "@/lib/statements";
 import { requireStaff } from "@/lib/auth";
 import type { ChangesInEquity, ChangesInEquityRow } from "@/lib/statement_mapping";
+import { PrintButton } from "@/components/print-button";
 
 type Search = {
   fy?: string;
@@ -87,7 +88,10 @@ export default async function ChangesInEquityPage({
               Rollforward of paid-up capital, fair value reserve, and retained earnings
             </p>
           </div>
-          <FiscalYearPicker years={fiscalYears} selectedId={selectedId} overrides={overrides} />
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <FiscalYearPicker years={fiscalYears} selectedId={selectedId} overrides={overrides} />
+            <PrintButton />
+          </div>
         </div>
 
         {statements ? (

@@ -11,9 +11,11 @@ import { formatBdt } from "@/lib/format";
 import { getStatements, type StatementOverrides } from "@/lib/statements";
 import { requireStaff } from "@/lib/auth";
 import type { BalanceSheet, StatementLine } from "@/lib/statement_mapping";
+import { PrintButton } from "@/components/print-button";
 
 type Search = {
   fy?: string;
+  compare?: string;
   mgmtFeeTax?: string;
   fvLoss?: string;
   fvRecv?: string;
@@ -64,13 +66,19 @@ export default async function BalanceSheetPage({
   }
 
   const selectedId = sp.fy ?? fiscalYears[0].id;
+  const compareId = sp.compare && sp.compare !== selectedId ? sp.compare : undefined;
   const overrides = parseOverrides(sp);
 
   let statements;
+  let compareStatements;
   try {
-    statements = await getStatements(selectedId, overrides);
+    [statements, compareStatements] = await Promise.all([
+      getStatements(selectedId, overrides),
+      compareId ? getStatements(compareId, overrides) : Promise.resolve(null),
+    ]);
   } catch {
     statements = null;
+    compareStatements = null;
   }
 
   return (
@@ -88,17 +96,26 @@ export default async function BalanceSheetPage({
               Statement of Financial Position — as at fiscal year end
             </p>
           </div>
-          <FiscalYearPicker
-            years={fiscalYears}
-            selectedId={selectedId}
-            overrides={overrides}
-          />
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <FiscalYearPicker
+              years={fiscalYears}
+              selectedId={selectedId}
+              overrides={overrides}
+              compareId={compareId}
+            />
+            <PrintButton />
+          </div>
         </div>
 
         {statements ? (
           <>
             <ExternalInputsBanner overrides={overrides} />
-            <Report bs={statements.balanceSheet} fyLabel={statements.fiscalYear.label} />
+            <Report
+              bs={statements.balanceSheet}
+              fyLabel={statements.fiscalYear.label}
+              compareBs={compareStatements?.balanceSheet ?? null}
+              compareLabel={compareStatements?.fiscalYear.label ?? null}
+            />
           </>
         ) : (
           <p className="mt-10 text-sm text-zinc-500">
@@ -118,20 +135,34 @@ export default async function BalanceSheetPage({
 
 // ─── Components ──────────────────────────────────────────────────
 
-function Report({ bs, fyLabel }: { bs: BalanceSheet; fyLabel: string }) {
+function Report({
+  bs,
+  fyLabel,
+  compareBs,
+  compareLabel,
+}: {
+  bs: BalanceSheet;
+  fyLabel: string;
+  compareBs: BalanceSheet | null;
+  compareLabel: string | null;
+}) {
   const diff = bs.totalAssets - bs.totalEquityAndLiabilities;
   const isBalanced = Math.abs(diff) < 1;
 
-  const nca = bs.nonCurrentAssets.reduce((s, l) => s + l.amount, 0);
-  const ca = bs.currentAssets.reduce((s, l) => s + l.amount, 0);
-  const eq = bs.equity.reduce((s, l) => s + l.amount, 0);
-  const ncl = bs.nonCurrentLiabilities.reduce((s, l) => s + l.amount, 0);
-  const cl = bs.currentLiabilities.reduce((s, l) => s + l.amount, 0);
+  const totals = (sections: StatementLine[]) => sections.reduce((s, l) => s + l.amount, 0);
+  const nca = totals(bs.nonCurrentAssets);
+  const ca = totals(bs.currentAssets);
+  const eq = totals(bs.equity);
+  const ncl = totals(bs.nonCurrentLiabilities);
+  const cl = totals(bs.currentLiabilities);
 
   return (
     <div className="mt-8">
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">{fyLabel}</p>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          {fyLabel}
+          {compareLabel && <> · compared with <strong>{compareLabel}</strong></>}
+        </p>
         {isBalanced ? (
           <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
             ✓ Balanced
@@ -145,25 +176,34 @@ function Report({ bs, fyLabel }: { bs: BalanceSheet; fyLabel: string }) {
 
       <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <table className="min-w-full divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
+          {compareBs && (
+            <thead className="bg-zinc-50 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:bg-zinc-950">
+              <tr>
+                <th className="px-4 py-2 text-left">Item</th>
+                <th className="px-4 py-2 text-right">{fyLabel}</th>
+                <th className="px-4 py-2 text-right">{compareLabel}</th>
+              </tr>
+            </thead>
+          )}
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            <Section title="Non-Current Assets" lines={bs.nonCurrentAssets} />
-            <SubtotalRow label="Total Non-Current Assets" amount={nca} />
+            <Section title="Non-Current Assets" lines={bs.nonCurrentAssets} compare={compareBs?.nonCurrentAssets} />
+            <SubtotalRow label="Total Non-Current Assets" amount={nca} compareAmount={compareBs ? totals(compareBs.nonCurrentAssets) : null} />
 
-            <Section title="Current Assets" lines={bs.currentAssets} />
-            <SubtotalRow label="Total Current Assets" amount={ca} />
+            <Section title="Current Assets" lines={bs.currentAssets} compare={compareBs?.currentAssets} />
+            <SubtotalRow label="Total Current Assets" amount={ca} compareAmount={compareBs ? totals(compareBs.currentAssets) : null} />
 
-            <TotalRow label="Total Assets" amount={bs.totalAssets} emphatic />
+            <TotalRow label="Total Assets" amount={bs.totalAssets} compareAmount={compareBs?.totalAssets ?? null} emphatic />
 
-            <Section title="Equity" lines={bs.equity} />
-            <SubtotalRow label="Total Equity" amount={eq} />
+            <Section title="Equity" lines={bs.equity} compare={compareBs?.equity} />
+            <SubtotalRow label="Total Equity" amount={eq} compareAmount={compareBs ? totals(compareBs.equity) : null} />
 
-            <Section title="Non-Current Liabilities" lines={bs.nonCurrentLiabilities} />
-            <SubtotalRow label="Total Non-Current Liabilities" amount={ncl} />
+            <Section title="Non-Current Liabilities" lines={bs.nonCurrentLiabilities} compare={compareBs?.nonCurrentLiabilities} />
+            <SubtotalRow label="Total Non-Current Liabilities" amount={ncl} compareAmount={compareBs ? totals(compareBs.nonCurrentLiabilities) : null} />
 
-            <Section title="Current Liabilities" lines={bs.currentLiabilities} />
-            <SubtotalRow label="Total Current Liabilities" amount={cl} />
+            <Section title="Current Liabilities" lines={bs.currentLiabilities} compare={compareBs?.currentLiabilities} />
+            <SubtotalRow label="Total Current Liabilities" amount={cl} compareAmount={compareBs ? totals(compareBs.currentLiabilities) : null} />
 
-            <TotalRow label="Total Equity & Liabilities" amount={bs.totalEquityAndLiabilities} emphatic />
+            <TotalRow label="Total Equity & Liabilities" amount={bs.totalEquityAndLiabilities} compareAmount={compareBs?.totalEquityAndLiabilities ?? null} emphatic />
           </tbody>
         </table>
       </div>
@@ -171,12 +211,13 @@ function Report({ bs, fyLabel }: { bs: BalanceSheet; fyLabel: string }) {
   );
 }
 
-function Section({ title, lines }: { title: string; lines: StatementLine[] }) {
+function Section({ title, lines, compare }: { title: string; lines: StatementLine[]; compare?: StatementLine[] }) {
   if (lines.length === 0) return null;
+  const compareMap = compare ? new Map(compare.map((l) => [l.label, l.amount])) : null;
   return (
     <>
       <tr className="bg-zinc-50 dark:bg-zinc-950">
-        <td colSpan={2} className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        <td colSpan={compareMap ? 3 : 2} className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
           {title}
         </td>
       </tr>
@@ -186,17 +227,38 @@ function Section({ title, lines }: { title: string; lines: StatementLine[] }) {
           <td className="px-4 py-2 text-right tabular-nums">
             {l.amount === 0 ? "—" : formatBdt(l.amount)}
           </td>
+          {compareMap && (
+            <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
+              {(() => {
+                const v = compareMap.get(l.label) ?? 0;
+                return v === 0 ? "—" : formatBdt(v);
+              })()}
+            </td>
+          )}
         </tr>
       ))}
     </>
   );
 }
 
-function SubtotalRow({ label, amount }: { label: string; amount: number }) {
+function SubtotalRow({
+  label,
+  amount,
+  compareAmount,
+}: {
+  label: string;
+  amount: number;
+  compareAmount?: number | null;
+}) {
   return (
     <tr className="bg-zinc-50/50 dark:bg-zinc-950/50">
       <td className="px-4 py-2 pl-8 text-sm italic text-zinc-600 dark:text-zinc-400">{label}</td>
       <td className="px-4 py-2 text-right font-medium tabular-nums">{formatBdt(amount)}</td>
+      {compareAmount != null && (
+        <td className="px-4 py-2 text-right font-medium tabular-nums text-zinc-500">
+          {formatBdt(compareAmount)}
+        </td>
+      )}
     </tr>
   );
 }
@@ -204,16 +266,23 @@ function SubtotalRow({ label, amount }: { label: string; amount: number }) {
 function TotalRow({
   label,
   amount,
+  compareAmount,
   emphatic = false,
 }: {
   label: string;
   amount: number;
+  compareAmount?: number | null;
   emphatic?: boolean;
 }) {
   return (
     <tr className={emphatic ? "bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900" : "bg-zinc-100 dark:bg-zinc-800"}>
       <td className="px-4 py-2.5 text-sm font-semibold">{label}</td>
       <td className="px-4 py-2.5 text-right text-sm font-semibold tabular-nums">{formatBdt(amount)}</td>
+      {compareAmount != null && (
+        <td className="px-4 py-2.5 text-right text-sm font-semibold tabular-nums opacity-70">
+          {formatBdt(compareAmount)}
+        </td>
+      )}
     </tr>
   );
 }
@@ -242,10 +311,12 @@ function FiscalYearPicker({
   years,
   selectedId,
   overrides,
+  compareId,
 }: {
   years: Array<{ id: string; label: string }>;
   selectedId: string;
   overrides: StatementOverrides;
+  compareId?: string;
 }) {
   return (
     <form action="" className="flex items-center gap-2">
@@ -262,6 +333,17 @@ function FiscalYearPicker({
           <option key={y.id} value={y.id}>
             {y.label}
           </option>
+        ))}
+      </select>
+      <label className="text-xs uppercase tracking-wide text-zinc-500">Compare</label>
+      <select
+        name="compare"
+        defaultValue={compareId ?? ""}
+        className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+      >
+        <option value="">— none —</option>
+        {years.filter((y) => y.id !== selectedId).map((y) => (
+          <option key={y.id} value={y.id}>{y.label}</option>
         ))}
       </select>
       {overrides.mgmtFeeTaxAtSource !== undefined && (

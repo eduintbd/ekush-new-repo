@@ -14,6 +14,7 @@ import { getStatements, type StatementOverrides } from "@/lib/statements";
 import { requireStaff } from "@/lib/auth";
 import { buildNotes, type Note, type NoteRow } from "@/lib/notes";
 import { getNotesData } from "@/lib/notes-data";
+import { PrintButton } from "@/components/print-button";
 
 type Search = {
   fy?: string;
@@ -101,11 +102,14 @@ export default async function NotesPage({
             </h1>
             <p className="mt-1 text-xs text-zinc-500">Notes 4.00 – 27.00</p>
           </div>
-          <FiscalYearPicker
-            years={fiscalYears}
-            selectedId={selectedId}
-            overrides={overrides}
-          />
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <FiscalYearPicker
+              years={fiscalYears}
+              selectedId={selectedId}
+              overrides={overrides}
+            />
+            <PrintButton />
+          </div>
         </div>
 
         {notes ? (

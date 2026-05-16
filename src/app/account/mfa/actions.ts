@@ -15,7 +15,13 @@ export async function enrolTotp(): Promise<
   | { ok: false; error: string }
 > {
   const supabase = await createSupabaseServerClient();
-  const friendlyName = `Authenticator ${new Date().toISOString().slice(0, 10)}`;
+  // Include time-of-day so retrying enrolment on the same day doesn't
+  // collide with an earlier unverified factor (Supabase rejects duplicate
+  // friendly names per user). Format: "Authenticator 2026-05-14 10:48:32".
+  const friendlyName = `Authenticator ${new Date()
+    .toISOString()
+    .slice(0, 19)
+    .replace("T", " ")}`;
   const { data, error } = await supabase.auth.mfa.enroll({
     factorType: "totp",
     friendlyName,

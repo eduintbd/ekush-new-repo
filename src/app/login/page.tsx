@@ -31,12 +31,23 @@ export default async function StaffLoginPage({
           Staff sign-in
         </h1>
         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          For accountants, admins, and auditors. Selling agents use the{" "}
+          For AMC accountants, admins, and auditors. Selling agents use the{" "}
           <Link href="/agent/login" className="underline">
             agent portal
           </Link>
           .
         </p>
+
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          Looking for the <strong>Ekush Portal</strong> (investor management, fund uploads,
+          CMS)?{" "}
+          <a
+            href={`${process.env.NEXT_PUBLIC_EKUSH_PORTAL_URL ?? "https://portal.ekushwml.com"}/login`}
+            className="underline underline-offset-2"
+          >
+            Sign in there →
+          </a>
+        </div>
 
         {!authConfigured && <AuthNotConfigured />}
 

@@ -13,12 +13,11 @@ export default async function NewAgentPage() {
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
       <div className="mx-auto max-w-md">
-        <Link
-          href="/admin/agents"
-          className="text-xs uppercase tracking-widest text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-        >
-          ← Agents
-        </Link>
+        <div className="text-xs uppercase tracking-widest text-zinc-500">
+          <Link href="/dashboard" className="hover:text-zinc-700 dark:hover:text-zinc-300">← Dashboard</Link>
+          <span className="mx-1.5 text-zinc-400">/</span>
+          <Link href="/admin/agents" className="hover:text-zinc-700 dark:hover:text-zinc-300">Agents</Link>
+        </div>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
           Invite selling agent
         </h1>

@@ -76,7 +76,8 @@ export function EnrolFlow({
     );
   }
 
-  const qrSrc = `data:image/svg+xml;utf-8,${encodeURIComponent(state.qrCodeSvg)}`;
+  // Supabase already returns `qr_code` as a complete data: URI. Use as-is.
+  const qrSrc = state.qrCodeSvg;
   return (
     <div className="mt-3 rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
       <ol className="space-y-4 text-sm text-zinc-700 dark:text-zinc-300">
@@ -134,9 +135,32 @@ export function EnrolFlow({
 
 function UnverifiedNotice({ factors }: { factors: UnverifiedFactor[] }) {
   return (
-    <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-      You have {factors.length} unverified enrolment{factors.length === 1 ? "" : "s"} from a
-      previous attempt. Starting a new enrolment will add another — clean up below if needed.
-    </p>
+    <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+      <p>
+        You have {factors.length} unverified enrolment{factors.length === 1 ? "" : "s"} from a
+        previous attempt. Remove them or start a new enrolment alongside.
+      </p>
+      <ul className="mt-2 space-y-1">
+        {factors.map((f) => (
+          <li key={f.id} className="flex items-center justify-between gap-3">
+            <span className="font-mono">
+              {f.friendlyName ?? "Authenticator"}{" "}
+              <span className="text-amber-700/70 dark:text-amber-300/60">
+                · {new Date(f.createdAt).toISOString().slice(0, 10)}
+              </span>
+            </span>
+            <form action={unenrol}>
+              <input type="hidden" name="factorId" value={f.id} />
+              <button
+                type="submit"
+                className="rounded-md border border-amber-400 px-2 py-0.5 text-[11px] font-medium hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900"
+              >
+                Remove
+              </button>
+            </form>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

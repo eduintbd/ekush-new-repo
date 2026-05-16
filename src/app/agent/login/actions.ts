@@ -37,7 +37,8 @@ export async function signInAgent(formData: FormData): Promise<void> {
     back("This account is not a selling-agent account.", next);
   }
 
-  await supabase.auth.updateUser({ data: { role: profile.role } });
+  // Namespaced field — see src/app/login/actions.ts for rationale.
+  await supabase.auth.updateUser({ data: { xsystem_role: profile.role } });
 
   // Agents who chose to enrol MFA still get challenged on sign-in.
   const status = await getMfaStatus(supabase);

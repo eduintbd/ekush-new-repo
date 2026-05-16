@@ -7,6 +7,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { formatBdt } from "@/lib/format";
+import { PrintButton } from "@/components/print-button";
 import {
   getAnnexureA,
   getAnnexureB,
@@ -73,7 +74,10 @@ export default async function AnnexuresPage({
               Annexure-B: Investments (per instrument)
             </p>
           </div>
-          <FiscalYearPicker years={fiscalYears} selectedId={selectedId} />
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <FiscalYearPicker years={fiscalYears} selectedId={selectedId} />
+            <PrintButton />
+          </div>
         </div>
 
         {annexureA ? (

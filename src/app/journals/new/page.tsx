@@ -26,13 +26,18 @@ export default async function NewJournalPage({
   const accounts = await prisma.chartOfAccount
     .findMany({ where: { isActive: true }, orderBy: { sl: "asc" }, select: { name: true } })
     .catch(() => []);
+  const costCentres = await prisma.costCentre
+    .findMany({ where: { isActive: true }, orderBy: { code: "asc" }, select: { code: true, name: true } })
+    .catch(() => []);
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
       <div className="mx-auto max-w-3xl">
-        <Link href="/journals" className="text-xs uppercase tracking-widest text-zinc-500">
-          ← Journals
-        </Link>
+        <div className="text-xs uppercase tracking-widest text-zinc-500">
+          <Link href="/dashboard" className="hover:text-zinc-700 dark:hover:text-zinc-300">← Dashboard</Link>
+          <span className="mx-1.5 text-zinc-400">/</span>
+          <Link href="/journals" className="hover:text-zinc-700 dark:hover:text-zinc-300">Journals</Link>
+        </div>
         <h1 className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
           New journal entry
         </h1>
@@ -55,9 +60,15 @@ export default async function NewJournalPage({
               ))}
             </SelectField>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             <Field label="Txn type" name="txnType" defaultValue="j" />
             <Field label="Fund (optional)" name="fundCode" placeholder="EFUF, EGF, ESRF" />
+            <SelectField label="Cost centre (optional)" name="costCentreCode">
+              <option value="">— none —</option>
+              {costCentres.map((c) => (
+                <option key={c.code} value={c.code}>{c.code} · {c.name}</option>
+              ))}
+            </SelectField>
             <Field label="Investor (optional)" name="investorCode" />
             <Field
               label="Instrument (optional)"

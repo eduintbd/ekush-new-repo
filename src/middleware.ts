@@ -5,9 +5,13 @@
 //   Agent portal:           /agent/* (except /agent/login)
 //
 // We do NOT load the Profile here (avoid Prisma/edge-runtime conflict). The
-// Supabase user has user_metadata.role set at sign-in time by the role-aware
-// sign-in action in src/app/login/actions.ts. The full profile check happens
-// in src/lib/auth.ts requireStaff/requireAgent helpers.
+// Supabase user has user_metadata.xsystem_role set at sign-in time by the
+// role-aware sign-in action in src/app/login/actions.ts. The full profile
+// check happens in src/lib/auth.ts requireStaff/requireAgent helpers.
+//
+// We use `xsystem_role` rather than the conventional `role` field so this
+// app can co-tenant Supabase auth.users with ekush-web — which already
+// uses `user_metadata.role` for its own SUPER_ADMIN/INVESTOR taxonomy.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { updateSupabaseSession } from "@/lib/supabase/middleware";
@@ -24,7 +28,7 @@ function isPublic(pathname: string): boolean {
   );
 }
 
-export async function proxy(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const { res, user } = await updateSupabaseSession(req);
   const { pathname } = req.nextUrl;
 
@@ -38,9 +42,11 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Authenticated — gate by role from user_metadata. Profile lookup happens
-  // in server components via src/lib/auth.ts (avoids Prisma at edge).
-  const role = (user.user_metadata?.role as string | undefined) ?? null;
+  // Authenticated — gate by role from user_metadata.xsystem_role. Profile
+  // lookup happens in server components via src/lib/auth.ts (avoids Prisma
+  // at edge). We deliberately ignore user_metadata.role to avoid colliding
+  // with ekush-web, which writes that field for its own purposes.
+  const role = (user.user_metadata?.xsystem_role as string | undefined) ?? null;
   const onAgentRoute = pathname.startsWith("/agent");
   // /account/* (MFA management) is reachable by any authenticated role.
   const onSharedRoute = pathname.startsWith("/account");
