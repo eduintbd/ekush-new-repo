@@ -151,6 +151,7 @@ function SubmitButton({ disabled, label }: { disabled: boolean; label: string })
       type="submit"
       disabled={disabled || pending}
       aria-busy={pending}
+      data-unguarded="true"
       className="mt-6 w-full rounded-md bg-zinc-900 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
     >
       {pending ? "Saving…" : label}

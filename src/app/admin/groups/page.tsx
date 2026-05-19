@@ -249,7 +249,11 @@ function renderRow(node: GroupNode, depth: number, directBalance: Map<string, nu
       </td>
       <td className="px-4 py-1.5 text-right">
         {!node.isReserved && (
-          <form action={deleteGroup} className="inline">
+          <form
+            action={deleteGroup}
+            className="inline"
+            data-confirm={`Delete group "${node.name}"? This is irreversible.`}
+          >
             <input type="hidden" name="id" value={node.id} />
             <button
               type="submit"

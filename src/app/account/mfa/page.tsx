@@ -74,7 +74,10 @@ export default async function MfaPage({
                       Enrolled {new Date(f.createdAt).toISOString().slice(0, 10)}
                     </p>
                   </div>
-                  <form action={unenrol}>
+                  <form
+                    action={unenrol}
+                    data-confirm={`Remove "${f.friendlyName ?? "Authenticator"}"? Your session will drop to AAL1 and you'll be asked to enrol a new factor on next sign-in.`}
+                  >
                     <input type="hidden" name="factorId" value={f.id} />
                     <button
                       type="submit"

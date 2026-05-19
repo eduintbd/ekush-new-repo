@@ -113,7 +113,11 @@ export default async function CostCentresPage({
                       <Td>
                         <div className="flex items-center gap-2 text-[10px]">
                           <Link href={`/admin/cost-centres?edit=${c.id}`} className="underline">edit</Link>
-                          <form action={deleteCostCentre} className="inline">
+                          <form
+                            action={deleteCostCentre}
+                            className="inline"
+                            data-confirm={`Delete cost centre "${c.code}"?`}
+                          >
                             <input type="hidden" name="id" value={c.id} />
                             <button type="submit" className="text-red-600 hover:underline dark:text-red-400">delete</button>
                           </form>

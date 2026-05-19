@@ -164,7 +164,11 @@ export default async function OpeningBalancesPage({
                     </td>
                     <td className="px-3 py-1 text-right">
                       {ob && (
-                        <form action={clearOpeningBalance} className="inline">
+                        <form
+                          action={clearOpeningBalance}
+                          className="inline"
+                          data-confirm={`Clear opening balance for "${a.name}"?`}
+                        >
                           <input type="hidden" name="fiscalYearId" value={fyId} />
                           <input type="hidden" name="accountName" value={a.name} />
                           <button type="submit" className="text-[10px] text-red-600 hover:underline dark:text-red-400">

@@ -93,14 +93,22 @@ export default async function FiscalYearsPage({
                   </Td>
                   <Td>
                     {y.isClosed ? (
-                      <form action={reopenFiscalYear} className="inline">
+                      <form
+                        action={reopenFiscalYear}
+                        className="inline"
+                        data-confirm={`Reopen ${y.label}? This unlocks all journals in this fiscal year for editing.`}
+                      >
                         <input type="hidden" name="id" value={y.id} />
                         <button type="submit" className="text-[10px] text-amber-700 underline dark:text-amber-300">
                           reopen
                         </button>
                       </form>
                     ) : (
-                      <form action={closeFiscalYear} className="inline">
+                      <form
+                        action={closeFiscalYear}
+                        className="inline"
+                        data-confirm={`Close ${y.label}? Once closed, no journals can be added or modified in this fiscal year.`}
+                      >
                         <input type="hidden" name="id" value={y.id} />
                         <button type="submit" className="text-[10px] text-red-600 underline dark:text-red-400">
                           close
@@ -167,7 +175,11 @@ export default async function FiscalYearsPage({
             Expense) collapse into a single Retained Earnings entry — pick which equity account.
             Idempotent — re-running overwrites prior roll-forward results for affected accounts.
           </p>
-          <form action={rollForward} className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <form
+            action={rollForward}
+            className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4"
+            data-confirm="Roll forward? Idempotent — re-running overwrites prior roll-forward results for affected accounts."
+          >
             <label className="block text-xs">
               <span className="font-medium text-zinc-600 dark:text-zinc-400">Source FY *</span>
               <select name="sourceId" required className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-950">

@@ -260,7 +260,7 @@ export async function updateJournalBatch(formData: FormData): Promise<void> {
   revalidatePath("/day-book");
   revalidatePath("/trial-balance");
   revalidatePath(`/journals/voucher/${batchId}`);
-  redirect(UPDATE_REDIRECT);
+  redirect(`${UPDATE_REDIRECT}?ok=${encodeURIComponent(`Voucher ${voucherNo ?? ""} updated`.trim())}`);
 }
 
 /**
@@ -285,6 +285,11 @@ export async function deleteJournalBatch(formData: FormData): Promise<void> {
   const fy = await prisma.fiscalYear.findUnique({ where: { id: lines[0].fiscalYearId } });
   if (fy?.isClosed) redirect("/day-book?err=fy_closed");
 
+  const head = await prisma.journal.findFirst({
+    where: { batchId },
+    select: { voucherNo: true },
+  });
+
   await withActor(profile.id, async (tx) => {
     await tx.journal.deleteMany({ where: { batchId } });
   });
@@ -292,5 +297,5 @@ export async function deleteJournalBatch(formData: FormData): Promise<void> {
   revalidatePath("/journals");
   revalidatePath("/day-book");
   revalidatePath("/trial-balance");
-  redirect("/day-book");
+  redirect(`/day-book?ok=${encodeURIComponent(`Voucher ${head?.voucherNo ?? batchId.slice(0, 8)} deleted`)}`);
 }

@@ -167,7 +167,13 @@ export default async function EditAccountPage({
               ? "Hides this account from journal-entry pickers. Existing journals are unaffected."
               : "Makes this account selectable again on new journal entries."}
           </p>
-          <form action={toggleAccountActive} className="mt-3">
+          <form
+            action={toggleAccountActive}
+            className="mt-3"
+            data-confirm={account.isActive
+              ? `Deactivate "${account.name}"? It will no longer be selectable on new journal entries.`
+              : `Reactivate "${account.name}"?`}
+          >
             <input type="hidden" name="id" value={account.id} />
             <button
               type="submit"

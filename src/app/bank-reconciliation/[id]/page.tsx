@@ -91,7 +91,10 @@ export default async function BRSDetailPage({
                 ✗ Difference {formatBdt(closingDiff)}
               </span>
             )}
-            <form action={deleteBankStatement}>
+            <form
+              action={deleteBankStatement}
+              data-confirm="Delete this bank statement and all its lines? This cannot be undone."
+            >
               <input type="hidden" name="id" value={stmt.id} />
               <button
                 type="submit"

@@ -107,7 +107,11 @@ export default async function BanksPage({
                     <Td>
                       <div className="flex items-center gap-2 text-[10px]">
                         <Link href={`/admin/banks?edit=${b.id}`} className="underline">edit</Link>
-                        <form action={deleteBankAccount} className="inline">
+                        <form
+                          action={deleteBankAccount}
+                          className="inline"
+                          data-confirm={`Remove bank record for "${b.accountName}"?`}
+                        >
                           <input type="hidden" name="id" value={b.id} />
                           <button type="submit" className="text-red-600 hover:underline dark:text-red-400">
                             delete

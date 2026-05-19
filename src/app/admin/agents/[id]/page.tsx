@@ -443,7 +443,11 @@ export default async function AgentDetailPage({
                           )}
                         </td>
                         <td className="py-1.5 pr-3 text-right">
-                          <form action={unlinkInvestor} className="inline">
+                          <form
+                            action={unlinkInvestor}
+                            className="inline"
+                            data-confirm={`Unlink investor ${i.investorCode} from this agent? Trail commissions will stop accruing.`}
+                          >
                             <input type="hidden" name="id" value={i.id} />
                             <input type="hidden" name="agentId" value={agent.id} />
                             <button
