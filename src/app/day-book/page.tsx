@@ -3,10 +3,11 @@
 // Default window: the latest month with activity.
 
 import Link from "next/link";
-import { requireStaff } from "@/lib/auth";
+import { requireStaff, canEdit } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { formatBdt } from "@/lib/format";
 import { PrintButton } from "@/components/print-button";
+import { DeleteVoucherForm } from "./delete-voucher-form";
 
 type Search = { fy?: string; from?: string; to?: string };
 
@@ -17,7 +18,8 @@ export default async function DayBookPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireStaff();
+  const profile = await requireStaff();
+  const editable = canEdit(profile);
   const sp = await searchParams;
 
   const fiscalYears = await prisma.fiscalYear
@@ -36,6 +38,11 @@ export default async function DayBookPage({
   }
 
   const fy = fiscalYears.find((y) => y.id === sp.fy) ?? fiscalYears[0];
+  const fyClosed = await prisma.fiscalYear
+    .findUnique({ where: { id: fy.id }, select: { isClosed: true } })
+    .then((r) => Boolean(r?.isClosed))
+    .catch(() => false);
+  const canMutate = editable && !fyClosed;
 
   // Default range: the latest month containing activity. If no `from`/`to`
   // are supplied, find the most recent entry_date and use that month.
@@ -189,7 +196,7 @@ export default async function DayBookPage({
         ) : (
           <div className="mt-6 space-y-8">
             {days.map((day) => (
-              <DayBlock key={day.date} day={day} />
+              <DayBlock key={day.date} day={day} canMutate={canMutate} />
             ))}
           </div>
         )}
@@ -198,7 +205,7 @@ export default async function DayBookPage({
   );
 }
 
-function DayBlock({ day }: { day: { date: string; batches: { batchId: string | null; voucherNo: string | null; txnType: string | null; description: string | null; fundCode: string | null; lines: { id: string; accountName: string; debit: unknown; credit: unknown }[]; debit: number; credit: number }[]; debit: number; credit: number; voucherCount: number } }) {
+function DayBlock({ day, canMutate }: { day: { date: string; batches: { batchId: string | null; voucherNo: string | null; txnType: string | null; description: string | null; fundCode: string | null; lines: { id: string; accountName: string; debit: unknown; credit: unknown }[]; debit: number; credit: number }[]; debit: number; credit: number; voucherCount: number }; canMutate: boolean }) {
   return (
     <section>
       <header className="flex items-end justify-between border-b border-zinc-200 pb-2 dark:border-zinc-800">
@@ -241,9 +248,22 @@ function DayBlock({ day }: { day: { date: string; batches: { batchId: string | n
                 )}
                 <span className="text-zinc-600 dark:text-zinc-400">{b.description ?? "—"}</span>
               </div>
-              <span className="font-mono text-[10px] text-zinc-500">
-                {formatBdt(b.debit)} / {formatBdt(b.credit)}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-zinc-500">
+                  {formatBdt(b.debit)} / {formatBdt(b.credit)}
+                </span>
+                {canMutate && b.batchId && (
+                  <div className="no-print flex items-center gap-1">
+                    <Link
+                      href={`/journals/voucher/${b.batchId}/edit`}
+                      className="rounded border border-zinc-300 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      Edit
+                    </Link>
+                    <DeleteVoucherForm batchId={b.batchId} voucherNo={b.voucherNo} />
+                  </div>
+                )}
+              </div>
             </header>
             <table className="min-w-full divide-y divide-zinc-100 text-sm dark:divide-zinc-800">
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">

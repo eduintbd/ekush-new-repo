@@ -51,3 +51,5 @@ next-env.d.ts
 docs/F.S*.xlsx
 docs/*.csv
 
+
+.vercel

@@ -9,6 +9,7 @@ import { requireStaff } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { formatBdt } from "@/lib/format";
 import { PrintButton } from "@/components/print-button";
+import { SavedBanner } from "./saved-banner";
 
 type Search = {
   fy?: string;
@@ -20,6 +21,10 @@ type Search = {
   q?: string;
   voucher?: string;
   page?: string;
+  /** Set by createJournal redirect to flash a success toast. */
+  created?: string;
+  vno?: string;
+  batch?: string;
 };
 
 const PAGE_SIZE = 50;
@@ -90,6 +95,9 @@ export default async function JournalsPage({
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
+      {sp.created === "1" && sp.vno && (
+        <SavedBanner voucherNo={sp.vno} batchId={sp.batch ?? ""} />
+      )}
       <div className="mx-auto max-w-7xl">
         <Link
           href="/dashboard"

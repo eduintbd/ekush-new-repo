@@ -4,16 +4,37 @@
 // Submit stays disabled until Σ debit === Σ credit and at least 2 lines.
 
 import { useMemo, useState } from "react";
+import { useFormStatus } from "react-dom";
 
 type Line = { id: number; account: string; debit: string; credit: string };
+type InitialLine = { account: string; debit: string | number; credit: string | number };
 
 let nextId = 0;
 
-export function JournalLines({ accounts }: { accounts: string[] }) {
-  const [lines, setLines] = useState<Line[]>(() => [
-    { id: ++nextId, account: "", debit: "", credit: "" },
-    { id: ++nextId, account: "", debit: "", credit: "" },
-  ]);
+export function JournalLines({
+  accounts,
+  initial,
+  submitLabel = "Save journal entry",
+}: {
+  accounts: string[];
+  initial?: InitialLine[];
+  submitLabel?: string;
+}) {
+  const [lines, setLines] = useState<Line[]>(() => {
+    if (initial && initial.length >= 2) {
+      const nz = (v: string | number) => (Number(v || 0) === 0 ? "" : String(v));
+      return initial.map((l) => ({
+        id: ++nextId,
+        account: l.account,
+        debit: nz(l.debit),
+        credit: nz(l.credit),
+      }));
+    }
+    return [
+      { id: ++nextId, account: "", debit: "", credit: "" },
+      { id: ++nextId, account: "", debit: "", credit: "" },
+    ];
+  });
 
   const totals = useMemo(() => {
     let d = 0, c = 0;
@@ -114,13 +135,25 @@ export function JournalLines({ accounts }: { accounts: string[] }) {
         </div>
       </div>
 
-      <button
-        type="submit"
-        disabled={!totals.balanced}
-        className="mt-6 w-full rounded-md bg-zinc-900 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-      >
-        Save journal entry
-      </button>
+      <SubmitButton disabled={!totals.balanced} label={submitLabel} />
     </div>
+  );
+}
+
+// Hosted inside the same <form> as the action — useFormStatus returns
+// pending=true while the server action is in flight, so the button
+// disables itself the moment it is clicked. Without this, a fast double
+// click would post the form twice and create two identical batches.
+function SubmitButton({ disabled, label }: { disabled: boolean; label: string }) {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={disabled || pending}
+      aria-busy={pending}
+      className="mt-6 w-full rounded-md bg-zinc-900 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+    >
+      {pending ? "Saving…" : label}
+    </button>
   );
 }
