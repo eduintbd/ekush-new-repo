@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { prisma, withActor } from "@/lib/prisma";
 import { requireRole, canEdit } from "@/lib/auth";
+import { allocateVoucherNo } from "@/lib/voucher";
 
 const UPDATE_REDIRECT = "/day-book";
 
@@ -97,11 +98,9 @@ export async function createJournal(formData: FormData): Promise<void> {
   }
 
   // Voucher prefix: OB for opening balance entries, JV for everything else.
-  // (Future RV/PV/CV when we add Receipt/Payment/Contra voucher types.)
+  // (BV/SV reserved for buy/sell trade auto-journals in src/lib/trades.ts;
+  // future RV/PV/CV when we add Receipt/Payment/Contra voucher types.)
   const prefix = data.txnType === "OB" ? "OB" : "JV";
-  // 'FY2025-26' -> '25-26'
-  const fyMatch = fy.label.match(/(\d{2})(\d{2})-(\d{2})/);
-  const fyShort = fyMatch ? `${fyMatch[2]}-${fyMatch[3]}` : fy.label.replace(/^FY/, "");
 
   // Single batch_id ties lines together for compound entries. Wrapped in
   // withActor so the audit-log trigger records `profile.id` against each
@@ -110,14 +109,7 @@ export async function createJournal(formData: FormData): Promise<void> {
   const batchId = randomUUID();
   let assignedVoucherNo = "";
   await withActor(profile.id, async (tx) => {
-    const latest = await tx.$queryRawUnsafe<Array<{ max_seq: string | null }>>(
-      `SELECT MAX(SUBSTRING(voucher_no FROM '${prefix}/${fyShort}/([0-9]+)$')) AS max_seq
-       FROM xsystem.journals
-       WHERE fiscal_year_id = $1::uuid AND voucher_no LIKE '${prefix}/${fyShort}/%'`,
-      data.fiscalYearId,
-    );
-    const nextSeq = Number(latest[0]?.max_seq ?? 0) + 1;
-    const voucherNo = `${prefix}/${fyShort}/${String(nextSeq).padStart(4, "0")}`;
+    const voucherNo = await allocateVoucherNo(tx, data.fiscalYearId, fy.label, prefix);
     assignedVoucherNo = voucherNo;
 
     await tx.journal.createMany({
