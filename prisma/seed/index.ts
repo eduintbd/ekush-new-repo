@@ -3,6 +3,7 @@
 import { PrismaClient } from "../../src/generated/prisma";
 import { CHART_OF_ACCOUNTS_SEED } from "./chart-of-accounts";
 import { INSTRUMENTS_SEED } from "./instruments";
+import { BANK_ACCOUNTS_SEED } from "./bank-accounts";
 
 const prisma = new PrismaClient();
 
@@ -72,9 +73,36 @@ async function main() {
     });
   }
 
+  console.log(`Seeding bank_accounts (${BANK_ACCOUNTS_SEED.length} rows)…`);
+  for (const b of BANK_ACCOUNTS_SEED) {
+    if (!coaNames.has(b.accountName)) {
+      throw new Error(
+        `BankAccount "${b.accountName}": not in chart_of_accounts. ` +
+          `Add it to chart-of-accounts.ts before seeding bank accounts.`,
+      );
+    }
+    await prisma.bankAccount.upsert({
+      where: { accountName: b.accountName },
+      create: {
+        accountName: b.accountName,
+        bankName: b.bankName,
+        accountNumber: b.accountNumber,
+        accountType: b.accountType,
+      },
+      update: {
+        bankName: b.bankName,
+        accountNumber: b.accountNumber,
+        accountType: b.accountType,
+      },
+    });
+  }
+
   const coaTotal = await prisma.chartOfAccount.count();
   const instTotal = await prisma.instrument.count();
-  console.log(`Done. chart_of_accounts: ${coaTotal} rows, instruments: ${instTotal} rows.`);
+  const bankTotal = await prisma.bankAccount.count();
+  console.log(
+    `Done. chart_of_accounts: ${coaTotal} rows, instruments: ${instTotal} rows, bank_accounts: ${bankTotal} rows.`,
+  );
 }
 
 main()
