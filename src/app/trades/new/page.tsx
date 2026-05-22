@@ -25,7 +25,7 @@ export default async function NewTradePage({
   await requireRole(["admin", "accountant"]);
   const sp = await searchParams;
 
-  const [fiscalYears, instruments, banks] = await Promise.all([
+  const [fiscalYears, instruments, banks, brokers] = await Promise.all([
     prisma.fiscalYear
       .findMany({ where: { isClosed: false }, orderBy: { startsOn: "desc" } })
       .catch(() => []),
@@ -34,6 +34,9 @@ export default async function NewTradePage({
       .catch(() => []),
     prisma.bankAccount
       .findMany({ where: { isActive: true }, orderBy: { accountName: "asc" } })
+      .catch(() => []),
+    prisma.broker
+      .findMany({ where: { isActive: true }, orderBy: { name: "asc" } })
       .catch(() => []),
   ]);
 
@@ -45,6 +48,9 @@ export default async function NewTradePage({
   }
   if (banks.length === 0) {
     redirect("/trades?error=No+active+bank+accounts");
+  }
+  if (brokers.length === 0) {
+    redirect("/trades?error=No+active+brokers+%E2%80%94+add+one+at+%2Fadmin%2Fbrokers");
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -91,9 +97,12 @@ export default async function NewTradePage({
               <option value="BUY">BUY</option>
               <option value="SELL">SELL</option>
             </SelectField>
-            <SelectField label="Broker" name="brokerCode" required defaultValue="UCB">
-              <option value="UCB">UCB</option>
-              <option value="PRIMEBANK">Prime Bank</option>
+            <SelectField label="Broker" name="brokerCode" required defaultValue={brokers[0]?.code}>
+              {brokers.map((b) => (
+                <option key={b.code} value={b.code}>
+                  {b.name}
+                </option>
+              ))}
             </SelectField>
             <SelectField label="Instrument" name="instrumentCode" required>
               <option value="">— pick —</option>

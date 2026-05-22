@@ -152,4 +152,8 @@ export const CHART_OF_ACCOUNTS_SEED: SeedAccount[] = [
   // credit-normal) records the borrowing. Exists in prod via an ad-hoc
   // insert; adding to seed so future re-seeds keep it.
   { sl: 130, name: "UCB BO (1205590068173895)", normalBalance: "DEBIT" },
+  // Margin loan with Prime Bank Securities — parallels sl 99 (Margin
+  // Loan From UCB). Liability (credit-normal); grows when PBSL extends
+  // margin against the AMC's BO balance.
+  { sl: 131, name: "Margin Loan From Prime Bank Securities", normalBalance: "CREDIT" },
 ];

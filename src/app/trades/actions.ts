@@ -30,17 +30,12 @@ const Body = z.object({
   fiscalYearId: z.string().min(1),
   instrumentCode: z.string().min(1, "pick an instrument"),
   side: z.enum(["BUY", "SELL"]),
-  brokerCode: z.enum(["UCB", "PRIMEBANK"], { message: "pick a broker" }),
+  brokerCode: z.string().min(1, "pick a broker"),
   quantity: z.coerce.number().positive("quantity must be > 0"),
   rate: z.coerce.number().positive("rate must be > 0"),
   bankAccount: z.string().min(1, "pick a settlement account"),
   remarks: z.string().optional(),
 });
-
-const BROKER_LABEL: Record<"UCB" | "PRIMEBANK", string> = {
-  UCB: "UCB",
-  PRIMEBANK: "Prime Bank",
-};
 
 function backWithError(returnPath: string, msg: string): never {
   redirect(`${returnPath}?error=${encodeURIComponent(msg)}`);
@@ -85,6 +80,11 @@ export async function createTrade(formData: FormData): Promise<void> {
   // Investment-leg account (from instrument) must also exist.
   const invAcc = await prisma.chartOfAccount.findUnique({ where: { name: instrument.investmentAccount } });
   if (!invAcc) backWithError("/trades/new", `Investment account "${instrument.investmentAccount}" missing from CoA`);
+
+  // Broker must exist + be active.
+  const broker = await prisma.broker.findUnique({ where: { code: data.brokerCode } });
+  if (!broker) backWithError("/trades/new", `Unknown broker "${data.brokerCode}"`);
+  if (!broker.isActive) backWithError("/trades/new", `Broker "${data.brokerCode}" is inactive`);
 
   const grossAmount = round2(data.quantity * data.rate);
 
@@ -141,7 +141,7 @@ export async function createTrade(formData: FormData): Promise<void> {
       },
     });
 
-    const brokerSuffix = ` via ${BROKER_LABEL[data.brokerCode]}`;
+    const brokerSuffix = ` via ${broker.name}`;
     const baseDescr = data.remarks ?? `${data.side} ${data.quantity} ${data.instrumentCode} @ ${data.rate}`;
     await tx.journal.createMany({
       data: buildJournalLines({

@@ -61,6 +61,7 @@ export default async function TradesPage({
           where,
           orderBy: [{ tradeDate: "desc" }, { createdAt: "desc" }],
           take: 500,
+          include: { broker: true },
         })
         .catch(() => [])
     : [];
@@ -234,9 +235,7 @@ export default async function TradesPage({
                         {t.side}
                       </span>
                     </Td>
-                    <Td className="text-xs text-zinc-500">
-                      {t.brokerCode === "UCB" ? "UCB" : t.brokerCode === "PRIMEBANK" ? "Prime Bank" : "—"}
-                    </Td>
+                    <Td className="text-xs text-zinc-500">{t.broker?.name ?? "—"}</Td>
                     <Td className="font-mono text-xs">{t.instrumentCode}</Td>
                     <Td align="right">{Number(t.quantity).toLocaleString("en-IN")}</Td>
                     <Td align="right">{Number(t.rate).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</Td>

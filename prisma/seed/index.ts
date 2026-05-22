@@ -4,6 +4,7 @@ import { PrismaClient } from "../../src/generated/prisma";
 import { CHART_OF_ACCOUNTS_SEED } from "./chart-of-accounts";
 import { INSTRUMENTS_SEED } from "./instruments";
 import { BANK_ACCOUNTS_SEED } from "./bank-accounts";
+import { BROKERS_SEED } from "./brokers";
 
 const prisma = new PrismaClient();
 
@@ -97,11 +98,40 @@ async function main() {
     });
   }
 
+  console.log(`Seeding brokers (${BROKERS_SEED.length} rows)…`);
+  for (const b of BROKERS_SEED) {
+    if (!coaNames.has(b.brokerBoAccount)) {
+      throw new Error(
+        `Broker "${b.code}": brokerBoAccount "${b.brokerBoAccount}" not in chart_of_accounts.`,
+      );
+    }
+    if (b.marginLoanAccount && !coaNames.has(b.marginLoanAccount)) {
+      throw new Error(
+        `Broker "${b.code}": marginLoanAccount "${b.marginLoanAccount}" not in chart_of_accounts.`,
+      );
+    }
+    await prisma.broker.upsert({
+      where: { code: b.code },
+      create: {
+        code: b.code,
+        name: b.name,
+        brokerBoAccount: b.brokerBoAccount,
+        marginLoanAccount: b.marginLoanAccount,
+      },
+      update: {
+        name: b.name,
+        brokerBoAccount: b.brokerBoAccount,
+        marginLoanAccount: b.marginLoanAccount,
+      },
+    });
+  }
+
   const coaTotal = await prisma.chartOfAccount.count();
   const instTotal = await prisma.instrument.count();
   const bankTotal = await prisma.bankAccount.count();
+  const brokerTotal = await prisma.broker.count();
   console.log(
-    `Done. chart_of_accounts: ${coaTotal} rows, instruments: ${instTotal} rows, bank_accounts: ${bankTotal} rows.`,
+    `Done. chart_of_accounts: ${coaTotal} rows, instruments: ${instTotal} rows, bank_accounts: ${bankTotal} rows, brokers: ${brokerTotal} rows.`,
   );
 }
 

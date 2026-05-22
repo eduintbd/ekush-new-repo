@@ -109,6 +109,11 @@ export default async function DashboardPage() {
                 desc="Structured bank metadata: account no, IFSC, opening balance, BRS start date."
               />
               <NavCard
+                href="/admin/brokers"
+                title="Brokers"
+                desc="Panel of brokers (UCB / Prime Bank). Each links to its BO ledger + margin-loan account in the CoA."
+              />
+              <NavCard
                 href="/admin/opening-balances"
                 title="Opening balances"
                 desc="Per-FY editor for AccountOpeningBalance. Seed at year-start or via roll-forward."

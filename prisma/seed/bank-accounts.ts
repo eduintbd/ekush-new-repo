@@ -31,6 +31,8 @@ export const BANK_ACCOUNTS_SEED: SeedBankAccount[] = [
   { accountName: "Prime Bank Securities Limited",        bankName: "Prime Bank Securities Ltd (broker)", accountNumber: "PBSL-BO",          accountType: "other" },
   // Margin loan with UCB — recorded when broker balance goes negative.
   { accountName: "Margin Loan From UCB",                 bankName: "UCB Securities (margin loan)",       accountNumber: "MARGIN-UCB",       accountType: "other" },
+  // Margin loan with Prime Bank Securities — parallels the UCB one.
+  { accountName: "Margin Loan From Prime Bank Securities", bankName: "Prime Bank Securities Ltd (margin loan)", accountNumber: "MARGIN-PBSL", accountType: "other" },
   // Mobile money wallet.
   { accountName: "Bkash(DM4952)",                        bankName: "bKash (mobile money)",                accountNumber: "DM4952",           accountType: "mobile_money" },
 ];
