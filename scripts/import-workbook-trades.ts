@@ -1,39 +1,33 @@
 /* eslint-disable */
-// One-off backfill: read the workbook's `Trading Record ` sheet, create
-// one Trade row per line, generate the matching journal voucher
+// One-off backfill: read a pre-extracted JSON of workbook trades,
+// create one Trade row per line, generate the matching journal voucher
 // (BV/SV). Idempotent — re-running won't duplicate (we key dedup on
 // `(tradeDate, instrumentCode, side, quantity, rate)`).
 //
+// Why JSON, not direct .xlsx? ExcelJS chokes on this workbook's
+// auto-filter formatting and silently drops most rows. Pre-extract with
+// the Python helper at scripts/dump-trades-json.py instead.
+//
 // Usage:
 //   npx tsx scripts/import-workbook-trades.ts \
-//     --xlsx="C:/Users/USER/OneDrive/Desktop/x-system_inputs/F.S March 2026_mock.xlsx" \
-//     --from=2025-07-01 --to=2026-03-31 \
+//     --json="C:/Users/USER/AppData/Local/Temp/trade_backfill.json" \
 //     [--dry]
-//
-// Default range is FY2025-26 (Jul 1 → Mar 31 to match the user's scope).
-// --dry prints what would be inserted without writing.
 
 import { config } from "dotenv";
 config({ path: ".env" });
 
-import { randomUUID } from "node:crypto";
-import path from "node:path";
-import ExcelJS from "exceljs";
+import fs from "node:fs";
 import { PrismaClient } from "@/generated/prisma";
-import { allocateVoucherNo } from "@/lib/voucher";
 import { costBasisOnSell, fromPrismaTrades } from "@/lib/portfolio";
 
 const prisma = new PrismaClient();
 
 const args = parseArgs(process.argv.slice(2));
-const xlsxArg = typeof args.xlsx === "string" ? args.xlsx : "";
-const fromArg = typeof args.from === "string" ? args.from : "";
-const toArg = typeof args.to === "string" ? args.to : "";
-const xlsxPath = xlsxArg || "C:/Users/USER/OneDrive/Desktop/x-system_inputs/F.S March 2026_mock.xlsx";
-const fromDate = fromArg ? new Date(`${fromArg}T00:00:00Z`) : new Date("2025-07-01T00:00:00Z");
-const toDate = toArg ? new Date(`${toArg}T00:00:00Z`) : new Date("2026-03-31T00:00:00Z");
+const jsonArg = typeof args.json === "string" ? args.json : "";
+const openingsArg = typeof args.openings === "string" ? args.openings : "";
+const jsonPath = jsonArg || "C:/Users/USER/AppData/Local/Temp/trade_backfill.json";
+const openingsPath = openingsArg || "C:/Users/USER/AppData/Local/Temp/opening_positions.json";
 const dryRun = Boolean(args.dry);
-const SHEET = "Trading Record "; // trailing space — matches workbook
 
 // Ticker remapping: the workbook uses some legacy / variant strings that
 // don't match the seeded Instrument.code. Resolve them here so trades
@@ -47,21 +41,101 @@ const TICKER_REMAP: Record<string, string> = {
   "BSCCL": "BSCPLC",
 };
 
+type JsonRow = {
+  serial: number;
+  stock: string;
+  side: "BUY" | "SELL";
+  quantity: number;
+  rate: number;
+  grossAmount: number;
+};
+
+type OpeningRow = {
+  instrumentCode: string;
+  quantity: number;
+  avgCost: number;
+  totalCost: number;
+};
+
 async function main() {
-  console.log(`Reading ${xlsxPath} → "${SHEET}"`);
-  console.log(`Range: ${fromDate.toISOString().slice(0, 10)} → ${toDate.toISOString().slice(0, 10)}`);
+  console.log(`Reading ${jsonPath}`);
+  console.log(`Openings: ${openingsPath}`);
   console.log(`Dry-run: ${dryRun}`);
   console.log("");
 
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(path.resolve(xlsxPath));
-  const ws = wb.getWorksheet(SHEET);
-  if (!ws) {
-    console.error(`Sheet "${SHEET}" not found`);
-    process.exit(1);
+  // Step 0: ingest opening positions (Jun 30, 2025) as synthetic Trade
+  // rows. NO journal posted — those positions are already booked via OB
+  // journal entries on the same date. The synthetic rows just give the
+  // cost-basis engine a starting state to replay sells against.
+  if (fs.existsSync(openingsPath)) {
+    const openingRaw = fs.readFileSync(openingsPath, "utf8");
+    const openings = (JSON.parse(openingRaw) as OpeningRow[]).filter(
+      (o) => o.quantity > 0,
+    );
+    // Synthetic opening Trade rows are dated Jul 1, 2025 (first day of
+    // FY2025-26) — NOT Jun 30, 2025. Reason: Jun 30 belongs to FY2024-25
+    // which isn't in the DB. The semantic "opening" intent is preserved
+    // by the remarks column and the fact that no journal is posted (OB
+    // journals on the same instruments already exist on Jun 30).
+    const obDate = new Date("2025-07-01T00:00:00Z");
+    const fyRows = await prisma.fiscalYear.findMany();
+    const fy = fyRows.find((f) => obDate >= f.startsOn && obDate <= f.endsOn);
+    if (!fy) {
+      console.error("ERROR: no fiscal year contains Jul 1, 2025 — cannot seed openings");
+      process.exit(1);
+    }
+    const insts = await prisma.instrument.findMany();
+    const instSet = new Set(insts.map((i) => i.code));
+
+    let openingInserted = 0, openingSkipped = 0;
+    for (const o of openings) {
+      if (!instSet.has(o.instrumentCode)) {
+        console.warn(`  skip opening ${o.instrumentCode}: not in Instrument master`);
+        continue;
+      }
+      // Idempotent: skip if a synthetic opening already exists.
+      const exists = await prisma.trade.findFirst({
+        where: {
+          tradeDate: obDate,
+          instrumentCode: o.instrumentCode,
+          remarks: "opening position seeded from workbook",
+        },
+      });
+      if (exists) {
+        openingSkipped++;
+        continue;
+      }
+      if (dryRun) {
+        console.log(`  [DRY] opening ${o.instrumentCode}: qty=${o.quantity} avgCost=${o.avgCost} cost=${o.totalCost}`);
+        openingInserted++;
+        continue;
+      }
+      await prisma.trade.create({
+        data: {
+          tradeDate: obDate,
+          fiscalYearId: fy.id,
+          instrumentCode: o.instrumentCode,
+          side: "BUY",
+          quantity: o.quantity,
+          rate: o.avgCost,
+          grossAmount: o.totalCost,
+          bankAccount: "Opening Balance", // marker — no journal posted
+          journalBatchId: null, // intentional: OB journals already exist
+          remarks: "opening position seeded from workbook",
+        },
+      });
+      openingInserted++;
+    }
+    console.log(`Openings: ${openingInserted} inserted, ${openingSkipped} already present.`);
+    console.log("");
+  } else {
+    console.log("(no openings file — skipping opening-position seed)");
+    console.log("");
   }
 
-  // Parse rows. Headers at row 3. Data from row 4.
+  const raw = fs.readFileSync(jsonPath, "utf8");
+  const jsonRows = JSON.parse(raw) as JsonRow[];
+
   type WbRow = {
     rowNum: number;
     tradeDate: Date;
@@ -72,36 +146,18 @@ async function main() {
     rate: number;
     grossAmount: number;
   };
-  const rows: WbRow[] = [];
-  ws.eachRow((row, rowNum) => {
-    if (rowNum < 4) return;
-    const dval = row.getCell(5).value as unknown; // col E = Date Value (serial)
-    const stock = row.getCell(7).value as unknown; // col G = Stock
-    const bs = row.getCell(8).value as unknown;    // col H = B/S
-    const qty = row.getCell(9).value as unknown;   // col I = Quantity
-    const rate = row.getCell(10).value as unknown; // col J = Rate
-    const amt = row.getCell(11).value as unknown;  // col K = Amount
+  const rows: WbRow[] = jsonRows.map((r, i) => ({
+    rowNum: i + 1,
+    tradeDate: excelSerialToDate(r.serial),
+    serial: r.serial,
+    rawTicker: TICKER_REMAP[r.stock.trim().toUpperCase()] ?? r.stock.trim().toUpperCase(),
+    side: r.side,
+    quantity: r.quantity,
+    rate: r.rate,
+    grossAmount: r.grossAmount,
+  }));
 
-    if (typeof dval !== "number" || !stock || (bs !== "B" && bs !== "S")) return;
-
-    const tradeDate = excelSerialToDate(dval);
-    if (tradeDate < fromDate || tradeDate > toDate) return;
-    const cleanTicker = String(stock).trim().toUpperCase();
-    const remappedTicker = TICKER_REMAP[cleanTicker] ?? cleanTicker;
-
-    rows.push({
-      rowNum,
-      tradeDate,
-      serial: dval,
-      rawTicker: remappedTicker,
-      side: bs === "B" ? "BUY" : "SELL",
-      quantity: numLike(qty),
-      rate: numLike(rate),
-      grossAmount: numLike(amt),
-    });
-  });
-
-  console.log(`Parsed ${rows.length} candidate rows from workbook.`);
+  console.log(`Parsed ${rows.length} rows from JSON.`);
 
   // Validate instruments + bank routing.
   const instruments = await prisma.instrument.findMany();
@@ -137,10 +193,13 @@ async function main() {
   rows.sort((a, b) => (a.tradeDate < b.tradeDate ? -1 : a.tradeDate > b.tradeDate ? 1 : a.rowNum - b.rowNum));
 
   // Idempotency: skip rows that already exist for the same (date, ticker,
-  // side, quantity, rate).
+  // side, quantity, rate). Scope the dedup query to the date range present
+  // in the input JSON.
+  const minDate = rows.reduce((m, r) => (r.tradeDate < m ? r.tradeDate : m), rows[0].tradeDate);
+  const maxDate = rows.reduce((m, r) => (r.tradeDate > m ? r.tradeDate : m), rows[0].tradeDate);
   const existing = await prisma.trade.findMany({
     where: {
-      tradeDate: { gte: fromDate, lte: toDate },
+      tradeDate: { gte: minDate, lte: maxDate },
     },
   });
   const dedupKey = (
@@ -197,44 +256,26 @@ async function main() {
       continue;
     }
 
-    // Insert trade + post journal in one tx.
-    const batchId = randomUUID();
-    const tradeId = randomUUID();
-    await prisma.$transaction(async (tx) => {
-      const voucherNo = await allocateVoucherNo(tx, fy.id, fy.label, r.side === "BUY" ? "BV" : "SV");
-      await tx.trade.create({
-        data: {
-          id: tradeId,
-          tradeDate: r.tradeDate,
-          fiscalYearId: fy.id,
-          instrumentCode: inst.code,
-          side: r.side,
-          quantity: r.quantity,
-          rate: r.rate,
-          grossAmount: round2(r.grossAmount),
-          bankAccount: defaultBank,
-          costBasis,
-          realisedPnl,
-          journalBatchId: batchId,
-          remarks: "backfilled from workbook",
-        },
-      });
-
-      const lines = buildJournalLines({
-        side: r.side,
-        entryDate: r.tradeDate,
+    // Insert trade row only — DO NOT post a journal. The historical
+    // period is already booked via hand-entered legacy journals
+    // (Investment in share + Capital Gain/Capital Loss). Posting
+    // auto-journals here would double-count cash + realised P&L.
+    // Trade rows still feed /trades + /portfolio for analytics.
+    await prisma.trade.create({
+      data: {
+        tradeDate: r.tradeDate,
         fiscalYearId: fy.id,
         instrumentCode: inst.code,
-        investmentAccount: inst.investmentAccount,
-        bankAccount: defaultBank,
+        side: r.side,
+        quantity: r.quantity,
+        rate: r.rate,
         grossAmount: round2(r.grossAmount),
+        bankAccount: defaultBank,
         costBasis,
         realisedPnl,
-        voucherNo,
-        batchId,
-        description: `BACKFILL ${r.side} ${r.quantity} ${inst.code} @ ${r.rate}`,
-      });
-      await tx.journal.createMany({ data: lines });
+        journalBatchId: null,
+        remarks: "backfilled from workbook (no auto-journal — legacy journals exist)",
+      },
     });
     inserted++;
   }
@@ -243,59 +284,10 @@ async function main() {
   console.log(`Done. ${dryRun ? "[DRY] would insert" : "inserted"} ${inserted} trade row(s); skipped ${skipped} duplicate(s).`);
 }
 
-function buildJournalLines(args: {
-  side: "BUY" | "SELL";
-  entryDate: Date;
-  fiscalYearId: string;
-  instrumentCode: string;
-  investmentAccount: string;
-  bankAccount: string;
-  grossAmount: number;
-  costBasis: number | null;
-  realisedPnl: number | null;
-  voucherNo: string;
-  batchId: string;
-  description: string;
-}) {
-  const REALISED = "Realised Gain/(Loss) on Investments";
-  const base = {
-    entryDate: args.entryDate,
-    description: args.description,
-    voucherNo: args.voucherNo,
-    fiscalYearId: args.fiscalYearId,
-    batchId: args.batchId,
-    instrumentCode: args.instrumentCode,
-  };
-  if (args.side === "BUY") {
-    return [
-      { ...base, txnType: "BV", accountName: args.investmentAccount, debit: args.grossAmount, credit: 0 },
-      { ...base, txnType: "BV", accountName: args.bankAccount, debit: 0, credit: args.grossAmount },
-    ];
-  }
-  const cost = args.costBasis ?? 0;
-  const pnl = args.realisedPnl ?? 0;
-  const lines = [
-    { ...base, txnType: "SV", accountName: args.bankAccount, debit: args.grossAmount, credit: 0 },
-    { ...base, txnType: "SV", accountName: args.investmentAccount, debit: 0, credit: cost },
-  ];
-  if (Math.abs(pnl) >= 0.005) {
-    if (pnl > 0) lines.push({ ...base, txnType: "SV", accountName: REALISED, debit: 0, credit: Math.abs(pnl) });
-    else lines.push({ ...base, txnType: "SV", accountName: REALISED, debit: Math.abs(pnl), credit: 0 });
-  }
-  return lines;
-}
-
 function excelSerialToDate(serial: number): Date {
   // Excel epoch is 1899-12-30 (accounting for 1900-leap-year bug).
   const ms = (serial - 25569) * 86400 * 1000;
   return new Date(ms);
-}
-
-function numLike(v: unknown): number {
-  if (typeof v === "number") return v;
-  if (typeof v === "string") return Number(v);
-  if (v && typeof v === "object" && "result" in v) return Number((v as { result: unknown }).result ?? 0);
-  return 0;
 }
 
 function round2(n: number): number {
