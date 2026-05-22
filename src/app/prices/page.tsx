@@ -2,17 +2,26 @@
 // 10–12 active instruments, save. Each save upserts one Price row per
 // non-empty cell. Empty cells are skipped, so partial updates are safe.
 //
-// The five most-recent already-saved dates are shown read-only at the
-// bottom so Pinki can sanity-check her recent entries at a glance.
+// Below the price entry: a "Recent prices" read-only grid + an
+// "Manage instruments" section where Pinki can add new tickers, see
+// the Sector column, or deactivate an instrument she no longer holds.
 
 import Link from "next/link";
 import { requireStaff, canEdit } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { upsertPrices } from "./actions";
+import { upsertPrices, addInstrument, deactivateInstrument } from "./actions";
 
 type Search = { date?: string };
 
 export const metadata = { title: "Prices — Staff portal" };
+
+const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "listed_security", label: "Listed Security" },
+  { value: "mutual_fund_open", label: "Open-End Mutual Fund" },
+  { value: "private_placement", label: "Private Placement" },
+  { value: "ipo_application", label: "IPO Application" },
+  { value: "bond", label: "Bond" },
+];
 
 export default async function PricesPage({
   searchParams,
@@ -28,6 +37,27 @@ export default async function PricesPage({
 
   const instruments = await prisma.instrument
     .findMany({ where: { isActive: true }, orderBy: { code: "asc" } })
+    .catch(() => []);
+
+  // Investment-account dropdown options for the add-instrument form.
+  const investmentAccounts = await prisma.chartOfAccount
+    .findMany({
+      where: {
+        isActive: true,
+        name: {
+          in: [
+            "Investment in share",
+            "Investment In Placement Shares",
+            "Investment in Mutual Fund(E.F.U.F)",
+            "Investment in Mutual Fund(E.G.F)",
+            "Investment in Mutual Fund (S.R.F)",
+            "IPO Investment",
+          ],
+        },
+      },
+      orderBy: { name: "asc" },
+      select: { name: true },
+    })
     .catch(() => []);
 
   // Existing prices for the edit date (to pre-fill the form).
@@ -53,7 +83,6 @@ export default async function PricesPage({
         })
         .catch(() => [])
     : [];
-  // Map: instrumentCode -> Map(dateIso -> price)
   const recentGrid = new Map<string, Map<string, number>>();
   for (const p of recentPrices) {
     const key = p.priceDate.toISOString().slice(0, 10);
@@ -68,7 +97,7 @@ export default async function PricesPage({
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
-      <div className="mx-auto max-w-4xl">
+      <div className="mx-auto max-w-5xl">
         <Link
           href="/dashboard"
           className="text-xs uppercase tracking-widest text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -110,6 +139,7 @@ export default async function PricesPage({
               <thead className="bg-zinc-50 dark:bg-zinc-950">
                 <tr>
                   <Th>Instrument</Th>
+                  <Th>Sector</Th>
                   <Th>Name</Th>
                   <Th align="right">Close price (BDT)</Th>
                 </tr>
@@ -118,6 +148,7 @@ export default async function PricesPage({
                 {instruments.map((i) => (
                   <tr key={i.code}>
                     <Td className="font-mono text-xs">{i.code}</Td>
+                    <Td className="text-xs text-zinc-500">{i.sector ?? "—"}</Td>
                     <Td className="text-zinc-600 dark:text-zinc-400">{i.name}</Td>
                     <Td align="right">
                       <input type="hidden" name="instrumentCode" value={i.code} />
@@ -153,6 +184,7 @@ export default async function PricesPage({
                 <thead className="bg-zinc-50 dark:bg-zinc-950">
                   <tr>
                     <Th>Instrument</Th>
+                    <Th>Sector</Th>
                     {recentDateKeys.map((d) => (
                       <Th key={d} align="right">
                         {d}
@@ -164,6 +196,7 @@ export default async function PricesPage({
                   {instruments.map((i) => (
                     <tr key={i.code}>
                       <Td className="font-mono text-xs">{i.code}</Td>
+                      <Td className="text-xs text-zinc-500">{i.sector ?? "—"}</Td>
                       {recentDateKeys.map((d) => {
                         const v = recentGrid.get(i.code)?.get(d);
                         return (
@@ -177,6 +210,96 @@ export default async function PricesPage({
                 </tbody>
               </table>
             </div>
+          </section>
+        )}
+
+        {editable && (
+          <section className="mt-10">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500">
+              Manage instruments
+            </h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              Add a ticker to start tracking its close price + holdings, or deactivate one you
+              no longer hold. Deactivating is reversible (re-add with the same code) and
+              preserves Trade / Price history.
+            </p>
+
+            <div className="mt-3 overflow-x-auto rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <table className="min-w-full divide-y divide-zinc-100 text-sm dark:divide-zinc-800">
+                <thead className="bg-zinc-50 dark:bg-zinc-950">
+                  <tr>
+                    <Th>Code</Th>
+                    <Th>Sector</Th>
+                    <Th>Name</Th>
+                    <Th>Category</Th>
+                    <Th>Investment a/c</Th>
+                    <Th>&nbsp;</Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {instruments.map((i) => (
+                    <tr key={i.code}>
+                      <Td className="font-mono text-xs">{i.code}</Td>
+                      <Td className="text-xs text-zinc-500">{i.sector ?? "—"}</Td>
+                      <Td className="text-zinc-700 dark:text-zinc-300">{i.name}</Td>
+                      <Td className="text-xs text-zinc-500">
+                        {CATEGORY_OPTIONS.find((c) => c.value === i.category)?.label ?? i.category}
+                      </Td>
+                      <Td className="text-xs text-zinc-500">{i.investmentAccount}</Td>
+                      <Td>
+                        <form
+                          action={deactivateInstrument}
+                          data-confirm={`Deactivate ${i.code}? It will be hidden from the price-entry table and the /trades/new dropdown. Existing Trade and Price history is preserved.`}
+                          className="inline"
+                        >
+                          <input type="hidden" name="code" value={i.code} />
+                          <button
+                            type="submit"
+                            className="rounded border border-red-300 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950"
+                          >
+                            Delete
+                          </button>
+                        </form>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <details className="mt-4 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <summary className="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                + Add instrument
+              </summary>
+              <form action={addInstrument} className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <Field label="Code *" name="code" placeholder="BRACBANK" required style={{ textTransform: "uppercase" }} />
+                <Field label="Sector" name="sector" placeholder="Banks / Pharma / Bond …" />
+                <Field label="Name *" name="name" placeholder="BRAC Bank Limited" required />
+                <SelectField label="Category *" name="category" required>
+                  {CATEGORY_OPTIONS.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </SelectField>
+                <SelectField label="Investment account *" name="investmentAccount" required>
+                  <option value="">— pick —</option>
+                  {investmentAccounts.map((a) => (
+                    <option key={a.name} value={a.name}>
+                      {a.name}
+                    </option>
+                  ))}
+                </SelectField>
+                <div className="flex items-end">
+                  <button
+                    type="submit"
+                    className="w-full rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
+                  >
+                    Add instrument
+                  </button>
+                </div>
+              </form>
+            </details>
           </section>
         )}
       </div>
@@ -204,4 +327,60 @@ function Td({
 }) {
   const a = align === "right" ? "text-right tabular-nums" : "text-left";
   return <td className={`${a} px-4 py-2 ${className}`}>{children}</td>;
+}
+
+function Field({
+  label,
+  name,
+  placeholder,
+  required = false,
+  style,
+}: {
+  label: string;
+  name: string;
+  placeholder?: string;
+  required?: boolean;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
+        {label}
+      </span>
+      <input
+        name={name}
+        placeholder={placeholder}
+        required={required}
+        style={style}
+        className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+      />
+    </label>
+  );
+}
+
+function SelectField({
+  label,
+  name,
+  required = false,
+  children,
+}: {
+  label: string;
+  name: string;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
+        {label}
+      </span>
+      <select
+        name={name}
+        required={required}
+        className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+      >
+        {children}
+      </select>
+    </label>
+  );
 }

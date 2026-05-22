@@ -194,6 +194,10 @@ model Instrument {
   code              String             @id // 'BRACBANK', 'EFUF', 'APSCLBOND'
   name              String // 'BRAC Bank Ltd'
   category          InstrumentCategory
+  /// Free-text industry / sector classification — Banks, Mutual Fund,
+  /// Pharma, Tobacco, Telecom, Bond, etc. Shown on /prices and exported
+  /// in the portfolio xlsx so the Pinki sheet can group by sector.
+  sector            String?
   isin              String?
   /// CoA account name posted to on the investment leg of a Trade. FK target
   /// is ChartOfAccount.name (validated at seed time, not enforced as FK to

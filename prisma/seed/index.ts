@@ -60,11 +60,13 @@ async function main() {
         code: inst.code,
         name: inst.name,
         category: inst.category,
+        sector: inst.sector,
         investmentAccount: inst.investmentAccount,
       },
       update: {
         name: inst.name,
         category: inst.category,
+        sector: inst.sector,
         investmentAccount: inst.investmentAccount,
       },
     });
