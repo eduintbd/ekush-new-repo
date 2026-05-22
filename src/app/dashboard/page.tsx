@@ -85,12 +85,9 @@ export default async function DashboardPage() {
           <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position." />
           <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI." />
           <NavCard href="/changes-in-equity" title="Changes in Equity" desc="Rollforward of paid-up capital, fair value reserve, retained earnings." />
-          <NavCard href="/notes" title="Notes" desc="Notes 4–27 to the financial statements." />
-          <NavCard href="/annexures" title="Annexures" desc="Annexure-B: per-instrument investment holdings + unrealised G/L." />
           <NavCard href="/cash-flow" title="Cash Flow" desc="Cash inflow/outflow by counter-account category for the period." />
           <NavCard href="/bank-reconciliation" title="Bank Reconciliation" desc="Per-account book vs statement balance comparison." />
           <NavCard href="/management-fees" title="Management Fees" desc="Cross-verify fund FIN_STATS mgmt-fee imports; manual edit." />
-          <NavCard href="/receivables" title="Receivables Aging" desc="0–30 / 31–60 / 61–90 / 90+ buckets, FIFO settled." />
           {(profile.role === "admin" || profile.role === "auditor") && (
             <NavCard href="/admin/audit" title="Audit Log" desc="Trigger-fed mutations on journals, agents, commission runs, fiscal years." />
           )}
