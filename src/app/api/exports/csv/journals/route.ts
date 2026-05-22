@@ -44,7 +44,6 @@ export async function GET(req: NextRequest) {
     Account: j.accountName,
     Description: j.description ?? "",
     Fund: j.fundCode ?? "",
-    "Cost centre": j.costCentreCode ?? "",
     Investor: j.investorCode ?? "",
     Instrument: j.instrumentCode ?? "",
     Debit: Number(j.debit),

@@ -434,11 +434,6 @@ model Journal {
   investorCode   String?  @map("investor_code")
   agentId        String?  @map("agent_id") @db.Uuid
   fundCode       String?  @map("fund_code") // 'EFUF','EGF','ESRF'
-  /// Cost-centre tag (FK to CostCentre.code, soft — string for portability).
-  /// `fundCode` was the implicit cost dimension before we added formal cost
-  /// centres; `costCentreCode` is the explicit one for non-fund dimensions
-  /// like ADMIN, MARKETING, etc.
-  costCentreCode String?  @map("cost_centre_code")
   /// Stock ticker for dividend lines (Note 19.01) or bank-account code for
   /// interest-income lines (Note 20). Free-form; the note builder groups by it.
   instrumentCode String?  @map("instrument_code")
@@ -455,7 +450,6 @@ model Journal {
   @@index([fiscalYearId])
   @@index([batchId])
   @@index([voucherNo])
-  @@index([costCentreCode])
   @@map("journals")
   @@schema("xsystem")
 }
@@ -690,29 +684,6 @@ model BankAccount {
   account ChartOfAccount @relation("BankAccountToCoA", fields: [accountName], references: [name], onUpdate: Cascade, onDelete: Restrict)
 
   @@map("bank_accounts")
-  @@schema("xsystem")
-}
-
-// ─── Cost centres ────────────────────────────────────────────────
-// Tally-style cost-centre masters for dimensional reporting. Optional
-// hierarchy via parent_id. Tag a journal line with `costCentreCode` to
-// enable per-cost-centre P&L slicing.
-
-model CostCentre {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code        String   @unique // e.g. 'EFUF', 'EGF', 'ESRF', 'ADMIN', 'MARKETING'
-  name        String
-  parentId    String?  @map("parent_id") @db.Uuid
-  description String?
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  parent   CostCentre?  @relation("CostCentreHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
-  children CostCentre[] @relation("CostCentreHierarchy")
-
-  @@index([parentId])
-  @@map("cost_centres")
   @@schema("xsystem")
 }
 

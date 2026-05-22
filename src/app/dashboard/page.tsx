@@ -109,11 +109,6 @@ export default async function DashboardPage() {
                 desc="Structured bank metadata: account no, IFSC, opening balance, BRS start date."
               />
               <NavCard
-                href="/admin/cost-centres"
-                title="Cost centres"
-                desc="Dimensional tagging on journal lines for per-fund / per-department reporting."
-              />
-              <NavCard
                 href="/admin/opening-balances"
                 title="Opening balances"
                 desc="Per-FY editor for AccountOpeningBalance. Seed at year-start or via roll-forward."

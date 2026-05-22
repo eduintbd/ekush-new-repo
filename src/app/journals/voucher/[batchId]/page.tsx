@@ -71,7 +71,6 @@ export default async function VoucherPage({
             <Row label="Type" value={head.txnType ?? "JV"} />
             <Row label="Fiscal year" value={head.fiscalYear.label} />
             {head.fundCode && <Row label="Fund" value={head.fundCode} />}
-            {head.costCentreCode && <Row label="Cost centre" value={head.costCentreCode} />}
             {head.investorCode && <Row label="Investor" value={head.investorCode} mono />}
             {head.instrumentCode && <Row label="Instrument" value={head.instrumentCode} mono />}
           </dl>

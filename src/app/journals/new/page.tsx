@@ -26,9 +26,6 @@ export default async function NewJournalPage({
   const accounts = await prisma.chartOfAccount
     .findMany({ where: { isActive: true }, orderBy: { sl: "asc" }, select: { name: true } })
     .catch(() => []);
-  const costCentres = await prisma.costCentre
-    .findMany({ where: { isActive: true }, orderBy: { code: "asc" }, select: { code: true, name: true } })
-    .catch(() => []);
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
@@ -60,15 +57,9 @@ export default async function NewJournalPage({
               ))}
             </SelectField>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Field label="Txn type" name="txnType" defaultValue="j" />
             <Field label="Fund (optional)" name="fundCode" placeholder="EFUF, EGF, ESRF" />
-            <SelectField label="Cost centre (optional)" name="costCentreCode">
-              <option value="">— none —</option>
-              {costCentres.map((c) => (
-                <option key={c.code} value={c.code}>{c.code} · {c.name}</option>
-              ))}
-            </SelectField>
             <Field label="Investor (optional)" name="investorCode" />
             <Field
               label="Instrument (optional)"

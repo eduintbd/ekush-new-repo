@@ -54,9 +54,6 @@ export default async function EditJournalPage({
   const accounts = await prisma.chartOfAccount
     .findMany({ where: { isActive: true }, orderBy: { sl: "asc" }, select: { name: true } })
     .catch(() => []);
-  const costCentres = await prisma.costCentre
-    .findMany({ where: { isActive: true }, orderBy: { code: "asc" }, select: { code: true, name: true } })
-    .catch(() => []);
 
   const initial = lines.map((l) => ({
     account: l.accountName,
@@ -108,7 +105,7 @@ export default async function EditJournalPage({
               ))}
             </SelectField>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Field label="Txn type" name="txnType" defaultValue={head.txnType ?? "j"} />
             <Field
               label="Fund (optional)"
@@ -116,16 +113,6 @@ export default async function EditJournalPage({
               placeholder="EFUF, EGF, ESRF"
               defaultValue={head.fundCode ?? ""}
             />
-            <SelectField
-              label="Cost centre (optional)"
-              name="costCentreCode"
-              defaultValue={head.costCentreCode ?? ""}
-            >
-              <option value="">— none —</option>
-              {costCentres.map((c) => (
-                <option key={c.code} value={c.code}>{c.code} · {c.name}</option>
-              ))}
-            </SelectField>
             <Field
               label="Investor (optional)"
               name="investorCode"
