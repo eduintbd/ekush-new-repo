@@ -78,6 +78,9 @@ export default async function DashboardPage() {
           <NavCard href="/journals" title="Journals" desc="Browse and enter compound journal entries." />
           <NavCard href="/day-book" title="Day Book" desc="All vouchers in a date range, grouped by date." />
           <NavCard href="/ledger" title="Ledgers" desc="Per-account ledger card with running balance." />
+          <NavCard href="/trades" title="Trades" desc="Buy/sell ledger. Each entry auto-posts a journal voucher (BV / SV)." />
+          <NavCard href="/portfolio" title="Portfolio" desc="Live holdings, market value, unrealised G/L. Revalue-to-market posts FVTPL journal." />
+          <NavCard href="/prices" title="Prices" desc="Enter close prices for the ~12 active instruments. Powers the Portfolio page." />
           <NavCard href="/cash-book" title="Cash &amp; Bank Book" desc="Closing balance for every bank, cash and mobile-money account." />
           <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position." />
           <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI." />
