@@ -201,6 +201,7 @@ export default async function TradesPage({
                   <Th>Instrument</Th>
                   <Th align="right">Qty</Th>
                   <Th align="right">Rate</Th>
+                  <Th align="right">Commission</Th>
                   <Th align="right">Gross</Th>
                   <Th align="right">Cost basis</Th>
                   <Th align="right">Realised P&L</Th>
@@ -239,6 +240,9 @@ export default async function TradesPage({
                     <Td className="font-mono text-xs">{t.instrumentCode}</Td>
                     <Td align="right">{Number(t.quantity).toLocaleString("en-IN")}</Td>
                     <Td align="right">{Number(t.rate).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</Td>
+                    <Td align="right" className="text-xs text-zinc-500">
+                      {Number(t.commission) > 0 ? formatBdt(Number(t.commission)) : "—"}
+                    </Td>
                     <Td align="right" className="font-medium">{formatBdt(Number(t.grossAmount))}</Td>
                     <Td align="right" className="text-zinc-500">
                       {t.costBasis ? formatBdt(Number(t.costBasis)) : "—"}

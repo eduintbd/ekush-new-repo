@@ -155,9 +155,22 @@ export default async function NewTradePage({
             </SelectField>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-4 gap-3">
             <Field label="Quantity" name="quantity" type="number" step="0.0001" min="0" required />
             <Field label="Rate (BDT)" name="rate" type="number" step="0.000001" min="0" required />
+            <div>
+              <Field
+                label="Commission (BDT)"
+                name="commission"
+                type="number"
+                step="0.01"
+                min="0"
+                defaultValue="0"
+              />
+              <p className="mt-1 text-[10px] text-zinc-500">
+                Added to BUY cost · netted from SELL proceeds.
+              </p>
+            </div>
             <div>
               <label className="block">
                 <span className="text-xs font-medium uppercase tracking-wider text-zinc-600 dark:text-zinc-400">

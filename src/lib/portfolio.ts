@@ -27,6 +27,8 @@ export type TradeLike = {
   quantity: number | string | { toString: () => string };
   rate: number | string | { toString: () => string };
   grossAmount: number | string | { toString: () => string };
+  /** Broker commission, capitalized into cost basis on BUY. Default 0. */
+  commission?: number | string | { toString: () => string };
   /** Stable secondary sort to break ties on same-day trades. */
   createdAt?: Date;
 };
@@ -70,8 +72,12 @@ export function replayTrades(trades: TradeLike[]): ReplayResult {
     const prev = byInstrument.get(code) ?? { quantity: 0, avgCost: 0, totalCost: 0 };
 
     if (t.side === "BUY") {
+      // Commission is capitalized into cost basis per IFRS 9 — the
+      // broker fee becomes part of the asset's initial measurement and
+      // flows through avg cost into future sells' realised P&L.
+      const commission = t.commission !== undefined ? num(t.commission) : 0;
       const newQty = prev.quantity + qty;
-      const newTotalCost = prev.totalCost + qty * rate;
+      const newTotalCost = prev.totalCost + qty * rate + commission;
       // Guard division by zero — newQty can only be 0 if prev qty was negative
       // (a short) and the BUY closes it exactly. We don't support shorts, so
       // treat it as a reset.
@@ -186,6 +192,7 @@ export function fromPrismaTrades(rows: PrismaTrade[]): TradeLike[] {
     quantity: r.quantity.toString(),
     rate: r.rate.toString(),
     grossAmount: r.grossAmount.toString(),
+    commission: r.commission?.toString() ?? "0",
     createdAt: r.createdAt,
   }));
 }

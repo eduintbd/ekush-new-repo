@@ -33,6 +33,7 @@ const Body = z.object({
   brokerCode: z.string().min(1, "pick a broker"),
   quantity: z.coerce.number().positive("quantity must be > 0"),
   rate: z.coerce.number().positive("rate must be > 0"),
+  commission: z.coerce.number().min(0, "commission must be ≥ 0").default(0),
   bankAccount: z.string().min(1, "pick a settlement account"),
   remarks: z.string().optional(),
 });
@@ -53,6 +54,7 @@ export async function createTrade(formData: FormData): Promise<void> {
     brokerCode: String(formData.get("brokerCode") ?? ""),
     quantity: String(formData.get("quantity") ?? ""),
     rate: String(formData.get("rate") ?? ""),
+    commission: String(formData.get("commission") ?? "0"),
     bankAccount: String(formData.get("bankAccount") ?? ""),
     remarks: String(formData.get("remarks") ?? "") || undefined,
   });
@@ -87,9 +89,13 @@ export async function createTrade(formData: FormData): Promise<void> {
   if (!broker.isActive) backWithError("/trades/new", `Broker "${data.brokerCode}" is inactive`);
 
   const grossAmount = round2(data.quantity * data.rate);
+  const commission = round2(data.commission);
 
   // SELL: compute cost basis from prior-trade history (all prior trades
   // for this instrument across all FYs — cost basis is a running figure).
+  // Commission is netted from proceeds (IFRS 9), so we pass
+  // gross − commission into the engine; resulting realisedPnl already
+  // reflects the fee deduction.
   let costBasis: number | null = null;
   let realisedPnl: number | null = null;
   if (data.side === "SELL") {
@@ -100,7 +106,7 @@ export async function createTrade(formData: FormData): Promise<void> {
     const snap = costBasisOnSell(fromPrismaTrades(priorRows), {
       instrumentCode: data.instrumentCode,
       quantity: data.quantity,
-      grossAmount,
+      grossAmount: grossAmount - commission,
     });
     if (snap.quantityAfter < -0.0001) {
       backWithError(
@@ -132,6 +138,7 @@ export async function createTrade(formData: FormData): Promise<void> {
         quantity: data.quantity,
         rate: data.rate,
         grossAmount,
+        commission,
         bankAccount: data.bankAccount,
         costBasis,
         realisedPnl,
@@ -142,6 +149,7 @@ export async function createTrade(formData: FormData): Promise<void> {
     });
 
     const brokerSuffix = ` via ${broker.name}`;
+    const commSuffix = commission > 0 ? ` · comm ${commission.toFixed(2)}` : "";
     const baseDescr = data.remarks ?? `${data.side} ${data.quantity} ${data.instrumentCode} @ ${data.rate}`;
     await tx.journal.createMany({
       data: buildJournalLines({
@@ -152,11 +160,12 @@ export async function createTrade(formData: FormData): Promise<void> {
         investmentAccount: instrument.investmentAccount,
         bankAccount: data.bankAccount,
         grossAmount,
+        commission,
         costBasis,
         realisedPnl,
         voucherNo,
         batchId,
-        description: `${baseDescr}${brokerSuffix}`,
+        description: `${baseDescr}${brokerSuffix}${commSuffix}`,
         createdBy: profile.id,
       }),
     });
@@ -224,6 +233,9 @@ function buildJournalLines(args: {
   investmentAccount: string;
   bankAccount: string;
   grossAmount: number;
+  /** Broker commission, BDT. Capitalized into the BUY cost; netted
+   *  from SELL proceeds. */
+  commission: number;
   costBasis: number | null;
   realisedPnl: number | null;
   voucherNo: string;
@@ -241,26 +253,32 @@ function buildJournalLines(args: {
     instrumentCode: args.instrumentCode,
     createdBy: args.createdBy,
   };
+  const commission = args.commission ?? 0;
 
   if (args.side === "BUY") {
+    // IFRS 9: commission CAPITALIZED into cost basis. Both legs swell
+    // by the same amount so the voucher still balances.
+    const buyCost = args.grossAmount + commission;
     return [
-      // dr investment account
-      { ...base, txnType: "BV", accountName: args.investmentAccount, debit: args.grossAmount, credit: 0 },
-      // cr bank
-      { ...base, txnType: "BV", accountName: args.bankAccount, debit: 0, credit: args.grossAmount },
+      { ...base, txnType: "BV", accountName: args.investmentAccount, debit: buyCost, credit: 0 },
+      { ...base, txnType: "BV", accountName: args.bankAccount, debit: 0, credit: buyCost },
     ];
   }
 
-  // SELL: dr bank (gross), cr investment (cost basis), then dr/cr realised P&L
+  // SELL: net proceeds = gross − commission. Settlement leg debits
+  // net proceeds; investment leg credits cost basis; realised G/L is
+  // the difference (already computed by the caller via
+  // costBasisOnSell with grossAmount = gross − commission).
   const cost = args.costBasis ?? 0;
   const pnl = args.realisedPnl ?? 0;
+  const netProceeds = args.grossAmount - commission;
   const lines = [
-    { ...base, txnType: "SV", accountName: args.bankAccount, debit: args.grossAmount, credit: 0 },
+    { ...base, txnType: "SV", accountName: args.bankAccount, debit: netProceeds, credit: 0 },
     { ...base, txnType: "SV", accountName: args.investmentAccount, debit: 0, credit: cost },
   ];
   if (Math.abs(pnl) >= 0.005) {
     if (pnl > 0) {
-      // realised gain → credit (book-keeping convention)
+      // realised gain → credit
       lines.push({ ...base, txnType: "SV", accountName: REALISED, debit: 0, credit: Math.abs(pnl) });
     } else {
       // realised loss → debit
