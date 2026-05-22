@@ -136,4 +136,14 @@ export const CHART_OF_ACCOUNTS_SEED: SeedAccount[] = [
   { sl: 125, name: "Prime Bank Securities Limited", normalBalance: "DEBIT" },
   { sl: 126, name: "AIT Receivables against Management Fee", normalBalance: "DEBIT" },
   { sl: 127, name: "Regulatory Compliance Expenses", normalBalance: "DEBIT" },
+  // ─── Phase 1 (trade/portfolio engine) additions ────────────────
+  // Single P&L account collapsing the legacy `Capital Gain` (sl 98) and
+  // `Capital Gain/ loss` (sl 26). Gains post as credit, losses as debit.
+  // Auto-journal generator (src/lib/trades.ts) writes to this account on
+  // every SELL trade where the realised P&L is non-zero.
+  { sl: 128, name: "Realised Gain/(Loss) on Investments", normalBalance: "CREDIT" },
+  // Unrealised mark-to-market P&L. Written by the FVTPL revaluation
+  // workflow on /portfolio. Paired with `Fair Value Reserve` (sl 15)
+  // on the balance-sheet leg.
+  { sl: 129, name: "Unrealised Gain/(Loss) on Investments", normalBalance: "CREDIT" },
 ];

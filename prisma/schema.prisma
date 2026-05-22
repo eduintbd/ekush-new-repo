@@ -68,16 +68,16 @@ enum GroupNature {
 }
 
 model AccountGroup {
-  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name         String       @unique
-  parentId     String?      @map("parent_id") @db.Uuid
-  nature       GroupNature
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String      @unique
+  parentId    String?     @map("parent_id") @db.Uuid
+  nature      GroupNature
   /// Display order within siblings (lower = earlier).
-  sortOrder    Int          @default(0) @map("sort_order")
-  description  String?
-  isReserved   Boolean      @default(false) @map("is_reserved") // seeded vs user-created
-  createdAt    DateTime     @default(now()) @map("created_at")
-  updatedAt    DateTime     @updatedAt @map("updated_at")
+  sortOrder   Int         @default(0) @map("sort_order")
+  description String?
+  isReserved  Boolean     @default(false) @map("is_reserved") // seeded vs user-created
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
 
   parent   AccountGroup?    @relation("GroupHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children AccountGroup[]   @relation("GroupHierarchy")
@@ -122,12 +122,14 @@ model FiscalYear {
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
-  journals            Journal[]
-  investments         InvestmentHolding[]
-  openingBalances     AccountOpeningBalance[]
-  depreciationEntries FixedAssetDepreciation[]
-  employeeDisclosure  EmployeeDisclosure?
-  bankStatements      BankStatement[]
+  journals             Journal[]
+  investments          InvestmentHolding[]
+  openingBalances      AccountOpeningBalance[]
+  depreciationEntries  FixedAssetDepreciation[]
+  employeeDisclosure   EmployeeDisclosure?
+  bankStatements       BankStatement[]
+  trades               Trade[]
+  fairValueAdjustments FairValueAdjustment[]
 
   @@map("fiscal_years")
   @@schema("xsystem")
@@ -167,6 +169,135 @@ model InvestmentHolding {
   @@index([fiscalYearId, asOfDate])
   @@index([category])
   @@map("investment_holdings")
+  @@schema("xsystem")
+}
+
+// ─── Trade ledger + price feed ───────────────────────────────────
+// `Instrument` is the master ticker registry. Every Trade and Price row
+// references one. `investmentAccount` tells the auto-journal generator
+// which CoA account a buy/sell on this instrument debits/credits on the
+// investment leg (listed equities → 'Investment in share', mutual-fund
+// units → 'Investment in Mutual Fund(E.F.U.F)' / (E.G.F) / (S.R.F),
+// private placements → 'Investment In Placement Shares', etc.).
+
+enum InstrumentCategory {
+  listed_security
+  mutual_fund_open
+  private_placement
+  ipo_application
+  bond
+
+  @@schema("xsystem")
+}
+
+model Instrument {
+  code              String             @id // 'BRACBANK', 'EFUF', 'APSCLBOND'
+  name              String // 'BRAC Bank Ltd'
+  category          InstrumentCategory
+  isin              String?
+  /// CoA account name posted to on the investment leg of a Trade. FK target
+  /// is ChartOfAccount.name (validated at seed time, not enforced as FK to
+  /// allow soft references and renames via onUpdate: Cascade pattern).
+  investmentAccount String             @map("investment_account")
+  faceValue         Decimal            @default(10) @map("face_value") @db.Decimal(18, 2)
+  isActive          Boolean            @default(true) @map("is_active")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  trades Trade[]
+  prices Price[]
+
+  @@map("instruments")
+  @@schema("xsystem")
+}
+
+enum TradeSide {
+  BUY
+  SELL
+
+  @@schema("xsystem")
+}
+
+model Trade {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tradeDate      DateTime  @map("trade_date") @db.Date
+  fiscalYearId   String    @map("fiscal_year_id") @db.Uuid
+  instrumentCode String    @map("instrument_code")
+  side           TradeSide
+  quantity       Decimal   @db.Decimal(18, 4)
+  rate           Decimal   @db.Decimal(18, 6)
+  grossAmount    Decimal   @map("gross_amount") @db.Decimal(18, 2)
+  /// CoA account name of the bank/cash account this trade settled against.
+  /// Required dropdown on /trades/new; sourced from BankAccount rows.
+  bankAccount    String    @map("bank_account")
+  /// Snapshot of weighted-average cost basis at the time of sale; null on
+  /// BUY rows. Used by the auto-journal generator to compute the credit
+  /// leg of the investment account.
+  costBasis      Decimal?  @map("cost_basis") @db.Decimal(18, 2)
+  /// Realised P&L on a SELL trade = grossAmount − costBasis. Positive =
+  /// gain (cr on `Realised Gain/(Loss) on Investments`); negative = loss.
+  realisedPnl    Decimal?  @map("realised_pnl") @db.Decimal(18, 2)
+  /// Auto-posted journal batch id. Idempotency lock — generator skips
+  /// if non-null. Voucher prefix 'BV' for buys, 'SV' for sells.
+  journalBatchId String?   @map("journal_batch_id") @db.Uuid
+  remarks        String?
+  createdBy      String?   @map("created_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  instrument Instrument @relation(fields: [instrumentCode], references: [code], onDelete: Restrict)
+  fiscalYear FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+
+  @@index([tradeDate])
+  @@index([instrumentCode, tradeDate])
+  @@index([fiscalYearId])
+  @@index([journalBatchId])
+  @@map("trades")
+  @@schema("xsystem")
+}
+
+model Price {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  instrumentCode String   @map("instrument_code")
+  priceDate      DateTime @map("price_date") @db.Date
+  closePrice     Decimal  @map("close_price") @db.Decimal(18, 4)
+  notes          String?
+  createdBy      String?  @map("created_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  instrument Instrument @relation(fields: [instrumentCode], references: [code], onDelete: Restrict)
+
+  @@unique([instrumentCode, priceDate])
+  @@index([priceDate])
+  @@map("prices")
+  @@schema("xsystem")
+}
+
+// Fair-value-through-P&L marker. One row per revaluation event (admin
+// clicks "Revalue to market" on /portfolio). Each row links to the
+// compound journal voucher that posted the unrealised gain/loss. Re-
+// running for the same `asOfDate` reverses the prior FVA and posts a
+// new one — `(fiscalYearId, asOfDate)` is unique to enforce idempotency.
+model FairValueAdjustment {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  asOfDate       DateTime  @map("as_of_date") @db.Date
+  fiscalYearId   String    @map("fiscal_year_id") @db.Uuid
+  journalBatchId String    @map("journal_batch_id") @db.Uuid
+  totalCost      Decimal   @map("total_cost") @db.Decimal(18, 2)
+  totalMarket    Decimal   @map("total_market") @db.Decimal(18, 2)
+  unrealisedPnl  Decimal   @map("unrealised_pnl") @db.Decimal(18, 2)
+  /// Set when this FVA has been superseded by a later run for the same
+  /// asOfDate. Reversed FVAs stay in the table for audit; the active one
+  /// has `reversedAt IS NULL`.
+  reversedAt     DateTime? @map("reversed_at")
+  createdBy      String?   @map("created_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  fiscalYear FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+
+  @@index([fiscalYearId, asOfDate])
+  @@map("fair_value_adjustments")
   @@schema("xsystem")
 }
 
@@ -530,27 +661,27 @@ enum BankAccountType {
 }
 
 model BankAccount {
-  id                   String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   /// References ChartOfAccount.name. Each bank ledger maps to exactly one
   /// CoA row; the CoA `name` is the human label everyone uses.
-  accountName          String          @unique @map("account_name")
-  bankName             String          @map("bank_name") // e.g. "BRAC Bank Limited"
-  branch               String?
-  accountNumber        String          @map("account_number")
-  accountType          BankAccountType @default(current) @map("account_type")
-  currency             String          @default("BDT")
-  ifsc                 String?
-  swift                String?
+  accountName         String          @unique @map("account_name")
+  bankName            String          @map("bank_name") // e.g. "BRAC Bank Limited"
+  branch              String?
+  accountNumber       String          @map("account_number")
+  accountType         BankAccountType @default(current) @map("account_type")
+  currency            String          @default("BDT")
+  ifsc                String?
+  swift               String?
   /// Opening balance from the bank's books at the system go-live date.
   /// Used to seed BRS calculations; NOT a journal entry.
-  openingBalance       Decimal         @default(0) @map("opening_balance") @db.Decimal(18, 2)
+  openingBalance      Decimal         @default(0) @map("opening_balance") @db.Decimal(18, 2)
   /// Date from which BRS reconciliation tracking starts — earlier
   /// transactions are assumed cleared.
-  reconciliationStart  DateTime?       @map("reconciliation_start") @db.Date
-  isActive             Boolean         @default(true) @map("is_active")
-  notes                String?
-  createdAt            DateTime        @default(now()) @map("created_at")
-  updatedAt            DateTime        @updatedAt @map("updated_at")
+  reconciliationStart DateTime?       @map("reconciliation_start") @db.Date
+  isActive            Boolean         @default(true) @map("is_active")
+  notes               String?
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
 
   account ChartOfAccount @relation("BankAccountToCoA", fields: [accountName], references: [name], onUpdate: Cascade, onDelete: Restrict)
 
@@ -588,20 +719,20 @@ model CostCentre {
 // outstanding deposits - outstanding cheques = (statement balance).
 
 model BankStatement {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   /// Chart-of-accounts name — the AMC's bank/cash account this statement covers.
-  accountName     String   @map("account_name")
-  fiscalYearId    String   @map("fiscal_year_id") @db.Uuid
-  periodStart     DateTime @map("period_start") @db.Date
-  periodEnd       DateTime @map("period_end") @db.Date
-  openingBalance  Decimal  @default(0) @map("opening_balance") @db.Decimal(18, 2)
-  closingBalance  Decimal  @default(0) @map("closing_balance") @db.Decimal(18, 2)
+  accountName    String   @map("account_name")
+  fiscalYearId   String   @map("fiscal_year_id") @db.Uuid
+  periodStart    DateTime @map("period_start") @db.Date
+  periodEnd      DateTime @map("period_end") @db.Date
+  openingBalance Decimal  @default(0) @map("opening_balance") @db.Decimal(18, 2)
+  closingBalance Decimal  @default(0) @map("closing_balance") @db.Decimal(18, 2)
   /// Optional source-file metadata (filename, blob URL, etc.).
-  sourceFile      String?  @map("source_file")
-  notes           String?
-  uploadedBy      String?  @map("uploaded_by") @db.Uuid
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  sourceFile     String?  @map("source_file")
+  notes          String?
+  uploadedBy     String?  @map("uploaded_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   fiscalYear FiscalYear          @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
   lines      BankStatementLine[]
@@ -613,17 +744,17 @@ model BankStatement {
 }
 
 model BankStatementLine {
-  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  statementId     String        @map("statement_id") @db.Uuid
-  lineDate        DateTime      @map("line_date") @db.Date
-  description     String?
-  refNo           String?       @map("ref_no")
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  statementId      String    @map("statement_id") @db.Uuid
+  lineDate         DateTime  @map("line_date") @db.Date
+  description      String?
+  refNo            String?   @map("ref_no")
   /// Bank-side: positive amount means the bank credited the AMC (deposit).
-  amount          Decimal       @db.Decimal(18, 2)
-  runningBalance  Decimal?      @map("running_balance") @db.Decimal(18, 2)
-  matchedJournalId String?      @unique @map("matched_journal_id") @db.Uuid
-  clearedOn       DateTime?     @map("cleared_on") @db.Date
-  createdAt       DateTime      @default(now()) @map("created_at")
+  amount           Decimal   @db.Decimal(18, 2)
+  runningBalance   Decimal?  @map("running_balance") @db.Decimal(18, 2)
+  matchedJournalId String?   @unique @map("matched_journal_id") @db.Uuid
+  clearedOn        DateTime? @map("cleared_on") @db.Date
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   statement BankStatement @relation(fields: [statementId], references: [id], onDelete: Cascade)
 
@@ -649,24 +780,24 @@ enum MgmtFeeStatus {
 }
 
 model ManagementFeeImport {
-  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  fundCode        String        @map("fund_code") // 'EFUF', 'EGF', 'ESRF'
-  periodStart     DateTime      @map("period_start") @db.Date
-  periodEnd       DateTime      @map("period_end") @db.Date
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fundCode       String        @map("fund_code") // 'EFUF', 'EGF', 'ESRF'
+  periodStart    DateTime      @map("period_start") @db.Date
+  periodEnd      DateTime      @map("period_end") @db.Date
   /// Sum of fund's 'Management Fee' debits in (periodStart, periodEnd).
-  computedAmount  Decimal       @map("computed_amount") @db.Decimal(18, 2)
+  computedAmount Decimal       @map("computed_amount") @db.Decimal(18, 2)
   /// Accountant override; falls back to computedAmount when null.
-  manualAmount    Decimal?      @map("manual_amount") @db.Decimal(18, 2)
-  status          MgmtFeeStatus @default(imported)
+  manualAmount   Decimal?      @map("manual_amount") @db.Decimal(18, 2)
+  status         MgmtFeeStatus @default(imported)
   /// upload row id from public.daily_fund_uploads the import was sourced from.
-  sourceUploadId  String?       @map("source_upload_id")
-  sourceFileName  String?       @map("source_file_name")
-  notes           String?
-  importedAt      DateTime      @default(now()) @map("imported_at")
-  importedBy      String?       @map("imported_by") @db.Uuid
-  verifiedAt      DateTime?     @map("verified_at")
-  verifiedBy      String?       @map("verified_by") @db.Uuid
-  updatedAt       DateTime      @updatedAt @map("updated_at")
+  sourceUploadId String?       @map("source_upload_id")
+  sourceFileName String?       @map("source_file_name")
+  notes          String?
+  importedAt     DateTime      @default(now()) @map("imported_at")
+  importedBy     String?       @map("imported_by") @db.Uuid
+  verifiedAt     DateTime?     @map("verified_at")
+  verifiedBy     String?       @map("verified_by") @db.Uuid
+  updatedAt      DateTime      @updatedAt @map("updated_at")
 
   @@unique([fundCode, periodStart, periodEnd])
   @@index([fundCode])
