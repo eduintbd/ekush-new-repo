@@ -232,6 +232,12 @@ model Broker {
   /// UPPERCASE letters/digits/underscore. 'UCB', 'PRIMEBANK', etc.
   code              String   @id
   name              String // 'UCB Securities', 'Prime Bank Securities Ltd'
+  /// Broker's BO account number (e.g. 'UCB 1205590068173895'). Shown
+  /// next to the broker name on the /trades/new dropdown and in the
+  /// auto-journal description so audit knows which BO settled the
+  /// trade. Nullable — Pinki can add a broker before she has the BO
+  /// number assigned.
+  accountNumber     String?  @map("account_number")
   /// CoA account name of the broker's BO / current-account ledger
   /// (DEBIT-normal). Required — every broker has a settlement target.
   brokerBoAccount   String   @map("broker_bo_account")

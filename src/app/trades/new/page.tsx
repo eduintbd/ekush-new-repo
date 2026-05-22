@@ -119,21 +119,29 @@ export default async function NewTradePage({
               <option value="">— pick —</option>
               <optgroup label="Banks">
                 {banks
-                  .filter((b) => b.accountType === "current" || b.accountType === "savings" || b.accountType === "std" || b.accountType === "md" || b.accountType === "fdr")
+                  .filter((b) => b.accountType !== "mobile_money")
                   .map((b) => (
                     <option key={b.id} value={b.accountName}>
                       {b.accountName}
                     </option>
                   ))}
               </optgroup>
-              <optgroup label="Broker / Margin">
-                {banks
-                  .filter((b) => b.accountType === "other")
-                  .map((b) => (
-                    <option key={b.id} value={b.accountName}>
-                      {b.accountName}
+              <optgroup label="Brokers (BO + Margin)">
+                {brokers.flatMap((b) => {
+                  const bo = (
+                    <option key={`${b.code}-bo`} value={b.brokerBoAccount}>
+                      {b.name} — BO{b.accountNumber ? ` (${b.accountNumber})` : ""}
                     </option>
-                  ))}
+                  );
+                  return b.marginLoanAccount
+                    ? [
+                        bo,
+                        <option key={`${b.code}-margin`} value={b.marginLoanAccount}>
+                          {b.name} — Margin Loan
+                        </option>,
+                      ]
+                    : [bo];
+                })}
               </optgroup>
               <optgroup label="Mobile money">
                 {banks

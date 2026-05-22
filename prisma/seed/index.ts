@@ -115,11 +115,17 @@ async function main() {
       create: {
         code: b.code,
         name: b.name,
+        accountNumber: b.accountNumber,
         brokerBoAccount: b.brokerBoAccount,
         marginLoanAccount: b.marginLoanAccount,
       },
       update: {
         name: b.name,
+        // Do NOT overwrite an admin-edited accountNumber via re-seed
+        // unless the seed has a non-null value. Pinki may have typed the
+        // PBSL BO# in /admin/brokers; re-running seed with null shouldn't
+        // wipe it.
+        ...(b.accountNumber ? { accountNumber: b.accountNumber } : {}),
         brokerBoAccount: b.brokerBoAccount,
         marginLoanAccount: b.marginLoanAccount,
       },

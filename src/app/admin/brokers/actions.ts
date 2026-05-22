@@ -33,6 +33,7 @@ export async function createBroker(formData: FormData): Promise<void> {
 
   const code = String(formData.get("code") ?? "").trim().toUpperCase();
   const name = String(formData.get("name") ?? "").trim();
+  const accountNumber = String(formData.get("accountNumber") ?? "").trim() || null;
   const brokerBoAccount = String(formData.get("brokerBoAccount") ?? "").trim();
   const marginLoanAccount = String(formData.get("marginLoanAccount") ?? "").trim() || null;
   const notes = String(formData.get("notes") ?? "").trim() || null;
@@ -51,7 +52,7 @@ export async function createBroker(formData: FormData): Promise<void> {
 
   await withActor(me.id, (tx) =>
     tx.broker.create({
-      data: { code, name, brokerBoAccount, marginLoanAccount, notes },
+      data: { code, name, accountNumber, brokerBoAccount, marginLoanAccount, notes },
     }),
   );
   revalidatePath("/admin/brokers");
@@ -64,6 +65,7 @@ export async function updateBroker(formData: FormData): Promise<void> {
 
   const code = String(formData.get("code") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
+  const accountNumber = String(formData.get("accountNumber") ?? "").trim() || null;
   const brokerBoAccount = String(formData.get("brokerBoAccount") ?? "").trim();
   const marginLoanAccount = String(formData.get("marginLoanAccount") ?? "").trim() || null;
   const isActive = String(formData.get("isActive") ?? "true") === "true";
@@ -79,7 +81,7 @@ export async function updateBroker(formData: FormData): Promise<void> {
   await withActor(me.id, (tx) =>
     tx.broker.update({
       where: { code },
-      data: { name, brokerBoAccount, marginLoanAccount, isActive, notes },
+      data: { name, accountNumber, brokerBoAccount, marginLoanAccount, isActive, notes },
     }),
   );
   revalidatePath("/admin/brokers");

@@ -60,6 +60,7 @@ export default async function BrokersPage({
               <tr>
                 <Th>Code</Th>
                 <Th>Name</Th>
+                <Th>BO #</Th>
                 <Th>Broker BO account</Th>
                 <Th>Margin loan account</Th>
                 <Th>Status</Th>
@@ -69,7 +70,7 @@ export default async function BrokersPage({
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {brokers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-zinc-500">
+                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-zinc-500">
                     No brokers yet. Add one below.
                   </td>
                 </tr>
@@ -78,6 +79,7 @@ export default async function BrokersPage({
                   <tr key={b.code} className={b.isActive ? "" : "opacity-50"}>
                     <Td className="font-mono text-xs">{b.code}</Td>
                     <Td className="text-zinc-700 dark:text-zinc-300">{b.name}</Td>
+                    <Td className="font-mono text-xs text-zinc-500">{b.accountNumber ?? "—"}</Td>
                     <Td className="text-xs text-zinc-500">{b.brokerBoAccount}</Td>
                     <Td className="text-xs text-zinc-500">{b.marginLoanAccount ?? "—"}</Td>
                     <Td>
@@ -121,7 +123,7 @@ export default async function BrokersPage({
               <Field label="Code *" name="code" placeholder="UCB / PRIMEBANK / ICB" required uppercase />
             )}
             <Field label="Name *" name="name" required defaultValue={editing?.name ?? ""} placeholder="UCB Securities" />
-            <div /> {/* spacer for grid alignment when adding */}
+            <Field label="BO #" name="accountNumber" defaultValue={editing?.accountNumber ?? ""} placeholder="1205590068173895" />
             <SelectField
               label="Broker BO account *"
               name="brokerBoAccount"
