@@ -1,21 +1,34 @@
 "use server";
 
-// FVTPL revaluation. Click "Revalue to market" on /portfolio → this
-// action computes per-instrument unrealised P&L using the cost-basis
-// engine joined with the latest Price (≤ asOfDate), and posts a single
-// compound journal:
+// FVTPL revaluation under FVOCI treatment (BD IFRS 9, AMC own books).
 //
-//   if net unrealised gain > 0:
-//     dr Fair Value Reserve (BS, equity)
-//     cr Unrealised Gain/(Loss) on Investments (P&L)
-//   if net unrealised loss > 0:
-//     dr Unrealised Gain/(Loss) on Investments
-//     cr Fair Value Reserve
+// What this action posts:
 //
-// A FairValueAdjustment audit row links the journal batch. Re-running
-// for the same `asOfDate` first reverses the prior active FVA (one
-// opposite-sign journal posted, prior row's `reversedAt` set) and then
-// posts a fresh one. Idempotent across runs.
+//   For each priced holding with a non-zero DELTA vs the cumulative
+//   unrealised gain already recorded for that instrument in prior
+//   FairValueAdjustment rows:
+//
+//     gain  → dr <Instrument.investmentAccount>  delta   (instrumentCode tag)
+//     loss  → cr <Instrument.investmentAccount>  |delta| (instrumentCode tag)
+//
+//   Then one offsetting Fair Value Reserve line balances the voucher:
+//     net dr  → cr Fair Value Reserve  net
+//     net cr  → dr Fair Value Reserve  net
+//
+// Marginal basis: every revaluation posts the DELTA between current
+// per-instrument cumulative unrealised and what was already booked
+// across all prior active FVAs in the same fiscal year. Fair Value
+// Reserve credit balance therefore equals the cumulative unrealised
+// gain across all priced holdings at any time.
+//
+// Idempotency:
+//   - Re-running for the same asOfDate first reverses the active FVA
+//     for that same date (mirroring its per-instrument lines exactly),
+//     then computes the fresh delta against the OTHER active FVAs and
+//     posts a new voucher.
+//   - Retroactive Price entries don't poison the books because each
+//     FVA's per-instrument cumulative is SNAPSHOT in
+//     FairValueAdjustmentLine at post-time.
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -27,7 +40,6 @@ import { allocateVoucherNo } from "@/lib/voucher";
 import { buildPortfolioAsOf, fromPrismaTrades, latestPricesMap } from "@/lib/portfolio";
 
 const FAIR_VALUE_RESERVE = "Fair Value Reserve";
-const UNREALISED = "Unrealised Gain/(Loss) on Investments";
 const PORTFOLIO_PATH = "/portfolio";
 
 const Schema = z.object({
@@ -61,18 +73,11 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
     back(baseQs, "As-of date is outside the selected fiscal year");
   }
 
-  // Make sure the CoA targets exist (defence — they're seeded but a
-  // human could have deactivated them).
-  const accs = await prisma.chartOfAccount.findMany({
-    where: { name: { in: [FAIR_VALUE_RESERVE, UNREALISED] } },
-    select: { name: true },
-  });
-  const found = new Set(accs.map((a) => a.name));
-  if (!found.has(FAIR_VALUE_RESERVE) || !found.has(UNREALISED)) {
-    back(baseQs, `Missing CoA target — need "${FAIR_VALUE_RESERVE}" and "${UNREALISED}"`);
-  }
+  // Defensive — Fair Value Reserve must exist in CoA.
+  const fvr = await prisma.chartOfAccount.findUnique({ where: { name: FAIR_VALUE_RESERVE } });
+  if (!fvr) back(baseQs, `Missing CoA target — need "${FAIR_VALUE_RESERVE}"`);
 
-  // Replay trades up to asOfDate + join latest price ≤ asOfDate.
+  // Build current portfolio: trades + latest price per instrument.
   const tradeRows = await prisma.trade.findMany({
     where: { tradeDate: { lte: asOf } },
     orderBy: [{ tradeDate: "asc" }, { createdAt: "asc" }],
@@ -80,9 +85,8 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
   const priceRows = await prisma.price.findMany({
     where: { priceDate: { lte: asOf } },
   });
-
   const portfolio = buildPortfolioAsOf(fromPrismaTrades(tradeRows), latestPricesMap(priceRows), asOf);
-  const priced = portfolio.filter((r) => r.unrealisedPnl !== null);
+  const priced = portfolio.filter((r) => r.unrealisedPnl !== null && r.marketValue !== null);
   if (priced.length === 0) {
     back(baseQs, "No priced holdings on or before this date — enter prices first");
   }
@@ -94,106 +98,225 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
     );
   }
 
+  // Look up each held instrument's investmentAccount.
+  const codes = priced.map((r) => r.instrumentCode);
+  const instruments = await prisma.instrument.findMany({ where: { code: { in: codes } } });
+  const invAccountByCode = new Map(instruments.map((i) => [i.code, i.investmentAccount]));
+  for (const code of codes) {
+    if (!invAccountByCode.has(code)) {
+      back(baseQs, `Instrument ${code} not in master — seed it before revaluation`);
+    }
+  }
+
+  // Verify every investmentAccount exists in CoA.
+  const invAccs = [...new Set([...invAccountByCode.values()])];
+  const invAccRows = await prisma.chartOfAccount.findMany({
+    where: { name: { in: invAccs } },
+    select: { name: true },
+  });
+  const invAccSet = new Set(invAccRows.map((a) => a.name));
+  for (const acc of invAccs) {
+    if (!invAccSet.has(acc)) back(baseQs, `Investment account "${acc}" missing from CoA`);
+  }
+
   const totalCost = round2(priced.reduce((s, r) => s + r.totalCost, 0));
   const totalMarket = round2(priced.reduce((s, r) => s + (r.marketValue ?? 0), 0));
-  const unrealised = round2(totalMarket - totalCost);
+  const cumulativeUnrealised = round2(totalMarket - totalCost);
 
-  // Inside one tx: reverse prior active FVA (if any) → post new one.
-  const newBatchId = randomUUID();
-  let newVoucherNo = "";
-  await withActor(profile.id, async (tx) => {
-    const priorActive = await tx.fairValueAdjustment.findFirst({
+  const txResult = await withActor(profile.id, async (tx) => {
+    // Step 1: if a same-date FVA exists, reverse it first.
+    const sameDateActive = await tx.fairValueAdjustment.findFirst({
       where: { fiscalYearId: data.fiscalYearId, asOfDate: asOf, reversedAt: null },
+      include: { lines: true },
     });
-
-    if (priorActive) {
-      // Post the reversal: same legs, swapped sides.
+    if (sameDateActive) {
       const reversalBatch = randomUUID();
       const reversalVoucher = await allocateVoucherNo(tx, data.fiscalYearId, fy.label, "FV");
-      const priorAmt = round2(Number(priorActive.unrealisedPnl));
-      if (Math.abs(priorAmt) >= 0.005) {
-        const dirGain = priorAmt > 0;
-        await tx.journal.createMany({
-          data: [
-            // If prior posted a gain (cr Unrealised), reversal cr Fair Value Reserve, dr Unrealised
-            {
-              entryDate: asOf,
-              description: `FVTPL reversal (was ${priorAmt >= 0 ? "+" : "−"}${Math.abs(priorAmt).toFixed(2)})`,
-              txnType: "FV",
-              voucherNo: reversalVoucher,
-              accountName: FAIR_VALUE_RESERVE,
-              debit: dirGain ? Math.abs(priorAmt) : 0,
-              credit: dirGain ? 0 : Math.abs(priorAmt),
-              fiscalYearId: data.fiscalYearId,
-              batchId: reversalBatch,
-              createdBy: profile.id,
-            },
-            {
-              entryDate: asOf,
-              description: `FVTPL reversal (was ${priorAmt >= 0 ? "+" : "−"}${Math.abs(priorAmt).toFixed(2)})`,
-              txnType: "FV",
-              voucherNo: reversalVoucher,
-              accountName: UNREALISED,
-              debit: dirGain ? 0 : Math.abs(priorAmt),
-              credit: dirGain ? Math.abs(priorAmt) : 0,
-              fiscalYearId: data.fiscalYearId,
-              batchId: reversalBatch,
-              createdBy: profile.id,
-            },
-          ],
+      // Mirror every line with sign-flipped deltaPosted.
+      const reversalLines: Array<{
+        entryDate: Date;
+        description: string;
+        txnType: string;
+        voucherNo: string;
+        accountName: string;
+        debit: number;
+        credit: number;
+        fiscalYearId: string;
+        batchId: string;
+        instrumentCode: string | null;
+        createdBy: string | null;
+      }> = [];
+      let netReversal = 0;
+      for (const line of sameDateActive.lines) {
+        const delta = Number(line.deltaPosted);
+        if (Math.abs(delta) < 0.005) continue;
+        const invAcc = invAccountByCode.get(line.instrumentCode);
+        if (!invAcc) continue; // instrument removed since post — skip
+        const desc = `FVTPL reversal ${data.asOfDate} — ${line.instrumentCode}`;
+        reversalLines.push({
+          entryDate: asOf,
+          description: desc,
+          txnType: "FV",
+          voucherNo: reversalVoucher,
+          accountName: invAcc,
+          debit: delta > 0 ? 0 : Math.abs(delta),
+          credit: delta > 0 ? Math.abs(delta) : 0,
+          fiscalYearId: data.fiscalYearId,
+          batchId: reversalBatch,
+          instrumentCode: line.instrumentCode,
+          createdBy: profile.id,
+        });
+        netReversal += delta;
+      }
+      netReversal = round2(netReversal);
+      if (Math.abs(netReversal) >= 0.005) {
+        reversalLines.push({
+          entryDate: asOf,
+          description: `FVTPL reversal ${data.asOfDate}`,
+          txnType: "FV",
+          voucherNo: reversalVoucher,
+          accountName: FAIR_VALUE_RESERVE,
+          debit: netReversal > 0 ? Math.abs(netReversal) : 0,
+          credit: netReversal > 0 ? 0 : Math.abs(netReversal),
+          fiscalYearId: data.fiscalYearId,
+          batchId: reversalBatch,
+          instrumentCode: null,
+          createdBy: profile.id,
         });
       }
+      if (reversalLines.length > 0) {
+        await tx.journal.createMany({ data: reversalLines });
+      }
       await tx.fairValueAdjustment.update({
-        where: { id: priorActive.id },
+        where: { id: sameDateActive.id },
         data: { reversedAt: new Date() },
       });
     }
 
-    // Post the new FVTPL journal.
-    newVoucherNo = await allocateVoucherNo(tx, data.fiscalYearId, fy.label, "FV");
-    if (Math.abs(unrealised) >= 0.005) {
-      const isGain = unrealised > 0;
-      await tx.journal.createMany({
-        data: [
-          {
-            entryDate: asOf,
-            description: `FVTPL revaluation as of ${data.asOfDate} (${isGain ? "gain" : "loss"})`,
-            txnType: "FV",
-            voucherNo: newVoucherNo,
-            accountName: FAIR_VALUE_RESERVE,
-            debit: isGain ? Math.abs(unrealised) : 0,
-            credit: isGain ? 0 : Math.abs(unrealised),
-            fiscalYearId: data.fiscalYearId,
-            batchId: newBatchId,
-            createdBy: profile.id,
-          },
-          {
-            entryDate: asOf,
-            description: `FVTPL revaluation as of ${data.asOfDate} (${isGain ? "gain" : "loss"})`,
-            txnType: "FV",
-            voucherNo: newVoucherNo,
-            accountName: UNREALISED,
-            debit: isGain ? 0 : Math.abs(unrealised),
-            credit: isGain ? Math.abs(unrealised) : 0,
-            fiscalYearId: data.fiscalYearId,
-            batchId: newBatchId,
-            createdBy: profile.id,
-          },
-        ],
+    // Step 2: build per-instrument baseline = the LATEST active FVA's
+    // cumulativeUnrealisedPnl snapshot per instrument. (Each FVA's
+    // cumulative already includes earlier ones, so we never sum across
+    // FVAs — the latest snapshot per instrument IS the running total.)
+    const priorActive = await tx.fairValueAdjustment.findMany({
+      where: { fiscalYearId: data.fiscalYearId, reversedAt: null },
+      include: { lines: true },
+      orderBy: { asOfDate: "asc" },
+    });
+    const baselineByCode = new Map<string, number>();
+    for (const fva of priorActive) {
+      for (const line of fva.lines) {
+        baselineByCode.set(line.instrumentCode, Number(line.cumulativeUnrealisedPnl));
+      }
+    }
+
+    // Step 3: compute per-instrument delta vs baseline.
+    const deltaByCode = new Map<string, number>();
+    for (const r of priced) {
+      const baseline = baselineByCode.get(r.instrumentCode) ?? 0;
+      const delta = round2((r.unrealisedPnl ?? 0) - baseline);
+      deltaByCode.set(r.instrumentCode, delta);
+    }
+    // Also handle instruments that USED to have a baseline but are no
+    // longer held (fully sold since prior FVA). Their cumulative needs
+    // to be removed — but only if they have no current row in `priced`.
+    for (const [code, baseline] of baselineByCode) {
+      if (!deltaByCode.has(code) && Math.abs(baseline) >= 0.005) {
+        // Mark down to zero — delta = 0 - baseline = -baseline.
+        deltaByCode.set(code, round2(-baseline));
+      }
+    }
+
+    // Step 4: build new journal lines.
+    const newBatchId = randomUUID();
+    const newVoucherNo = await allocateVoucherNo(tx, data.fiscalYearId, fy.label, "FV");
+    const newLines: Array<{
+      entryDate: Date;
+      description: string;
+      txnType: string;
+      voucherNo: string;
+      accountName: string;
+      debit: number;
+      credit: number;
+      fiscalYearId: string;
+      batchId: string;
+      instrumentCode: string | null;
+      createdBy: string | null;
+    }> = [];
+    let netDelta = 0;
+    for (const [code, delta] of deltaByCode) {
+      if (Math.abs(delta) < 0.005) continue;
+      const invAcc = invAccountByCode.get(code);
+      if (!invAcc) continue;
+      newLines.push({
+        entryDate: asOf,
+        description: `FVTPL ${data.asOfDate} — ${code}`,
+        txnType: "FV",
+        voucherNo: newVoucherNo,
+        accountName: invAcc,
+        debit: delta > 0 ? delta : 0,
+        credit: delta > 0 ? 0 : Math.abs(delta),
+        fiscalYearId: data.fiscalYearId,
+        batchId: newBatchId,
+        instrumentCode: code,
+        createdBy: profile.id,
+      });
+      netDelta += delta;
+    }
+    netDelta = round2(netDelta);
+    if (Math.abs(netDelta) >= 0.005) {
+      newLines.push({
+        entryDate: asOf,
+        description: `FVTPL revaluation as of ${data.asOfDate}`,
+        txnType: "FV",
+        voucherNo: newVoucherNo,
+        accountName: FAIR_VALUE_RESERVE,
+        debit: netDelta > 0 ? 0 : Math.abs(netDelta),
+        credit: netDelta > 0 ? netDelta : 0,
+        fiscalYearId: data.fiscalYearId,
+        batchId: newBatchId,
+        instrumentCode: null,
+        createdBy: profile.id,
       });
     }
 
-    await tx.fairValueAdjustment.create({
+    // Step 5: insert the new FairValueAdjustment + snapshot lines + journal.
+    if (newLines.length === 0) {
+      // No delta to post — short-circuit. (E.g. same-date rerun with
+      // no price changes after the reversal; or unchanged book.)
+      // We still want to record an FVA row to preserve idempotency,
+      // but skip the journal write.
+    } else {
+      await tx.journal.createMany({ data: newLines });
+    }
+
+    const fva = await tx.fairValueAdjustment.create({
       data: {
         asOfDate: asOf,
         fiscalYearId: data.fiscalYearId,
         journalBatchId: newBatchId,
         totalCost,
         totalMarket,
-        unrealisedPnl: unrealised,
+        unrealisedPnl: cumulativeUnrealised,
         createdBy: profile.id,
       },
     });
+
+    if (priced.length > 0) {
+      await tx.fairValueAdjustmentLine.createMany({
+        data: priced.map((r) => ({
+          adjustmentId: fva.id,
+          instrumentCode: r.instrumentCode,
+          quantity: r.quantity,
+          totalCost: round2(r.totalCost),
+          marketRate: r.marketRate ?? 0,
+          marketValue: round2(r.marketValue ?? 0),
+          cumulativeUnrealisedPnl: round2(r.unrealisedPnl ?? 0),
+          deltaPosted: deltaByCode.get(r.instrumentCode) ?? 0,
+        })),
+      });
+    }
+
+    return { voucherNo: newVoucherNo, netDelta };
   });
 
   revalidatePath("/portfolio");
@@ -202,7 +325,9 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
   revalidatePath("/trial-balance");
   redirect(
     `${PORTFOLIO_PATH}?asOf=${data.asOfDate}&fy=${data.fiscalYearId}&ok=${encodeURIComponent(
-      `Revalued: ${unrealised >= 0 ? "+" : "−"}${Math.abs(unrealised).toFixed(2)} unrealised · voucher ${newVoucherNo}`,
+      txResult.netDelta === 0
+        ? `Revalued ${data.asOfDate} · no change vs prior FVAs · voucher ${txResult.voucherNo}`
+        : `Revalued ${data.asOfDate} · Δ ${txResult.netDelta >= 0 ? "+" : "−"}${Math.abs(txResult.netDelta).toFixed(2)} · voucher ${txResult.voucherNo}`,
     )}`,
   );
 }

@@ -208,8 +208,9 @@ model Instrument {
   createdAt         DateTime           @default(now()) @map("created_at")
   updatedAt         DateTime           @updatedAt @map("updated_at")
 
-  trades Trade[]
-  prices Price[]
+  trades   Trade[]
+  prices   Price[]
+  fvaLines FairValueAdjustmentLine[]
 
   @@map("instruments")
   @@schema("xsystem")
@@ -298,10 +299,43 @@ model FairValueAdjustment {
   createdBy      String?   @map("created_by") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at")
 
-  fiscalYear FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  fiscalYear FiscalYear                @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  lines      FairValueAdjustmentLine[]
 
   @@index([fiscalYearId, asOfDate])
   @@map("fair_value_adjustments")
+  @@schema("xsystem")
+}
+
+// Per-instrument snapshot for one FairValueAdjustment. Captures the
+// cumulative unrealised gain on each priced holding AT POST-TIME, so a
+// future marginal-delta computation reads from a frozen baseline and
+// is immune to retroactive price entries / trade backfills. `deltaPosted`
+// is the signed amount actually posted to the journal for this
+// instrument on this FVA — the sum of deltas across lines equals the
+// FairValueAdjustment's journal Fair-Value-Reserve net.
+model FairValueAdjustmentLine {
+  id                      String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  adjustmentId            String   @map("adjustment_id") @db.Uuid
+  instrumentCode          String   @map("instrument_code")
+  quantity                Decimal  @db.Decimal(18, 4)
+  totalCost               Decimal  @map("total_cost") @db.Decimal(18, 2)
+  marketRate              Decimal  @map("market_rate") @db.Decimal(18, 4)
+  marketValue             Decimal  @map("market_value") @db.Decimal(18, 2)
+  /// Cumulative unrealised gain on this instrument at the FVA's asOfDate.
+  cumulativeUnrealisedPnl Decimal  @map("cumulative_unrealised_pnl") @db.Decimal(18, 2)
+  /// Signed delta posted to this instrument's investmentAccount on this
+  /// FVA. Sum across all lines equals the offsetting Fair Value Reserve
+  /// amount in the matching journal voucher.
+  deltaPosted             Decimal  @map("delta_posted") @db.Decimal(18, 2)
+  createdAt               DateTime @default(now()) @map("created_at")
+
+  adjustment FairValueAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  instrument Instrument          @relation(fields: [instrumentCode], references: [code], onDelete: Restrict)
+
+  @@index([adjustmentId])
+  @@index([instrumentCode])
+  @@map("fair_value_adjustment_lines")
   @@schema("xsystem")
 }
 
