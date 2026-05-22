@@ -22,7 +22,15 @@ export const BANK_ACCOUNTS_SEED: SeedBankAccount[] = [
   // Primary settlement banks per the AMC ops team.
   { accountName: "Midland (A/C No. 00011060000128)",     bankName: "Midland Bank Limited",   accountNumber: "00011060000128",  accountType: "current", isPrimary: true },
   { accountName: "Brac Bank (A/C No. 1513204232046002)", bankName: "BRAC Bank Limited",      accountNumber: "1513204232046002", accountType: "current", isPrimary: true },
-  // Secondary / utility accounts.
+  // Secondary / utility bank accounts.
   { accountName: "Brac (A/C No. 1513204232046001)",      bankName: "BRAC Bank Limited",      accountNumber: "1513204232046001", accountType: "current" },
   { accountName: "Modhumoti (A/C No. 11351110000092)",   bankName: "Modhumoti Bank Limited", accountNumber: "11351110000092",  accountType: "current" },
+  // Broker BO ledgers — current accounts held with the AMC's two
+  // brokers. Trades typically settle here, not directly out of bank.
+  { accountName: "UCB BO (1205590068173895)",            bankName: "UCB Securities (broker BO)",         accountNumber: "1205590068173895", accountType: "other" },
+  { accountName: "Prime Bank Securities Limited",        bankName: "Prime Bank Securities Ltd (broker)", accountNumber: "PBSL-BO",          accountType: "other" },
+  // Margin loan with UCB — recorded when broker balance goes negative.
+  { accountName: "Margin Loan From UCB",                 bankName: "UCB Securities (margin loan)",       accountNumber: "MARGIN-UCB",       accountType: "other" },
+  // Mobile money wallet.
+  { accountName: "Bkash(DM4952)",                        bankName: "bKash (mobile money)",                accountNumber: "DM4952",           accountType: "mobile_money" },
 ];

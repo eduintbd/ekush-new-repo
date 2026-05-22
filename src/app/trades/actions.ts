@@ -30,11 +30,17 @@ const Body = z.object({
   fiscalYearId: z.string().min(1),
   instrumentCode: z.string().min(1, "pick an instrument"),
   side: z.enum(["BUY", "SELL"]),
+  brokerCode: z.enum(["UCB", "PRIMEBANK"], { message: "pick a broker" }),
   quantity: z.coerce.number().positive("quantity must be > 0"),
   rate: z.coerce.number().positive("rate must be > 0"),
-  bankAccount: z.string().min(1, "pick a bank account"),
+  bankAccount: z.string().min(1, "pick a settlement account"),
   remarks: z.string().optional(),
 });
+
+const BROKER_LABEL: Record<"UCB" | "PRIMEBANK", string> = {
+  UCB: "UCB",
+  PRIMEBANK: "Prime Bank",
+};
 
 function backWithError(returnPath: string, msg: string): never {
   redirect(`${returnPath}?error=${encodeURIComponent(msg)}`);
@@ -49,6 +55,7 @@ export async function createTrade(formData: FormData): Promise<void> {
     fiscalYearId: String(formData.get("fiscalYearId") ?? ""),
     instrumentCode: String(formData.get("instrumentCode") ?? ""),
     side: String(formData.get("side") ?? ""),
+    brokerCode: String(formData.get("brokerCode") ?? ""),
     quantity: String(formData.get("quantity") ?? ""),
     rate: String(formData.get("rate") ?? ""),
     bankAccount: String(formData.get("bankAccount") ?? ""),
@@ -121,6 +128,7 @@ export async function createTrade(formData: FormData): Promise<void> {
         fiscalYearId: data.fiscalYearId,
         instrumentCode: data.instrumentCode,
         side: data.side,
+        brokerCode: data.brokerCode,
         quantity: data.quantity,
         rate: data.rate,
         grossAmount,
@@ -133,6 +141,8 @@ export async function createTrade(formData: FormData): Promise<void> {
       },
     });
 
+    const brokerSuffix = ` via ${BROKER_LABEL[data.brokerCode]}`;
+    const baseDescr = data.remarks ?? `${data.side} ${data.quantity} ${data.instrumentCode} @ ${data.rate}`;
     await tx.journal.createMany({
       data: buildJournalLines({
         side: data.side,
@@ -146,7 +156,7 @@ export async function createTrade(formData: FormData): Promise<void> {
         realisedPnl,
         voucherNo,
         batchId,
-        description: data.remarks ?? `${data.side} ${data.quantity} ${data.instrumentCode} @ ${data.rate}`,
+        description: `${baseDescr}${brokerSuffix}`,
         createdBy: profile.id,
       }),
     });

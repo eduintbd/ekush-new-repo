@@ -91,6 +91,10 @@ export default async function NewTradePage({
               <option value="BUY">BUY</option>
               <option value="SELL">SELL</option>
             </SelectField>
+            <SelectField label="Broker" name="brokerCode" required defaultValue="UCB">
+              <option value="UCB">UCB</option>
+              <option value="PRIMEBANK">Prime Bank</option>
+            </SelectField>
             <SelectField label="Instrument" name="instrumentCode" required>
               <option value="">— pick —</option>
               {instruments.map((i) => (
@@ -99,13 +103,38 @@ export default async function NewTradePage({
                 </option>
               ))}
             </SelectField>
-            <SelectField label="Bank account" name="bankAccount" required>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3">
+            <SelectField label="Settlement account" name="bankAccount" required>
               <option value="">— pick —</option>
-              {banks.map((b) => (
-                <option key={b.id} value={b.accountName}>
-                  {b.accountName}
-                </option>
-              ))}
+              <optgroup label="Banks">
+                {banks
+                  .filter((b) => b.accountType === "current" || b.accountType === "savings" || b.accountType === "std" || b.accountType === "md" || b.accountType === "fdr")
+                  .map((b) => (
+                    <option key={b.id} value={b.accountName}>
+                      {b.accountName}
+                    </option>
+                  ))}
+              </optgroup>
+              <optgroup label="Broker / Margin">
+                {banks
+                  .filter((b) => b.accountType === "other")
+                  .map((b) => (
+                    <option key={b.id} value={b.accountName}>
+                      {b.accountName}
+                    </option>
+                  ))}
+              </optgroup>
+              <optgroup label="Mobile money">
+                {banks
+                  .filter((b) => b.accountType === "mobile_money")
+                  .map((b) => (
+                    <option key={b.id} value={b.accountName}>
+                      {b.accountName}
+                    </option>
+                  ))}
+              </optgroup>
             </SelectField>
           </div>
 

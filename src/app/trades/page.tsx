@@ -196,13 +196,14 @@ export default async function TradesPage({
                   <Th>Date</Th>
                   <Th>Voucher</Th>
                   <Th>Side</Th>
+                  <Th>Broker</Th>
                   <Th>Instrument</Th>
                   <Th align="right">Qty</Th>
                   <Th align="right">Rate</Th>
                   <Th align="right">Gross</Th>
                   <Th align="right">Cost basis</Th>
                   <Th align="right">Realised P&L</Th>
-                  <Th>Bank A/C</Th>
+                  <Th>Settlement A/C</Th>
                   {editable && <Th>&nbsp;</Th>}
                 </tr>
               </thead>
@@ -232,6 +233,9 @@ export default async function TradesPage({
                       >
                         {t.side}
                       </span>
+                    </Td>
+                    <Td className="text-xs text-zinc-500">
+                      {t.brokerCode === "UCB" ? "UCB" : t.brokerCode === "PRIMEBANK" ? "Prime Bank" : "—"}
                     </Td>
                     <Td className="font-mono text-xs">{t.instrumentCode}</Td>
                     <Td align="right">{Number(t.quantity).toLocaleString("en-IN")}</Td>

@@ -223,32 +223,48 @@ enum TradeSide {
   @@schema("xsystem")
 }
 
+// Broker that executed the trade. Independent dimension from the
+// settlement target — a trade can route through UCB broker BO while
+// still being settled from a bank account, etc.
+enum TradeBroker {
+  UCB // UCB Securities (broker BO + margin loan)
+  PRIMEBANK // Prime Bank Securities Limited
+
+  @@schema("xsystem")
+}
+
 model Trade {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tradeDate      DateTime  @map("trade_date") @db.Date
-  fiscalYearId   String    @map("fiscal_year_id") @db.Uuid
-  instrumentCode String    @map("instrument_code")
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tradeDate      DateTime     @map("trade_date") @db.Date
+  fiscalYearId   String       @map("fiscal_year_id") @db.Uuid
+  instrumentCode String       @map("instrument_code")
   side           TradeSide
-  quantity       Decimal   @db.Decimal(18, 4)
-  rate           Decimal   @db.Decimal(18, 6)
-  grossAmount    Decimal   @map("gross_amount") @db.Decimal(18, 2)
-  /// CoA account name of the bank/cash account this trade settled against.
-  /// Required dropdown on /trades/new; sourced from BankAccount rows.
-  bankAccount    String    @map("bank_account")
+  /// Broker that executed the trade. Nullable on historical backfill
+  /// rows (workbook didn't carry this column); required on new trades
+  /// typed via /trades/new.
+  brokerCode     TradeBroker? @map("broker_code")
+  quantity       Decimal      @db.Decimal(18, 4)
+  rate           Decimal      @db.Decimal(18, 6)
+  grossAmount    Decimal      @map("gross_amount") @db.Decimal(18, 2)
+  /// CoA account name of the settlement ledger this trade clears against
+  /// (bank, broker BO, margin loan, or mobile-money account). Required
+  /// dropdown on /trades/new; sourced from active BankAccount rows.
+  /// Column name stayed `bank_account` for backwards compatibility.
+  bankAccount    String       @map("bank_account")
   /// Snapshot of weighted-average cost basis at the time of sale; null on
   /// BUY rows. Used by the auto-journal generator to compute the credit
   /// leg of the investment account.
-  costBasis      Decimal?  @map("cost_basis") @db.Decimal(18, 2)
+  costBasis      Decimal?     @map("cost_basis") @db.Decimal(18, 2)
   /// Realised P&L on a SELL trade = grossAmount − costBasis. Positive =
   /// gain (cr on `Realised Gain/(Loss) on Investments`); negative = loss.
-  realisedPnl    Decimal?  @map("realised_pnl") @db.Decimal(18, 2)
+  realisedPnl    Decimal?     @map("realised_pnl") @db.Decimal(18, 2)
   /// Auto-posted journal batch id. Idempotency lock — generator skips
   /// if non-null. Voucher prefix 'BV' for buys, 'SV' for sells.
-  journalBatchId String?   @map("journal_batch_id") @db.Uuid
+  journalBatchId String?      @map("journal_batch_id") @db.Uuid
   remarks        String?
-  createdBy      String?   @map("created_by") @db.Uuid
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+  createdBy      String?      @map("created_by") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
 
   instrument Instrument @relation(fields: [instrumentCode], references: [code], onDelete: Restrict)
   fiscalYear FiscalYear @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)

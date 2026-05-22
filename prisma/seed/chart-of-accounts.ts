@@ -146,4 +146,10 @@ export const CHART_OF_ACCOUNTS_SEED: SeedAccount[] = [
   // workflow on /portfolio. Paired with `Fair Value Reserve` (sl 15)
   // on the balance-sheet leg.
   { sl: 129, name: "Unrealised Gain/(Loss) on Investments", normalBalance: "CREDIT" },
+  // UCB broker BO ledger — current-account balance with UCB Securities.
+  // Asset (debit-normal); goes negative only when the AMC pulls more
+  // than its balance, at which point Margin Loan From UCB (sl 99,
+  // credit-normal) records the borrowing. Exists in prod via an ad-hoc
+  // insert; adding to seed so future re-seeds keep it.
+  { sl: 130, name: "UCB BO (1205590068173895)", normalBalance: "DEBIT" },
 ];
