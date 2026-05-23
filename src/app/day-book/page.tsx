@@ -73,7 +73,16 @@ export default async function DayBookPage({
         fiscalYearId: fy.id,
         entryDate: { gte: fromDate, lte: toDate },
       },
-      orderBy: [{ entryDate: "asc" }, { voucherNo: "asc" }, { createdAt: "asc" }],
+      orderBy: [
+        { entryDate: "asc" },
+        { voucherNo: "asc" },
+        // Within a voucher, render debits before credits. createMany
+        // gives all rows the same now() timestamp, so createdAt alone
+        // is non-deterministic.
+        { debit: "desc" },
+        { credit: "asc" },
+        { createdAt: "asc" },
+      ],
       take: 5000,
     })
     .catch(() => []);
@@ -267,7 +276,9 @@ function DayBlock({ day, canMutate }: { day: { date: string; batches: { batchId:
             </header>
             <table className="min-w-full divide-y divide-zinc-100 text-sm dark:divide-zinc-800">
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                {b.lines.map((l) => (
+                {b.lines.map((l) => {
+                  const isDebit = Number(l.debit) > 0;
+                  return (
                   <tr key={l.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-950">
                     <td className="w-1/2 px-4 py-1.5">
                       <Link
@@ -276,6 +287,15 @@ function DayBlock({ day, canMutate }: { day: { date: string; batches: { batchId:
                       >
                         {l.accountName}
                       </Link>
+                      <span
+                        className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                          isDebit
+                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                            : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200"
+                        }`}
+                      >
+                        {isDebit ? "Dr" : "Cr"}
+                      </span>
                     </td>
                     <td className="px-4 py-1.5 text-right tabular-nums">
                       {Number(l.debit) > 0 ? formatBdt(Number(l.debit)) : ""}
@@ -284,7 +304,8 @@ function DayBlock({ day, canMutate }: { day: { date: string; batches: { batchId:
                       {Number(l.credit) > 0 ? formatBdt(Number(l.credit)) : ""}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </article>
