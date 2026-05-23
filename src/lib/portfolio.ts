@@ -155,10 +155,13 @@ export type PortfolioRow = {
 export function buildPortfolioAsOf(
   trades: TradeLike[],
   latestPrices: Map<string, { closePrice: number; priceDate: Date }>,
-  /** Optional filter — only replay trades on or before this date. */
-  asOfDate?: Date,
+  /** Trades on or before this date are replayed for quantity + cost
+   *  basis. The valuation date is independent — it lives implicitly in
+   *  `latestPrices` (whoever built that map decided what counts as
+   *  "latest"). Omitting this replays every trade. */
+  qtyAsOf?: Date,
 ): PortfolioRow[] {
-  const filtered = asOfDate ? trades.filter((t) => t.tradeDate <= asOfDate) : trades;
+  const filtered = qtyAsOf ? trades.filter((t) => t.tradeDate <= qtyAsOf) : trades;
   const { byInstrument } = replayTrades(filtered);
 
   const rows: PortfolioRow[] = [];

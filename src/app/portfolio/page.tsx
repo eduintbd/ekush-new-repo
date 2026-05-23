@@ -53,24 +53,28 @@ export default async function PortfolioPage({
     .catch(() => []);
   const fy = fiscalYears.find((y) => y.id === sp.fy) ?? fiscalYears[0];
 
-  // Default as-of date = latest available price date, falling back to today.
-  const latestPriceDate = await prisma.price
-    .findFirst({ orderBy: { priceDate: "desc" }, select: { priceDate: true } })
-    .catch(() => null);
-  const defaultAsOf = latestPriceDate?.priceDate.toISOString().slice(0, 10) ?? new Date().toISOString().slice(0, 10);
-  const asOfRaw = sp.asOf && /^\d{4}-\d{2}-\d{2}$/.test(sp.asOf) ? sp.asOf : defaultAsOf;
+  // Two dates, one user-facing knob. With no ?asOf= override, we replay
+  // trades through *today* (so quantity reflects what's actually owned)
+  // and look up the latest Price ≤ today for valuation. With an explicit
+  // ?asOf= the two collapse into a single snapshot date — needed for
+  // quarter-end / year-end FS.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const sentAsOfStr = sp.asOf && /^\d{4}-\d{2}-\d{2}$/.test(sp.asOf) ? sp.asOf : null;
+  const asOfRaw = sentAsOfStr ?? todayStr;
   const asOf = new Date(`${asOfRaw}T00:00:00Z`);
+  const qtyAsOf = asOf;
+  const priceAsOf = asOf;
 
   const [trades, prices, instruments] = await Promise.all([
     prisma.trade.findMany({
-      where: { tradeDate: { lte: asOf } },
+      where: { tradeDate: { lte: qtyAsOf } },
       orderBy: [{ tradeDate: "asc" }, { createdAt: "asc" }],
     }),
-    prisma.price.findMany({ where: { priceDate: { lte: asOf } } }),
+    prisma.price.findMany({ where: { priceDate: { lte: priceAsOf } } }),
     prisma.instrument.findMany(),
   ]);
 
-  const portfolio = buildPortfolioAsOf(fromPrismaTrades(trades), latestPricesMap(prices), asOf);
+  const portfolio = buildPortfolioAsOf(fromPrismaTrades(trades), latestPricesMap(prices), qtyAsOf);
   const instrumentMap = new Map(instruments.map((i) => [i.code, i]));
 
   // Group by category in workbook order.
@@ -93,9 +97,21 @@ export default async function PortfolioPage({
   // Active FVA at this asOfDate (if any) — show as banner.
   const activeFva = fy
     ? await prisma.fairValueAdjustment.findFirst({
-        where: { fiscalYearId: fy.id, asOfDate: asOf, reversedAt: null },
+        where: { fiscalYearId: fy.id, asOfDate: priceAsOf, reversedAt: null },
       })
     : null;
+
+  // Freshest price date actually in the DB ≤ priceAsOf. Used to surface
+  // a "Latest prices from …" hint when the price feed has drifted
+  // behind the qty-as-of date.
+  const maxPriceDateStr =
+    prices.length > 0
+      ? new Date(Math.max(...prices.map((p) => p.priceDate.getTime())))
+          .toISOString()
+          .slice(0, 10)
+      : null;
+  const showStalePriceHint =
+    sentAsOfStr === null && maxPriceDateStr !== null && maxPriceDateStr !== asOfRaw;
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
@@ -122,6 +138,11 @@ export default async function PortfolioPage({
                 </span>
               )}
             </p>
+            {showStalePriceHint && (
+              <p className="mt-0.5 text-xs text-zinc-500">
+                Latest prices from {maxPriceDateStr}
+              </p>
+            )}
           </div>
 
           <form className="no-print flex flex-wrap items-end gap-2">
