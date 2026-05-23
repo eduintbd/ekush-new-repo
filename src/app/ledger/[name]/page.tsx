@@ -12,7 +12,7 @@ import { prisma } from "@/lib/prisma";
 import { formatBdt } from "@/lib/format";
 import { PrintButton } from "@/components/print-button";
 
-type Search = { fy?: string; from?: string; to?: string };
+type Search = { fy?: string; from?: string; to?: string; instrument?: string };
 
 export const metadata = { title: "Ledger card — Staff portal" };
 
@@ -51,15 +51,22 @@ export default async function LedgerPage({
   const fy = fiscalYears.find((y) => y.id === sp.fy) ?? fiscalYears[0];
   const fromDate = sp.from ? new Date(sp.from) : null;
   const toDate = sp.to ? new Date(sp.to) : null;
+  const instrumentFilter = sp.instrument && sp.instrument.length > 0 ? sp.instrument : null;
 
   // Opening balance: sum of activity on this account BEFORE the selected
   // window. Window starts at `from` if given, else at fy.startsOn. We pull
   // across ALL fiscal years so historical opening is preserved when the
-  // user date-filters into the middle of a year.
+  // user date-filters into the middle of a year. When an instrument
+  // filter is active, opening must also be scoped to that instrument —
+  // otherwise the running balance is meaningless.
   const openingCutoff = fromDate ?? fy.startsOn;
   const opening = await prisma.journal
     .aggregate({
-      where: { accountName: account.name, entryDate: { lt: openingCutoff } },
+      where: {
+        accountName: account.name,
+        entryDate: { lt: openingCutoff },
+        ...(instrumentFilter ? { instrumentCode: instrumentFilter } : {}),
+      },
       _sum: { debit: true, credit: true },
     })
     .catch(() => ({ _sum: { debit: 0, credit: 0 } }));
@@ -75,6 +82,7 @@ export default async function LedgerPage({
         fiscalYearId: fy.id,
         ...(fromDate ? { entryDate: { gte: fromDate } } : {}),
         ...(toDate ? { entryDate: { lte: toDate } } : {}),
+        ...(instrumentFilter ? { instrumentCode: instrumentFilter } : {}),
       },
       orderBy: [{ entryDate: "asc" }, { voucherNo: "asc" }, { createdAt: "asc" }],
       take: 1000,
@@ -112,11 +120,16 @@ export default async function LedgerPage({
                   inactive
                 </span>
               )}
+              {instrumentFilter && (
+                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-medium uppercase text-sky-800 dark:bg-sky-950 dark:text-sky-200">
+                  Filtered: <span className="font-mono">{instrumentFilter}</span>
+                </span>
+              )}
             </p>
           </div>
           <div className="no-print flex items-center gap-2">
             <a
-              href={`/api/exports/csv/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}${sp.from ? `&from=${sp.from}` : ""}${sp.to ? `&to=${sp.to}` : ""}`}
+              href={`/api/exports/csv/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}${sp.from ? `&from=${sp.from}` : ""}${sp.to ? `&to=${sp.to}` : ""}${instrumentFilter ? `&instrument=${encodeURIComponent(instrumentFilter)}` : ""}`}
               className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               ⬇ CSV
@@ -167,15 +180,33 @@ export default async function LedgerPage({
               className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
+          <label className="block">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">Instrument</span>
+            <input
+              type="text"
+              name="instrument"
+              defaultValue={sp.instrument ?? ""}
+              placeholder="BANKASIA"
+              className="mt-1 block w-32 rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono text-xs uppercase dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </label>
           <button className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900">
             Apply
           </button>
           {(sp.from || sp.to) && (
             <Link
-              href={`/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}`}
+              href={`/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}${instrumentFilter ? `&instrument=${encodeURIComponent(instrumentFilter)}` : ""}`}
               className="text-xs text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
             >
               Clear range
+            </Link>
+          )}
+          {instrumentFilter && (
+            <Link
+              href={`/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}${sp.from ? `&from=${sp.from}` : ""}${sp.to ? `&to=${sp.to}` : ""}`}
+              className="text-xs text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
+            >
+              Clear instrument
             </Link>
           )}
         </form>
@@ -201,6 +232,7 @@ export default async function LedgerPage({
                   <Th>Type</Th>
                   <Th>Description / Particulars</Th>
                   <Th>Fund</Th>
+                  <Th>Instrument</Th>
                   <Th align="right">Debit</Th>
                   <Th align="right">Credit</Th>
                   <Th align="right">Running balance</Th>
@@ -208,7 +240,7 @@ export default async function LedgerPage({
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 <tr className="bg-zinc-50 italic text-zinc-500 dark:bg-zinc-950">
-                  <Td colSpan={7}>Opening balance as at {openingCutoff.toISOString().slice(0, 10)}</Td>
+                  <Td colSpan={8}>Opening balance as at {openingCutoff.toISOString().slice(0, 10)}</Td>
                   <Td align="right">{drCr(openingBalance)}</Td>
                 </tr>
                 {rows.map(({ j, running }) => (
@@ -224,6 +256,7 @@ export default async function LedgerPage({
                     </Td>
                     <Td className="text-zinc-600 dark:text-zinc-400">{j.description ?? "—"}</Td>
                     <Td className="text-xs text-zinc-500">{j.fundCode ?? "—"}</Td>
+                    <Td className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{j.instrumentCode ?? "—"}</Td>
                     <Td align="right">{Number(j.debit) > 0 ? formatBdt(Number(j.debit)) : "—"}</Td>
                     <Td align="right">{Number(j.credit) > 0 ? formatBdt(Number(j.credit)) : "—"}</Td>
                     <Td align="right" className="font-medium">{drCr(running)}</Td>
@@ -232,7 +265,7 @@ export default async function LedgerPage({
               </tbody>
               <tfoot className="bg-zinc-50 dark:bg-zinc-950">
                 <tr className="font-semibold">
-                  <Td colSpan={5}>Period totals</Td>
+                  <Td colSpan={6}>Period totals</Td>
                   <Td align="right">{formatBdt(periodDebit)}</Td>
                   <Td align="right">{formatBdt(periodCredit)}</Td>
                   <Td align="right">{drCr(closingBalance)}</Td>

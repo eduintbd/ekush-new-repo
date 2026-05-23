@@ -98,7 +98,17 @@ export default async function VoucherPage({
             <tbody>
               {lines.map((l, i) => (
                 <tr key={l.id} className={i % 2 === 0 ? "" : "bg-zinc-50 print:bg-transparent dark:bg-zinc-950"}>
-                  <td className="px-2 py-2">{l.accountName}</td>
+                  <td className="px-2 py-2">
+                    {l.accountName}
+                    {l.instrumentCode && (
+                      <Link
+                        href={`/ledger/${encodeURIComponent(l.accountName)}?fy=${l.fiscalYearId}&instrument=${encodeURIComponent(l.instrumentCode)}`}
+                        className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-sky-800 hover:bg-sky-200 print:bg-transparent print:p-0 dark:bg-sky-950 dark:text-sky-200 dark:hover:bg-sky-900"
+                      >
+                        {l.instrumentCode}
+                      </Link>
+                    )}
+                  </td>
                   <td className="px-2 py-2 text-right font-mono tabular-nums">
                     {Number(l.debit) > 0 ? formatBdt(Number(l.debit)) : ""}
                   </td>

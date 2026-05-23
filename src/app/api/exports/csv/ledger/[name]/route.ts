@@ -24,10 +24,15 @@ export async function GET(
 
   const fromDate = sp.get("from") ? new Date(sp.get("from")!) : null;
   const toDate = sp.get("to") ? new Date(sp.get("to")!) : null;
+  const instrumentFilter = sp.get("instrument") || null;
   const openingCutoff = fromDate ?? fy.startsOn;
 
   const opening = await prisma.journal.aggregate({
-    where: { accountName, entryDate: { lt: openingCutoff } },
+    where: {
+      accountName,
+      entryDate: { lt: openingCutoff },
+      ...(instrumentFilter ? { instrumentCode: instrumentFilter } : {}),
+    },
     _sum: { debit: true, credit: true },
   });
   const openingBalance = Number(opening._sum.debit ?? 0) - Number(opening._sum.credit ?? 0);
@@ -38,6 +43,7 @@ export async function GET(
       fiscalYearId: fyId,
       ...(fromDate ? { entryDate: { gte: fromDate } } : {}),
       ...(toDate ? { entryDate: { lte: toDate } } : {}),
+      ...(instrumentFilter ? { instrumentCode: instrumentFilter } : {}),
     },
     orderBy: [{ entryDate: "asc" }, { voucherNo: "asc" }, { createdAt: "asc" }],
     take: 5000,
@@ -50,17 +56,22 @@ export async function GET(
     Type: string;
     Description: string;
     Fund: string;
+    Instrument: string;
     Debit: number | string;
     Credit: number | string;
     "Running balance": string;
   };
+  const obDescr = instrumentFilter
+    ? `Opening balance ${accountName} (${instrumentFilter})`
+    : `Opening balance ${accountName}`;
   const rows: Row[] = [
     {
       Date: openingCutoff.toISOString().slice(0, 10),
       Voucher: "",
       Type: "OB",
-      Description: `Opening balance ${accountName}`,
+      Description: obDescr,
       Fund: "",
+      Instrument: instrumentFilter ?? "",
       Debit: "",
       Credit: "",
       "Running balance": drCr(running),
@@ -76,12 +87,17 @@ export async function GET(
       Type: j.txnType ?? "",
       Description: j.description ?? "",
       Fund: j.fundCode ?? "",
+      Instrument: j.instrumentCode ?? "",
       Debit: d > 0 ? d : "",
       Credit: c > 0 ? c : "",
       "Running balance": drCr(running),
     });
   }
-  return csvResponse(toCsv(rows), `ledger-${accountName.replace(/[^a-z0-9]+/gi, "_")}.csv`);
+  const filenameSuffix = instrumentFilter ? `-${instrumentFilter}` : "";
+  return csvResponse(
+    toCsv(rows),
+    `ledger-${accountName.replace(/[^a-z0-9]+/gi, "_")}${filenameSuffix}.csv`,
+  );
 }
 
 function drCr(n: number): string {

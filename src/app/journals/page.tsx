@@ -266,6 +266,7 @@ export default async function JournalsPage({
                     <Th>Account</Th>
                     <Th>Description</Th>
                     <Th>Fund</Th>
+                    <Th>Instrument</Th>
                     <Th align="right">Debit</Th>
                     <Th align="right">Credit</Th>
                   </tr>
@@ -298,6 +299,18 @@ export default async function JournalsPage({
                       </Td>
                       <Td className="text-zinc-600 dark:text-zinc-400">{j.description ?? "—"}</Td>
                       <Td className="text-xs text-zinc-500">{j.fundCode ?? "—"}</Td>
+                      <Td>
+                        {j.instrumentCode ? (
+                          <Link
+                            href={`/ledger/${encodeURIComponent(j.accountName)}?fy=${fyId}&instrument=${encodeURIComponent(j.instrumentCode)}`}
+                            className="rounded bg-sky-100 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-sky-800 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-200 dark:hover:bg-sky-900"
+                          >
+                            {j.instrumentCode}
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-zinc-500">—</span>
+                        )}
+                      </Td>
                       <Td align="right">{Number(j.debit) > 0 ? formatBdt(Number(j.debit)) : "—"}</Td>
                       <Td align="right">{Number(j.credit) > 0 ? formatBdt(Number(j.credit)) : "—"}</Td>
                     </tr>
@@ -305,7 +318,7 @@ export default async function JournalsPage({
                 </tbody>
                 <tfoot className="bg-zinc-50 dark:bg-zinc-950">
                   <tr className="font-semibold">
-                    <Td colSpan={6}>Page totals</Td>
+                    <Td colSpan={7}>Page totals</Td>
                     <Td align="right">
                       {formatBdt(
                         lines.reduce((s, j) => s + Number(j.debit), 0),

@@ -205,7 +205,7 @@ export default async function DayBookPage({
         ) : (
           <div className="mt-6 space-y-8">
             {days.map((day) => (
-              <DayBlock key={day.date} day={day} canMutate={canMutate} />
+              <DayBlock key={day.date} day={day} canMutate={canMutate} fyId={fy.id} />
             ))}
           </div>
         )}
@@ -214,7 +214,7 @@ export default async function DayBookPage({
   );
 }
 
-function DayBlock({ day, canMutate }: { day: { date: string; batches: { batchId: string | null; voucherNo: string | null; txnType: string | null; description: string | null; fundCode: string | null; lines: { id: string; accountName: string; debit: unknown; credit: unknown }[]; debit: number; credit: number }[]; debit: number; credit: number; voucherCount: number }; canMutate: boolean }) {
+function DayBlock({ day, canMutate, fyId }: { day: { date: string; batches: { batchId: string | null; voucherNo: string | null; txnType: string | null; description: string | null; fundCode: string | null; lines: { id: string; accountName: string; debit: unknown; credit: unknown; instrumentCode: string | null }[]; debit: number; credit: number }[]; debit: number; credit: number; voucherCount: number }; canMutate: boolean; fyId: string }) {
   return (
     <section>
       <header className="flex items-end justify-between border-b border-zinc-200 pb-2 dark:border-zinc-800">
@@ -296,6 +296,14 @@ function DayBlock({ day, canMutate }: { day: { date: string; batches: { batchId:
                       >
                         {isDebit ? "Dr" : "Cr"}
                       </span>
+                      {l.instrumentCode && (
+                        <Link
+                          href={`/ledger/${encodeURIComponent(l.accountName)}?fy=${fyId}&instrument=${encodeURIComponent(l.instrumentCode)}`}
+                          className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-sky-800 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-200 dark:hover:bg-sky-900"
+                        >
+                          {l.instrumentCode}
+                        </Link>
+                      )}
                     </td>
                     <td className="px-4 py-1.5 text-right tabular-nums">
                       {Number(l.debit) > 0 ? formatBdt(Number(l.debit)) : ""}
