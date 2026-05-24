@@ -37,12 +37,17 @@ export async function GET(
   });
   const openingBalance = Number(opening._sum.debit ?? 0) - Number(opening._sum.credit ?? 0);
 
+  // Mirror the page-side OB-double-count fix: floor period at openingCutoff
+  // so OB rows (dated 2025-06-30, FY25-26-scoped) don't show up in both
+  // the opening aggregate above and the period list.
   const lines = await prisma.journal.findMany({
     where: {
       accountName,
       fiscalYearId: fyId,
-      ...(fromDate ? { entryDate: { gte: fromDate } } : {}),
-      ...(toDate ? { entryDate: { lte: toDate } } : {}),
+      entryDate: {
+        gte: openingCutoff,
+        ...(toDate ? { lte: toDate } : {}),
+      },
       ...(instrumentFilter ? { instrumentCode: instrumentFilter } : {}),
     },
     orderBy: [{ entryDate: "asc" }, { voucherNo: "asc" }, { createdAt: "asc" }],

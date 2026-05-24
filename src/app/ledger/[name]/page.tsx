@@ -75,13 +75,19 @@ export default async function LedgerPage({
   const openingBalance = openingDebit - openingCredit; // signed: + = Dr, − = Cr
 
   // Period activity, ordered chronologically for running-balance accumulation.
+  // Always floor the period at `openingCutoff` (= user's `from` if given,
+  // else fy.startsOn) so OB rows — which live inside the FY but predate
+  // its startsOn (2025-06-30 vs 2025-07-01) — aren't double-counted: once
+  // in the opening aggregate above, and again in this period list.
   const lines = await prisma.journal
     .findMany({
       where: {
         accountName: account.name,
         fiscalYearId: fy.id,
-        ...(fromDate ? { entryDate: { gte: fromDate } } : {}),
-        ...(toDate ? { entryDate: { lte: toDate } } : {}),
+        entryDate: {
+          gte: openingCutoff,
+          ...(toDate ? { lte: toDate } : {}),
+        },
         ...(instrumentFilter ? { instrumentCode: instrumentFilter } : {}),
       },
       orderBy: [{ entryDate: "asc" }, { voucherNo: "asc" }, { createdAt: "asc" }],
