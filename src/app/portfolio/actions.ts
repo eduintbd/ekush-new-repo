@@ -194,11 +194,14 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
     }
 
     // Step 2: build per-instrument baseline = the LATEST active FVA's
-    // cumulativeUnrealisedPnl snapshot per instrument. (Each FVA's
-    // cumulative already includes earlier ones, so we never sum across
-    // FVAs — the latest snapshot per instrument IS the running total.)
+    // cumulativeUnrealisedPnl snapshot per instrument, ACROSS ALL FYs.
+    // Prior-FY snapshots are still valid baselines because the opening
+    // balance on Fair Value Reserve carries the prior FY's cumulative
+    // — without consulting them, the first revaluation of a new FY
+    // treats baseline as 0 and re-credits the full cumulative UG,
+    // double-counting the OB on equity.
     const priorActive = await tx.fairValueAdjustment.findMany({
-      where: { fiscalYearId: data.fiscalYearId, reversedAt: null },
+      where: { reversedAt: null },
       include: { lines: true },
       orderBy: { asOfDate: "asc" },
     });
