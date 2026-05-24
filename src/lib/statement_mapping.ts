@@ -177,7 +177,7 @@ export const ACCOUNT = {
   egfSponser: "E.G.F Sponser",
   mobileBill: "Mobile bill",
   otherExp: "Other exp.",
-  membershipExpenses: "Membership Expenses",
+  membershipExpenses: "Membership Expense",
   operatingExp: "Operating Exp.",
   floodRelife: "FLOOD RELIFE",
   promostionExp: "Promostion exp.",
@@ -193,7 +193,7 @@ export const ACCOUNT = {
   // Cash & equivalents (TB-C r81–r86, r106, r107, r110)
   bracBank1: "Brac (A/C No. 1513204232046001)",
   bracBank2: "Brac Bank (A/C No. 1513204232046002)",
-  bkash: "Bkash (DM4952)",
+  bkash: "Bkash(DM4952)",
   midland: "Midland (A/C No. 00011060000128)",
   modhumotiAccount: "Modhumoti (A/C No. 11351110000092)",
   pettyCash: "Petty Cash",
@@ -201,9 +201,16 @@ export const ACCOUNT = {
   abaciInvestment: "ABACI Investment",
   midlandBank: "Midland Bank",
 
-  // Margin loan (TB-C r105, r123)
+  // Margin loan (TB-C r105, r123).
+  // The broker BO accounts are DEBIT-normal "current account with broker"
+  // assets that go INTO credit balance when the broker has lent us money.
+  // Plus there are dedicated CREDIT-normal "Margin Loan From..." accounts
+  // (sl 99, sl 131) that the trade writer posts to directly. The BS line
+  // pulls the credit-side of all four and aggregates.
   ucbBo: "UCB BO (1205590068173895)",
   primeBankSecurities: "Prime Bank Securities Limited",
+  marginLoanFromUcb: "Margin Loan From UCB",
+  marginLoanFromPbsl: "Margin Loan From Prime Bank Securities",
 
   // Security deposit (TB-C r116)
   securityDepositOfficeRent: "Security Deposit-Office Rent",
@@ -452,10 +459,22 @@ export function buildBalanceSheet(
     + netD(tb, ACCOUNT.advanceIncomeTaxPayment)     // K125
     + netD(tb, ACCOUNT.advanceToBsec);              // K104
 
-  // Margin Loan to UCB = −(K105 + K123). UCB BO row 105 is a NEGATIVE
-  // debit (it's a liability), so the unary minus flips it positive.
-  // Prime Bank Securities (r123) gets the same treatment.
-  const marginLoanToUcb = -(netD(tb, ACCOUNT.ucbBo) + netD(tb, ACCOUNT.primeBankSecurities));
+  // Margin Loan to stock brokers. Two flavours of account contribute:
+  //   - The explicit credit-normal liability accounts the trade writer
+  //     posts to: "Margin Loan From UCB" (sl 99) and "Margin Loan From
+  //     Prime Bank Securities" (sl 131). Read with netC directly.
+  //   - The broker BO accounts ("UCB BO ...", "Prime Bank Securities
+  //     Limited") which are debit-normal assets but flip to a credit
+  //     balance when the broker has lent us money. netC returns the
+  //     credit amount when overdrawn, 0 when the BO is in cash. (The
+  //     earlier `-netD(...)` formula here was wrong: netD always returns
+  //     0 for credit-balanced accounts, so the line silently rendered 0
+  //     even when 12M+ of margin loan was outstanding.)
+  const marginLoanToBrokers =
+    netC(tb, ACCOUNT.marginLoanFromUcb)
+    + netC(tb, ACCOUNT.marginLoanFromPbsl)
+    + netC(tb, ACCOUNT.ucbBo)
+    + netC(tb, ACCOUNT.primeBankSecurities);
 
   const nonCurrentAssets: StatementLine[] = [
     { label: "Property, Plant & Equipment", amount: ppe },
@@ -489,8 +508,6 @@ export function buildBalanceSheet(
   const nonCurrentLiabilities: StatementLine[] = [
     // Deferred Tax Liability = L26
     { label: "Deferred Tax Liability", amount: netC(tb, ACCOUNT.deferredTax) },
-    // Margin Loan as a liability line
-    { label: "Margin Loan to UCB", amount: marginLoanToUcb },
   ];
 
   // Current liabilities
@@ -514,6 +531,7 @@ export function buildBalanceSheet(
 
   const currentLiabilities: StatementLine[] = [
     { label: "Provision for Income Tax", amount: provisionForIncomeTax },
+    { label: "Margin Loan to Stock Brokers", amount: marginLoanToBrokers },
     { label: "Liability for Other Expenses", amount: liabilityForOtherExpenses },
     { label: "Liab. For Provident Fund", amount: liabForProvidentFund },
     { label: "Withholding VAT & TDs", amount: withholdingVatAndTds },
