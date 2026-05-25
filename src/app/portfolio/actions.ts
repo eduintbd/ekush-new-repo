@@ -225,39 +225,88 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
       });
     }
 
-    // Step 2: build per-instrument baseline = the LATEST active FVA's
-    // cumulativeUnrealisedPnl snapshot per instrument, ACROSS ALL FYs.
-    // Prior-FY snapshots are still valid baselines because the opening
-    // balance on Fair Value Reserve carries the prior FY's cumulative
-    // — without consulting them, the first revaluation of a new FY
-    // treats baseline as 0 and re-credits the full cumulative UG,
-    // double-counting the OB on equity.
-    const priorActive = await tx.fairValueAdjustment.findMany({
-      where: { reversedAt: null },
-      include: { lines: true },
-      orderBy: { asOfDate: "asc" },
+    // Step 2: build per-Investment-account baseline from the JOURNAL
+    // itself, not from FairValueAdjustment snapshots. The journal is
+    // the authoritative source — it captures everything that's actually
+    // on the Investment account balance: trade cost basis (BV/SV),
+    // prior FV-prefix MTM postings, OB rows, and accountant-entered
+    // manual JV adjustments (Sep / Dec / Mar quarter-end MTMs in this
+    // book). The FVA-snapshot approach used previously only saw the
+    // FV-prefix lines tagged with instrumentCode, which silently missed
+    // the manual JV contributions and treated their MTM as un-recorded.
+    // The user's books carry their FVR contribution via untagged JV
+    // entries — the writer needs the same view of reality.
+    const invAccs = Array.from(
+      new Set(
+        priced
+          .map((r) => invAccountByCode.get(r.instrumentCode))
+          .filter((a): a is string => Boolean(a)),
+      ),
+    );
+    const invAccAgg = await tx.journal.groupBy({
+      by: ["accountName"],
+      where: {
+        accountName: { in: invAccs },
+        // Strict < so any lines we're about to post on this asOf don't
+        // self-include. The reversal lines from Step 1 (entryDate=asOf)
+        // are also excluded; that's correct, since we want the baseline
+        // before THIS revaluation's effects, which includes the reversal.
+        entryDate: { lt: asOf },
+      },
+      _sum: { debit: true, credit: true },
     });
-    const baselineByCode = new Map<string, number>();
-    for (const fva of priorActive) {
-      for (const line of fva.lines) {
-        baselineByCode.set(line.instrumentCode, Number(line.cumulativeUnrealisedPnl));
-      }
+    const currentInvBalance = new Map<string, number>(
+      invAccAgg.map((a) => [
+        a.accountName,
+        Number(a._sum.debit ?? 0) - Number(a._sum.credit ?? 0),
+      ]),
+    );
+    for (const a of invAccs) {
+      if (!currentInvBalance.has(a)) currentInvBalance.set(a, 0);
     }
 
-    // Step 3: compute per-instrument delta vs baseline.
-    const deltaByCode = new Map<string, number>();
+    // Group priced holdings by their Investment account so we can size
+    // per-account adjustments + apportion them to per-instrument lines.
+    const instrumentsByInvAcc = new Map<string, typeof priced>();
+    const desiredByInvAcc = new Map<string, number>();
     for (const r of priced) {
-      const baseline = baselineByCode.get(r.instrumentCode) ?? 0;
-      const delta = round2((r.unrealisedPnl ?? 0) - baseline);
-      deltaByCode.set(r.instrumentCode, delta);
+      const invAcc = invAccountByCode.get(r.instrumentCode);
+      if (!invAcc) continue;
+      if (!instrumentsByInvAcc.has(invAcc)) instrumentsByInvAcc.set(invAcc, []);
+      instrumentsByInvAcc.get(invAcc)!.push(r);
+      desiredByInvAcc.set(invAcc, (desiredByInvAcc.get(invAcc) ?? 0) + (r.marketValue ?? 0));
     }
-    // Also handle instruments that USED to have a baseline but are no
-    // longer held (fully sold since prior FVA). Their cumulative needs
-    // to be removed — but only if they have no current row in `priced`.
-    for (const [code, baseline] of baselineByCode) {
-      if (!deltaByCode.has(code) && Math.abs(baseline) >= 0.005) {
-        // Mark down to zero — delta = 0 - baseline = -baseline.
-        deltaByCode.set(code, round2(-baseline));
+
+    // Step 3: per-instrument deltas, sized so each Investment account's
+    // balance lands exactly on the sum of market value of holdings in
+    // it. Within an account, the account-level delta is apportioned by
+    // each instrument's share of market value — so per-instrument lines
+    // still carry an instrumentCode tag for audit, even though the
+    // account-level delta is the authoritative size.
+    const deltaByCode = new Map<string, number>();
+    for (const [invAcc, instruments] of instrumentsByInvAcc) {
+      const desired = desiredByInvAcc.get(invAcc) ?? 0;
+      const current = currentInvBalance.get(invAcc) ?? 0;
+      const accDelta = round2(desired - current);
+      if (Math.abs(accDelta) < 0.005) continue;
+      // Apportion. Track running sum to absorb rounding residual into
+      // the last instrument so per-instrument lines sum exactly to
+      // accDelta (no fractional cent drift).
+      let allocated = 0;
+      for (let i = 0; i < instruments.length; i++) {
+        const r = instruments[i];
+        const lastOne = i === instruments.length - 1;
+        let portion: number;
+        if (lastOne) {
+          portion = round2(accDelta - allocated);
+        } else {
+          const share = desired > 0 ? (r.marketValue ?? 0) / desired : 1 / instruments.length;
+          portion = round2(accDelta * share);
+        }
+        if (Math.abs(portion) >= 0.005) {
+          deltaByCode.set(r.instrumentCode, portion);
+        }
+        allocated += portion;
       }
     }
 
