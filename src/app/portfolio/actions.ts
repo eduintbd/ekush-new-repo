@@ -123,7 +123,9 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
   const totalMarket = round2(priced.reduce((s, r) => s + (r.marketValue ?? 0), 0));
   const cumulativeUnrealised = round2(totalMarket - totalCost);
 
-  const txResult = await withActor(profile.id, async (tx) => {
+  let txResult: { voucherNo: string; netDelta: number };
+  try {
+    txResult = await withActor(profile.id, async (tx) => {
     // Step 0: garbage-collect orphan FVAs. If an admin manually deleted
     // an FV voucher from /day-book (only touches the Journal table, not
     // FairValueAdjustment), the snapshot is left dangling and would
@@ -404,7 +406,15 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
     }
 
     return { voucherNo: newVoucherNo, netDelta };
-  });
+    });
+  } catch (err) {
+    // Surface the real error to the server log + the user's URL bar
+    // (truncated; full stack stays in the function log). The previous
+    // failure mode was "Application error" with no actionable info.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[revalueToMarket] failed:", err);
+    back(baseQs, `Revaluation failed: ${msg.slice(0, 200)}`);
+  }
 
   revalidatePath("/portfolio");
   revalidatePath("/journals");
