@@ -192,8 +192,8 @@ export default async function LedgerPage({
               type="text"
               name="instrument"
               defaultValue={sp.instrument ?? ""}
-              placeholder="BANKASIA"
-              className="mt-1 block w-32 rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono text-xs uppercase dark:border-zinc-700 dark:bg-zinc-900"
+              placeholder="e.g. BANKASIA"
+              className="mt-1 block w-32 rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono text-xs normal-case dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
           <button className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900">
