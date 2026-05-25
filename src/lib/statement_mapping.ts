@@ -498,8 +498,19 @@ export function buildBalanceSheet(
   const equity: StatementLine[] = [
     // Share Capital = L20
     { label: "Share Capital", amount: netC(tb, ACCOUNT.shareCapital) },
-    // Retained Earnings = L21 + IS!H25 (current-year profit)
-    { label: "Retained Earnings", amount: netC(tb, ACCOUNT.retainedEarning) + ext.currentPeriodNetProfit },
+    // Retained Earnings = signed balance of the RE account + IS profit.
+    // Using `netC` alone silently drops a Dr balance (accumulated
+    // deficit) because netC = max(0, grossCr − grossDr) returns zero
+    // when the account is Dr-balanced. Switch to signed balance
+    // (netCr − netDr) so deficits flow into RE as negative values and
+    // surpluses as positive ones.
+    {
+      label: "Retained Earnings",
+      amount:
+        netC(tb, ACCOUNT.retainedEarning)
+        - netD(tb, ACCOUNT.retainedEarning)
+        + ext.currentPeriodNetProfit,
+    },
     // Fair Value Reserve = L22
     { label: "Fair Value Reserve", amount: netC(tb, ACCOUNT.fairValueReserve) },
   ];
