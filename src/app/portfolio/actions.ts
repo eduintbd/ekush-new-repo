@@ -247,11 +247,14 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
       by: ["accountName"],
       where: {
         accountName: { in: invAccs },
-        // Strict < so any lines we're about to post on this asOf don't
-        // self-include. The reversal lines from Step 1 (entryDate=asOf)
-        // are also excluded; that's correct, since we want the baseline
-        // before THIS revaluation's effects, which includes the reversal.
-        entryDate: { lt: asOf },
+        // <= asOf so trades dated asOf (part of cost basis) AND Step 1's
+        // mirror reversal (also dated asOf, written earlier in this tx)
+        // both flow into the baseline. Step 4 hasn't run yet, so its
+        // lines aren't here. If we used strict <, the baseline would
+        // include the over-stated FV voucher we just reversed in Step 1
+        // — Step 4 would then post a delta sized against the un-reversed
+        // state and double-count the reversal.
+        entryDate: { lte: asOf },
       },
       _sum: { debit: true, credit: true },
     });
