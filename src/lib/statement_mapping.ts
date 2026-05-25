@@ -128,6 +128,11 @@ export const ACCOUNT = {
   interestIncome: "Interest Income",
   capitalGain: "Capital Gain",
   capitalLoss: "Capital Loss",
+  // Phase 1 (trade engine) account — every SELL voucher credits this
+  // when net realised P&L is positive, debits when negative. The IS
+  // builder includes it in the "Capital Gain" income line via signed
+  // net balance (netC − netD).
+  realisedGainOnInvestments: "Realised Gain/(Loss) on Investments",
 
   // G&A expenses — TB-C r37–r42, r44–r73, r75–r80, r88–r96, r108, r118, r119, r124
   // (each row = one account; see workbook for full list)
@@ -285,8 +290,19 @@ export function buildIncomeStatement(
 ): IncomeStatement {
   // Management Fees = TB-C!L17
   const managementFees = netC(tb, ACCOUNT.managementFee);
-  // Capital Gain = TB-C!I101 − TB-C!H102
-  const capitalGain = grossC(tb, ACCOUNT.capitalGain) - grossD(tb, ACCOUNT.capitalLoss);
+  // Capital Gain = legacy workbook accounts (TB-C!I101 − TB-C!H102)
+  // PLUS the Phase-1 trade-engine account where every SELL voucher
+  // posts net realised P&L (Cr on gain, Dr on loss). Without the
+  // realisedGainOnInvestments term, every realised gain from /trades
+  // dropped out of the IS — the diag-is-coverage.ts script surfaced
+  // this gap (~৳61L at the time of fix) as the bulk of the workbook
+  // vs live profit mismatch.
+  const realisedGainNet =
+    netC(tb, ACCOUNT.realisedGainOnInvestments)
+    - netD(tb, ACCOUNT.realisedGainOnInvestments);
+  const capitalGain =
+    grossC(tb, ACCOUNT.capitalGain) - grossD(tb, ACCOUNT.capitalLoss)
+    + realisedGainNet;
   // Interest Income = TB-C!I34 + TB-C!I100 − TB-C!H34
   const interestIncome =
     grossC(tb, ACCOUNT.interestIncomeOfFdr) +
