@@ -123,6 +123,11 @@ export default async function DashboardPage() {
                 title="Fiscal years"
                 desc="Create, close, reopen, and roll-forward closing balances to next year."
               />
+              <NavCard
+                href="/admin/tax-provision"
+                title="Tax provision"
+                desc="Edit statutory rates, preview the current-tax computation, see variance vs journaled accruals. Posting + locking ship in a later phase."
+              />
             </>
           )}
           <NavCard href="/admin/agents" title="Selling agents" desc="Approve, suspend, manage terms history." />
