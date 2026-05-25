@@ -124,6 +124,38 @@ export async function revalueToMarket(formData: FormData): Promise<void> {
   const cumulativeUnrealised = round2(totalMarket - totalCost);
 
   const txResult = await withActor(profile.id, async (tx) => {
+    // Step 0: garbage-collect orphan FVAs. If an admin manually deleted
+    // an FV voucher from /day-book (only touches the Journal table, not
+    // FairValueAdjustment), the snapshot is left dangling and would
+    // poison Step 2's baseline — `cumulativeUnrealisedPnl` from a
+    // snapshot whose journal entries no longer exist makes every later
+    // Revalue compute `delta ≈ 0` and post nothing. Detect FVAs in
+    // this FY whose journalBatchId has zero Journal rows and silently
+    // mark them reversedAt. Only scoped to the current FY because
+    // closed prior years can't have their journals deleted by users.
+    const activeFvasThisFy = await tx.fairValueAdjustment.findMany({
+      where: { fiscalYearId: data.fiscalYearId, reversedAt: null },
+      select: { id: true, journalBatchId: true },
+    });
+    if (activeFvasThisFy.length > 0) {
+      const batchIds = activeFvasThisFy.map((f) => f.journalBatchId);
+      const counts = await tx.journal.groupBy({
+        by: ["batchId"],
+        where: { batchId: { in: batchIds } },
+        _count: { batchId: true },
+      });
+      const countByBatch = new Map(counts.map((c) => [c.batchId, c._count.batchId]));
+      const orphanIds = activeFvasThisFy
+        .filter((f) => (countByBatch.get(f.journalBatchId) ?? 0) === 0)
+        .map((f) => f.id);
+      if (orphanIds.length > 0) {
+        await tx.fairValueAdjustment.updateMany({
+          where: { id: { in: orphanIds } },
+          data: { reversedAt: new Date() },
+        });
+      }
+    }
+
     // Step 1: if a same-date FVA exists, reverse it first.
     const sameDateActive = await tx.fairValueAdjustment.findFirst({
       where: { fiscalYearId: data.fiscalYearId, asOfDate: asOf, reversedAt: null },
