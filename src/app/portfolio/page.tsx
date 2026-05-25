@@ -101,6 +101,19 @@ export default async function PortfolioPage({
       })
     : null;
 
+  // All active FVAs in this FY — listed below so the user can re-post
+  // a specific historical date in one click. Solves the "I clicked
+  // Revalue but the over-stated FV/25-26/0001 voucher is still there"
+  // pattern: the page defaults to today, Revalue acts on today, and
+  // an older voucher needs a re-post against its own asOfDate to
+  // trigger the same-date reversal in revalueToMarket.
+  const activeFvasInFy = fy
+    ? await prisma.fairValueAdjustment.findMany({
+        where: { fiscalYearId: fy.id, reversedAt: null },
+        orderBy: { asOfDate: "desc" },
+      })
+    : [];
+
   // Freshest price date actually in the DB ≤ priceAsOf. Used to surface
   // a "Latest prices from …" hint when the price feed has drifted
   // behind the qty-as-of date.
@@ -203,6 +216,71 @@ export default async function PortfolioPage({
             </Link>
             . Re-running for this date will reverse and re-post.
           </div>
+        )}
+
+        {editable && fy && !fy.isClosed && activeFvasInFy.length > 0 && (
+          <section className="no-print mt-4 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              Posted FVTPL revaluations · {fy.label}
+            </h2>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              Each row is an active FVA. Click <strong>Re-post</strong> to reverse the existing journal voucher and re-compute against the latest snapshot — useful when a prior revaluation was posted with the wrong delta and needs correction.
+            </p>
+            <table className="mt-3 min-w-full divide-y divide-zinc-200 text-xs dark:divide-zinc-800">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-wider text-zinc-500">
+                  <th className="py-1.5 pr-3 font-semibold">As-of date</th>
+                  <th className="py-1.5 pr-3 text-right font-semibold">Cumulative UG</th>
+                  <th className="py-1.5 pr-3 font-semibold">Voucher</th>
+                  <th className="py-1.5 pr-3 font-semibold">Posted</th>
+                  <th className="py-1.5 text-right font-semibold">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {activeFvasInFy.map((f) => {
+                  const dateStr = f.asOfDate.toISOString().slice(0, 10);
+                  const ug = Number(f.unrealisedPnl);
+                  return (
+                    <tr key={f.id}>
+                      <td className="whitespace-nowrap py-1.5 pr-3 font-mono">{dateStr}</td>
+                      <td className="whitespace-nowrap py-1.5 pr-3 text-right tabular-nums">
+                        <span className={ug >= 0 ? "text-emerald-700 dark:text-emerald-300" : "text-red-700 dark:text-red-300"}>
+                          {ug >= 0 ? "+" : "−"}{formatBdt(Math.abs(ug))}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap py-1.5 pr-3">
+                        <Link
+                          href={`/journals/voucher/${f.journalBatchId}`}
+                          className="font-mono text-[11px] text-zinc-600 underline-offset-2 hover:underline dark:text-zinc-300"
+                        >
+                          {f.journalBatchId.slice(0, 8)}…
+                        </Link>
+                      </td>
+                      <td className="whitespace-nowrap py-1.5 pr-3 text-[11px] text-zinc-500">
+                        {f.createdAt.toISOString().slice(0, 16).replace("T", " ")}
+                      </td>
+                      <td className="whitespace-nowrap py-1.5 text-right">
+                        <form
+                          action={revalueToMarket}
+                          className="inline"
+                          data-confirm={`Reverse the FVA on ${dateStr} (cumulative ${ug >= 0 ? "+" : "−"}${formatBdt(Math.abs(ug))}) and re-post against the current snapshot?`}
+                        >
+                          <input type="hidden" name="asOfDate" value={dateStr} />
+                          <input type="hidden" name="fiscalYearId" value={fy.id} />
+                          <button
+                            type="submit"
+                            className="rounded-md border border-zinc-300 px-2 py-0.5 text-[11px] font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          >
+                            Re-post
+                          </button>
+                        </form>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </section>
         )}
 
         <div className="mt-6 overflow-x-auto rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">

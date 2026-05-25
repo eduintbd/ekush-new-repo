@@ -132,7 +132,10 @@ export default async function DayBookPage({
     day.credit += Number(l.credit);
   }
 
-  const days = Array.from(dayMap.values()).sort((a, b) => (a.date < b.date ? -1 : 1));
+  // Newest day first so the most recent activity is at the top —
+  // accountants land on this page wanting "what happened today / this
+  // week" before drilling back into history.
+  const days = Array.from(dayMap.values()).sort((a, b) => (a.date < b.date ? 1 : -1));
   const totalDebit = days.reduce((s, d) => s + d.debit, 0);
   const totalCredit = days.reduce((s, d) => s + d.credit, 0);
   const totalVouchers = days.reduce((s, d) => s + d.voucherCount, 0);
