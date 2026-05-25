@@ -57,6 +57,16 @@ export type ExternalInputs = {
   currentPeriodNetProfit: number;
   /** Used only by BS Provision for Income Tax line: IS!H24 income-tax expense. */
   currentPeriodTaxExpense: number;
+  /** Statutory tax rates effective at the period end. Sourced from the
+   * `tax_rates` table via getTaxRatesAt() — replaces the hard-coded
+   * 0.15 / 0.20 / 0.15 constants previously inlined here. */
+  taxRates: {
+    CAPITAL_GAIN: number;
+    DIVIDEND: number;
+    INTEREST: number;
+    DEFERRED: number;
+    MGMT_FEE: number;
+  };
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -379,15 +389,17 @@ export function buildIncomeStatement(
   const profitBeforeTax = totalOperatingIncome - ga - financialExpenseMagnitude;
 
   // Income Tax Expense — auto-derived from Notes.(2)!F12 formula:
-  //   F8 = capitalGain × 15%     (BD long-term capital-gain rate on listed shares)
-  //   F9 = dividendIncome × 20%  (BD withholding rate on dividends)
+  //   F8 = capitalGain × <rate_CG>     (BD long-term capital-gain rate on listed shares)
+  //   F9 = dividendIncome × <rate_DI>  (BD withholding rate on dividends)
   //   F11 = source tax on Mgmt Fee at receipt (minimum tax on mgmt fee income)
   //   F12 = SUM(F8:F11)
-  // The cap-gain + dividend pieces are fully derivable from the TB; the
-  // mgmt-fee TDS amount needs the accountant to supply it because we don't
-  // yet track per-receipt TDS in the journal model. Defaults to 0.
-  const capitalGainTax = capitalGain * 0.15;
-  const dividendTax = dividendIncome * 0.20;
+  // Rates come from ext.taxRates (sourced from the tax_rates table at the
+  // reporting period's end date) — replaces the hard-coded 0.15 / 0.20
+  // that lived here previously. Admins can edit rates via the Tax
+  // Provision card and historical periods recompute with whatever rate
+  // was effective at the time.
+  const capitalGainTax = capitalGain * ext.taxRates.CAPITAL_GAIN;
+  const dividendTax = dividendIncome * ext.taxRates.DIVIDEND;
   const currentTaxProvision = capitalGainTax + dividendTax + ext.mgmtFeeTaxAtSource;
   const taxExpense: StatementLine[] = [
     { label: "Current Tax Expense", amount: currentTaxProvision },
@@ -398,8 +410,9 @@ export function buildIncomeStatement(
   // OCI
   // Unrealised loss on listed shares = −Annexure march!K27 (negative because it's a loss)
   const ociUnrealisedLoss = -ext.unrealisedFairValueLoss;
-  // Deferred tax effect = −OCI × 15%  (positive when OCI is a loss → reduces tax liability)
-  const deferredTax = -ociUnrealisedLoss * 0.15;
+  // Deferred tax effect = −OCI × <rate_DEFERRED> (positive when OCI is a
+  // loss → reduces tax liability). Same source as the current-tax rates.
+  const deferredTax = -ociUnrealisedLoss * ext.taxRates.DEFERRED;
   const oci: StatementLine[] = [
     { label: "Unrealised Loss on Investment in Stocks", amount: ociUnrealisedLoss },
     { label: "Deferred Tax Expense", amount: deferredTax },

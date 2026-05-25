@@ -130,6 +130,7 @@ model FiscalYear {
   bankStatements       BankStatement[]
   trades               Trade[]
   fairValueAdjustments FairValueAdjustment[]
+  taxProvisions        TaxProvision[]
 
   @@map("fiscal_years")
   @@schema("xsystem")
@@ -384,6 +385,127 @@ model FairValueAdjustmentLine {
   @@index([adjustmentId])
   @@index([instrumentCode])
   @@map("fair_value_adjustment_lines")
+  @@schema("xsystem")
+}
+
+// ─── Tax Provision ───────────────────────────────────────────────
+// Statutory tax rates per type, valid from a given date forward. The
+// "current" rate for a given asOfDate is the row with the largest
+// effectiveFrom <= asOfDate. Replaces the hard-coded 0.15 / 0.20 /
+// 0.15 constants previously inlined in src/lib/statement_mapping.ts —
+// IS computation now reads rates from this table so admins can edit
+// statutory rates without a code change, and historical periods
+// recompute with the rate that was active then.
+model TaxRate {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jurisdiction  String   @default("BD")
+  // CAPITAL_GAIN | DIVIDEND | INTEREST | DEFERRED | MGMT_FEE
+  // (MGMT_FEE is optional; the workbook treats this at-source so it
+  // may be entered as an amount instead of computed via rate × revenue.)
+  rateType      String   @map("rate_type")
+  value         Decimal  @db.Decimal(6, 4)
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  // Free-text statutory reference, e.g. "BD Finance Act 2024 s.82C".
+  // Surfaced on the admin card next to the rate input.
+  note          String?
+  createdBy     String?  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([jurisdiction, rateType, effectiveFrom])
+  @@map("tax_rates")
+  @@schema("xsystem")
+}
+
+// Reporting period for tax computation. A period is OPEN until an
+// admin locks it; locking freezes the rates used + the journal entry
+// posted and prevents recomputation. Reopening requires a role check
+// + audit log entry. Often co-incides with FiscalYear but allowed to
+// be a sub-period (e.g. quarter-end) so quarterly returns can lock
+// independently of the FY close.
+model TaxPeriod {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  startDate DateTime  @map("start_date") @db.Date
+  endDate   DateTime  @map("end_date") @db.Date
+  // OPEN | LOCKED
+  status    String    @default("OPEN")
+  lockedAt  DateTime? @map("locked_at")
+  lockedBy  String?   @map("locked_by") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  provisions TaxProvision[]
+
+  @@unique([startDate, endDate])
+  @@index([status])
+  @@map("tax_periods")
+  @@schema("xsystem")
+}
+
+// One TaxProvision row per (period, fiscalYear, computedAt) — the
+// canonical record of "what was the statutory tax expense at the
+// moment the admin clicked Save / Post". status=DRAFT means
+// computation only; POSTED means a top-up journal has been written;
+// SUPERSEDED means a later computation replaced this one (kept for
+// audit). ratesSnapshot + basesSnapshot are jsonb so historical
+// provisions remain auditable even if the underlying rate / journal
+// changes later.
+model TaxProvision {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  periodId      String   @map("period_id") @db.Uuid
+  fiscalYearId  String   @map("fiscal_year_id") @db.Uuid
+  computedAt    DateTime @default(now()) @map("computed_at")
+  computedBy    String?  @map("computed_by") @db.Uuid
+
+  // Current-tax components (Notes 13.01 H99..H102).
+  currentTaxCg       Decimal @map("current_tax_cg") @db.Decimal(18, 2)
+  currentTaxDividend Decimal @map("current_tax_dividend") @db.Decimal(18, 2)
+  currentTaxInterest Decimal @map("current_tax_interest") @db.Decimal(18, 2)
+  currentTaxMgmt     Decimal @map("current_tax_mgmt") @db.Decimal(18, 2)
+  currentTaxTotal    Decimal @map("current_tax_total") @db.Decimal(18, 2)
+
+  // Deferred tax (OCI, Notes 13.01 H107..H108).
+  deferredTaxTotal Decimal @map("deferred_tax_total") @db.Decimal(18, 2)
+
+  // Reconciliation vs whatever's already accrued in journals.
+  // varianceCurrent = currentTaxTotal − netC(Provision for Income Tax) at compute-time.
+  varianceCurrent  Decimal @map("variance_current") @db.Decimal(18, 2)
+  varianceDeferred Decimal @map("variance_deferred") @db.Decimal(18, 2)
+
+  // Frozen inputs at the moment of computation, for audit replay.
+  ratesSnapshot Json @map("rates_snapshot")
+  basesSnapshot Json @map("bases_snapshot")
+
+  // DRAFT | POSTED | SUPERSEDED
+  status String @default("DRAFT")
+
+  period     TaxPeriod    @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  fiscalYear FiscalYear   @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  postings   TaxPosting[]
+
+  @@index([periodId, status])
+  @@index([fiscalYearId])
+  @@map("tax_provisions")
+  @@schema("xsystem")
+}
+
+// Link table: one row per top-up journal posted for a given
+// provision. Multiple postings allowed when rates change mid-period
+// and the admin re-runs — each new top-up is incremental (current
+// computed − Σ all prior top-ups for the same period).
+model TaxPosting {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provisionId    String   @map("provision_id") @db.Uuid
+  journalBatchId String   @map("journal_batch_id") @db.Uuid
+  postedAt       DateTime @default(now()) @map("posted_at")
+  postedBy       String?  @map("posted_by") @db.Uuid
+  amount         Decimal  @db.Decimal(18, 2)
+  // CURRENT_TAX_TOPUP | DEFERRED_TAX_TOPUP | REVERSAL
+  type           String
+
+  provision TaxProvision @relation(fields: [provisionId], references: [id], onDelete: Restrict)
+
+  @@index([provisionId])
+  @@index([journalBatchId])
+  @@map("tax_postings")
   @@schema("xsystem")
 }
 

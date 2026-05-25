@@ -81,6 +81,16 @@ async function main() {
     fairValueReceivableAdjustment: 0, // Annexure!M131 — verify cell exists
     currentPeriodNetProfit: 0,
     currentPeriodTaxExpense: 0,
+    // Hard-coded statutory rates that USED to live in
+    // statement_mapping.ts before the tax_rates table arrived.
+    // Keeps this offline verification script independent of the DB.
+    taxRates: {
+      CAPITAL_GAIN: 0.15,
+      DIVIDEND: 0.20,
+      INTEREST: 0.10,
+      DEFERRED: 0.15,
+      MGMT_FEE: 0,
+    },
   };
   console.log(
     `Inputs — unrealised loss: ${fmt(unrealisedFairValueLoss)}, mgmt-fee tax at source: ${fmt(mgmtFeeTaxAtSource)}`,

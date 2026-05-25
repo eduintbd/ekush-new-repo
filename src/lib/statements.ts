@@ -27,6 +27,7 @@ import {
   type TrialBalance,
 } from "@/lib/statement_mapping";
 import { getUnrealisedFairValueLoss } from "@/lib/annexures";
+import { getTaxRatesAt } from "@/lib/tax-rates";
 import type { FiscalYear } from "@/generated/prisma";
 
 /** Inputs the caller can override; the rest are derived from IS. */
@@ -76,9 +77,14 @@ export async function getStatements(
     defaults.unrealisedFairValueLoss = await getUnrealisedFairValueLoss(fiscalYearId);
   }
 
+  // Statutory rates effective at the period end. Replaces the
+  // hard-coded 0.15 / 0.20 / 0.15 that lived in statement_mapping.ts.
+  const taxRates = await getTaxRatesAt(fiscalYear.endsOn);
+
   const external: ExternalInputs = {
     ...defaults,
     ...overrides,
+    taxRates,
     currentPeriodNetProfit: 0,
     currentPeriodTaxExpense: 0,
   };
