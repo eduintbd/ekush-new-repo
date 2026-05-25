@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import "./globals.css";
@@ -22,7 +23,13 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         {children}
-        <FormGuard />
+        {/* FormGuard reads useSearchParams to detect server-action
+            redirects and restore stuck "Saving…" buttons; wrap in
+            Suspense so this client hook doesn't de-opt the whole app
+            to client-side rendering. */}
+        <Suspense fallback={null}>
+          <FormGuard />
+        </Suspense>
         <FlashToast />
       </body>
     </html>
