@@ -357,31 +357,80 @@ function note13_incomeTaxExpense({ incomeStatement }: NotesContext): Note {
   };
 }
 
-function note13_01_deferredTax({ incomeStatement }: NotesContext): Note {
-  const ociFv = incomeStatement.oci.find((l) => /Unrealised/i.test(l.label))?.amount ?? 0;
-  const deferredTax = incomeStatement.oci.find((l) => /Deferred Tax/i.test(l.label))?.amount ?? 0;
+function note13_01_deferredTax({ data, incomeStatement }: NotesContext): Note {
+  const snap = data.latestTaxProvision;
+
+  // No POSTED TaxProvision row yet for this FY — fall back to the
+  // computed values that still live on the IS, but flag the absence
+  // so the auditor sees this is a draft view.
+  if (!snap) {
+    const ociFv = incomeStatement.oci.find((l) => /Unrealised/i.test(l.label))?.amount ?? 0;
+    const deferredTax = incomeStatement.oci.find((l) => /Deferred Tax/i.test(l.label))?.amount ?? 0;
+    return {
+      number: "13.01",
+      title: "Tax Expense Computation",
+      rows: [
+        { label: "Fair Value Gain/(Loss) — accounting base", amount: ociFv },
+        { label: "Deferred Tax (per OCI)", amount: deferredTax, subtotal: true },
+      ],
+      total: deferredTax,
+      needsInputs: [
+        "Tax provision has not been posted yet for this fiscal year. Open /admin/tax-provision and click 'Post to Ledger' to freeze the per-rate breakdown.",
+      ],
+    };
+  }
+
+  // Posted snapshot — render the full per-rate computation.
+  const r = snap.ratesSnapshot;
+  const b = snap.basesSnapshot;
+  const rows: NoteRow[] = [
+    { label: "─ Current Tax", subtotal: true },
+    { label: "Capital Gain — net (Note 17)", amount: b.capitalGainNet, indent: true },
+    { label: `× Capital Gain Tax Rate (${(r.CAPITAL_GAIN * 100).toFixed(2)}%)`, indent: true },
+    { label: "Tax on Capital Gain", amount: snap.currentTaxCg, indent: true },
+    { label: "Dividend Income (Note 19)", amount: b.dividendIncome, indent: true },
+    { label: `× Dividend Tax Rate (${(r.DIVIDEND * 100).toFixed(2)}%)`, indent: true },
+    { label: "Tax on Dividend Income", amount: snap.currentTaxDividend, indent: true },
+    { label: "Interest Income (Note 18)", amount: b.interestIncomeTotal, indent: true },
+    { label: `× Interest Tax Rate (${(r.INTEREST * 100).toFixed(2)}%)`, indent: true },
+    { label: "Tax on Interest Income", amount: snap.currentTaxInterest, indent: true },
+    { label: "Mgmt Fee TDS (at source)", amount: snap.currentTaxMgmt, indent: true },
+    { label: "Σ Current Tax", amount: snap.currentTaxTotal, subtotal: true },
+    { label: "─ Deferred Tax (OCI)", subtotal: true },
+    { label: "Change in Unrealised Fair Value (Note 24)", amount: b.fairValueChange, indent: true },
+    { label: `× Deferred Tax Rate (${(r.DEFERRED * 100).toFixed(2)}%)`, indent: true },
+    { label: "Σ Deferred Tax", amount: snap.deferredTaxTotal, subtotal: true },
+  ];
+
   return {
     number: "13.01",
-    title: "Deferred Tax Income/Expenses",
-    rows: [
-      { label: "Fair Value Gain/(Loss) — accounting base", amount: ociFv },
-      { label: "Tax Rate: 15%", amount: undefined },
-      { label: "Deferred Tax (per OCI)", amount: deferredTax, subtotal: true },
-    ],
-    total: deferredTax,
+    title: "Tax Expense Computation",
+    reference: `Snapshot computed ${snap.computedAt.toISOString().slice(0, 10)} — see /admin/tax-provision history`,
+    rows,
+    total: snap.currentTaxTotal + snap.deferredTaxTotal,
   };
 }
 
-function note14_provisionForIncomeTax({ tb, external, data }: NotesContext): Note {
-  const closing = netC(tb, ACCOUNT.provisionForIncomeTax) + external.currentPeriodTaxExpense;
+function note14_provisionForIncomeTax({ tb, data }: NotesContext): Note {
+  // Phase 4 of the Tax Provision module: the Tax Provision card posts
+  // the period charge directly onto the Provision for Income Tax
+  // account, so netC alone is the closing balance. The previous
+  // `+ external.currentPeriodTaxExpense` line double-counted once
+  // posting was in place — dropped.
+  const closing = netC(tb, ACCOUNT.provisionForIncomeTax);
   const opening = openingCredit(data.openingBalances, ACCOUNT.provisionForIncomeTax);
+  // Signed period activity on the account: positive = period
+  // accrual (Cr), negative = settlement/payment (Dr). Phase 5 will
+  // split these into separate rows; for now show the net.
+  const periodCharge =
+    grossC(tb, ACCOUNT.provisionForIncomeTax) - grossD(tb, ACCOUNT.provisionForIncomeTax);
   return {
     number: "14.00",
     title: "Provision for Income Tax",
     rows: [
       { label: "Opening Balance", amount: opening },
-      { label: "Add: Current Tax Provision (per IS)", amount: external.currentPeriodTaxExpense },
-      { label: "Closing Balance (from TB + period IS)", amount: closing, subtotal: true },
+      { label: "Add: Period activity (current-tax accrual − settlements)", amount: periodCharge },
+      { label: "Closing Balance (from TB)", amount: closing, subtotal: true },
     ],
     total: closing,
     needsInputs:

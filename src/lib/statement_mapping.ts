@@ -388,19 +388,19 @@ export function buildIncomeStatement(
 
   const profitBeforeTax = totalOperatingIncome - ga - financialExpenseMagnitude;
 
-  // Income Tax Expense — auto-derived from Notes.(2)!F12 formula:
-  //   F8 = capitalGain × <rate_CG>     (BD long-term capital-gain rate on listed shares)
-  //   F9 = dividendIncome × <rate_DI>  (BD withholding rate on dividends)
-  //   F11 = source tax on Mgmt Fee at receipt (minimum tax on mgmt fee income)
-  //   F12 = SUM(F8:F11)
-  // Rates come from ext.taxRates (sourced from the tax_rates table at the
-  // reporting period's end date) — replaces the hard-coded 0.15 / 0.20
-  // that lived here previously. Admins can edit rates via the Tax
-  // Provision card and historical periods recompute with whatever rate
-  // was effective at the time.
-  const capitalGainTax = capitalGain * ext.taxRates.CAPITAL_GAIN;
-  const dividendTax = dividendIncome * ext.taxRates.DIVIDEND;
-  const currentTaxProvision = capitalGainTax + dividendTax + ext.mgmtFeeTaxAtSource;
+  // Income Tax Expense — sourced from the journaled "Income Tax Expense"
+  // account (sl 132). The Tax Provision card at /admin/tax-provision
+  // posts a top-up entry each period that lands here; the IS reads the
+  // resulting net Dr balance as the authoritative current-tax figure.
+  //
+  // Before Phase 4 this line was computed inline as
+  //   capitalGain × rate_CG + dividendIncome × rate_DI + ext.mgmtFeeTaxAtSource
+  // which produced a NUMBER that diverged from the journaled provision
+  // whenever admin hadn't posted yet. Reading from the ledger collapses
+  // the two sources of truth into one — at the cost that an unposted
+  // FY shows tax = ৳0 on the IS until the admin clicks Post to Ledger.
+  // That's the correct accrual semantic.
+  const currentTaxProvision = netD(tb, "Income Tax Expense");
   const taxExpense: StatementLine[] = [
     { label: "Current Tax Expense", amount: currentTaxProvision },
   ];
@@ -410,9 +410,10 @@ export function buildIncomeStatement(
   // OCI
   // Unrealised loss on listed shares = −Annexure march!K27 (negative because it's a loss)
   const ociUnrealisedLoss = -ext.unrealisedFairValueLoss;
-  // Deferred tax effect = −OCI × <rate_DEFERRED> (positive when OCI is a
-  // loss → reduces tax liability). Same source as the current-tax rates.
-  const deferredTax = -ociUnrealisedLoss * ext.taxRates.DEFERRED;
+  // Deferred tax — same change as current-tax above. Read from the
+  // journaled "Deferred Tax Expense" account (sl 133) rather than
+  // computing inline. Net Dr balance = OCI deferred-tax expense.
+  const deferredTax = netD(tb, "Deferred Tax Expense");
   const oci: StatementLine[] = [
     { label: "Unrealised Loss on Investment in Stocks", amount: ociUnrealisedLoss },
     { label: "Deferred Tax Expense", amount: deferredTax },
@@ -550,12 +551,14 @@ export function buildBalanceSheet(
     { label: "Deferred Tax Liability", amount: netC(tb, ACCOUNT.deferredTax) },
   ];
 
-  // Current liabilities
-  // Spec formula: L27 − IS!H24. Workbook stores IS!H24 as NEGATIVE (tax is a
-  // reduction of profit), so −(negative) = +. We store currentPeriodTaxExpense
-  // as a positive magnitude, so we add directly.
-  const provisionForIncomeTax =
-    netC(tb, ACCOUNT.provisionForIncomeTax) + ext.currentPeriodTaxExpense;
+  // Current liabilities — Provision for Income Tax. After Phase 4 of
+  // the Tax Provision module, the journal IS the source of truth: when
+  // admin posts a top-up via /admin/tax-provision, the credit lands
+  // directly on this account. Reading netC alone now gives the right
+  // closing balance — the old `+ ext.currentPeriodTaxExpense` addition
+  // (which made sense when IS tax was unposted, to forward-state the
+  // BS) would now DOUBLE-COUNT the period charge.
+  const provisionForIncomeTax = netC(tb, ACCOUNT.provisionForIncomeTax);
 
   const liabilityForOtherExpenses =
     netC(tb, ACCOUNT.auditFeeAccrued)            // L23

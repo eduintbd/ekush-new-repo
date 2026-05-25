@@ -36,6 +36,35 @@ export type EmployeeDisclosureData = {
   notes: string | null;
 };
 
+/** Per-rate breakdown for Note 13.01. Sourced from the latest POSTED
+ *  TaxProvision row for the FY (Phase 3 + 4 of the Tax Provision
+ *  module). `null` when no provision has been posted yet — Note 13.01
+ *  then renders a "not yet posted" banner. */
+export type LatestTaxProvision = {
+  id: string;
+  computedAt: Date;
+  currentTaxCg: number;
+  currentTaxDividend: number;
+  currentTaxInterest: number;
+  currentTaxMgmt: number;
+  currentTaxTotal: number;
+  deferredTaxTotal: number;
+  ratesSnapshot: {
+    CAPITAL_GAIN: number;
+    DIVIDEND: number;
+    INTEREST: number;
+    DEFERRED: number;
+    MGMT_FEE: number;
+  };
+  basesSnapshot: {
+    capitalGainNet: number;
+    dividendIncome: number;
+    interestIncomeTotal: number;
+    mgmtFeeRevenue: number;
+    fairValueChange: number;
+  };
+};
+
 export type NotesData = {
   openingBalances: OpeningBalances;
   fixedAssets: FixedAssetRow[];
@@ -49,6 +78,8 @@ export type NotesData = {
   /** Per-instrument breakdown for Notes 19.01 / 20. */
   dividendByInstrument: Map<string, number>;
   interestByInstrument: Map<string, number>;
+  /** Latest POSTED TaxProvision for the FY; null if none posted yet. */
+  latestTaxProvision: LatestTaxProvision | null;
 };
 
 const EMPTY: NotesData = {
@@ -61,6 +92,7 @@ const EMPTY: NotesData = {
   fundCapitalGains: new Map(),
   dividendByInstrument: new Map(),
   interestByInstrument: new Map(),
+  latestTaxProvision: null,
 };
 
 export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
@@ -76,6 +108,7 @@ export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
     dividend,
     interestFdr,
     interestSnd,
+    taxProvisionRow,
   ] = await Promise.all([
     safe(() =>
       prisma.accountOpeningBalance.findMany({
@@ -137,6 +170,12 @@ export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
         by: ["instrumentCode"],
         where: { fiscalYearId, accountName: "Interest Income" },
         _sum: { debit: true, credit: true },
+      }),
+    ),
+    safe(() =>
+      prisma.taxProvision.findFirst({
+        where: { fiscalYearId, status: "POSTED" },
+        orderBy: { computedAt: "desc" },
       }),
     ),
   ]);
@@ -216,6 +255,24 @@ export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
     interestByInstrument.set(key, (interestByInstrument.get(key) ?? 0) + net);
   }
 
+  // Map the raw TaxProvision row (or null) into the Note 13.01 shape.
+  // ratesSnapshot / basesSnapshot are jsonb; the schema didn't enforce
+  // their shape, so coerce defensively here.
+  const latestTaxProvision: LatestTaxProvision | null = taxProvisionRow
+    ? {
+        id: taxProvisionRow.id,
+        computedAt: taxProvisionRow.computedAt,
+        currentTaxCg: Number(taxProvisionRow.currentTaxCg),
+        currentTaxDividend: Number(taxProvisionRow.currentTaxDividend),
+        currentTaxInterest: Number(taxProvisionRow.currentTaxInterest),
+        currentTaxMgmt: Number(taxProvisionRow.currentTaxMgmt),
+        currentTaxTotal: Number(taxProvisionRow.currentTaxTotal),
+        deferredTaxTotal: Number(taxProvisionRow.deferredTaxTotal),
+        ratesSnapshot: coerceRatesSnapshot(taxProvisionRow.ratesSnapshot),
+        basesSnapshot: coerceBasesSnapshot(taxProvisionRow.basesSnapshot),
+      }
+    : null;
+
   return {
     openingBalances,
     fixedAssets,
@@ -226,6 +283,37 @@ export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
     fundCapitalGains,
     dividendByInstrument,
     interestByInstrument,
+    latestTaxProvision,
+  };
+}
+
+function coerceRatesSnapshot(raw: unknown): LatestTaxProvision["ratesSnapshot"] {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const n = (k: string): number => {
+    const v = r[k];
+    return typeof v === "number" ? v : 0;
+  };
+  return {
+    CAPITAL_GAIN: n("CAPITAL_GAIN"),
+    DIVIDEND: n("DIVIDEND"),
+    INTEREST: n("INTEREST"),
+    DEFERRED: n("DEFERRED"),
+    MGMT_FEE: n("MGMT_FEE"),
+  };
+}
+
+function coerceBasesSnapshot(raw: unknown): LatestTaxProvision["basesSnapshot"] {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const n = (k: string): number => {
+    const v = r[k];
+    return typeof v === "number" ? v : 0;
+  };
+  return {
+    capitalGainNet: n("capitalGainNet"),
+    dividendIncome: n("dividendIncome"),
+    interestIncomeTotal: n("interestIncomeTotal"),
+    mgmtFeeRevenue: n("mgmtFeeRevenue"),
+    fairValueChange: n("fairValueChange"),
   };
 }
 
