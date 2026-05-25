@@ -7,9 +7,15 @@
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { computeTaxProvision, type TaxProvisionResult, type SanityCheckResult } from "@/lib/tax-provision";
+import {
+  computeTaxProvision,
+  getProvisionHistory,
+  type TaxProvisionResult,
+  type SanityCheckResult,
+  type ProvisionHistoryRow,
+} from "@/lib/tax-provision";
 import { formatBdt } from "@/lib/format";
-import { saveTaxRates } from "./actions";
+import { saveTaxRates, postTaxProvision } from "./actions";
 
 type Search = {
   fy?: string;
@@ -70,6 +76,7 @@ export default async function TaxProvisionPage({
 
   let result: TaxProvisionResult | null = null;
   let computeError: string | null = null;
+  let history: ProvisionHistoryRow[] = [];
   if (fy) {
     try {
       result = await computeTaxProvision(fy.id, {
@@ -77,6 +84,7 @@ export default async function TaxProvisionPage({
         materialityPct,
         lossCarryForwardEnabled: carryForward,
       });
+      history = await getProvisionHistory(fy.id);
     } catch (err) {
       computeError = err instanceof Error ? err.message : String(err);
     }
@@ -427,7 +435,7 @@ export default async function TaxProvisionPage({
               </div>
             </section>
 
-            {/* Panel C — Actions (Phase 3 stubs) */}
+            {/* Panel C — Actions */}
             <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
               <header className="mb-3">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
@@ -439,28 +447,92 @@ export default async function TaxProvisionPage({
                 <p className="text-xs text-zinc-500">
                   Posting writes a new journal entry dated{" "}
                   {result.periodEnd.toISOString().slice(0, 10)} — never modifies existing journals.
+                  Re-posting after a rate change writes only the incremental delta.
                 </p>
               </header>
-              <div className="flex items-center gap-2">
-                <button
-                  disabled
-                  className="cursor-not-allowed rounded-md border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-500"
-                  title="Phase 3"
-                >
-                  Post to Ledger
-                </button>
-                <button
-                  disabled
-                  className="cursor-not-allowed rounded-md border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-500"
-                  title="Phase 3"
-                >
-                  Lock period
-                </button>
+              <div className="flex flex-wrap items-center gap-3">
+                <PostForm
+                  fy={fy}
+                  result={result}
+                  mgmtFeeAtSource={mgmtFeeAtSourceAmount}
+                  materialityPctInput={materialityPctInput}
+                  carryForward={carryForward}
+                />
                 <span className="text-[11px] text-zinc-500">
-                  Both ship in Phase 3 — posting flow + audit trail + lock/unlock with role check.
+                  To lock this period,{" "}
+                  <Link href="/admin/fiscal-years" className="underline-offset-2 hover:underline">
+                    close the fiscal year
+                  </Link>{" "}
+                  via the Fiscal years admin.
                 </span>
               </div>
             </section>
+
+            {/* Audit-trail history */}
+            {history.length > 0 && (
+              <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                <header className="mb-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                    History · {result.fiscalYearLabel}
+                  </p>
+                  <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
+                    Past computations
+                  </h2>
+                  <p className="text-xs text-zinc-500">
+                    Latest {history.length} TaxProvision rows. Only the POSTED row is live; SUPERSEDED rows kept for audit.
+                  </p>
+                </header>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-[10px] uppercase tracking-wider text-zinc-500">
+                      <th className="py-1.5 pr-3 font-semibold">Computed at</th>
+                      <th className="py-1.5 pr-3 font-semibold">Status</th>
+                      <th className="py-1.5 pr-3 text-right font-semibold">Current tax</th>
+                      <th className="py-1.5 pr-3 text-right font-semibold">Deferred tax</th>
+                      <th className="py-1.5 pr-3 text-right font-semibold">Top-up posted</th>
+                      <th className="py-1.5 pr-3 font-semibold">Voucher</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                    {history.map((h) => {
+                      const totalTopup = h.postings.reduce((s, p) => s + p.amount, 0);
+                      const batchId = h.postings[0]?.journalBatchId;
+                      return (
+                        <tr key={h.id}>
+                          <td className="py-1.5 pr-3 font-mono">
+                            {h.computedAt.toISOString().slice(0, 16).replace("T", " ")}
+                          </td>
+                          <td className="py-1.5 pr-3">
+                            <StatusBadge status={h.status} />
+                          </td>
+                          <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
+                            {formatBdt(h.currentTaxTotal)}
+                          </td>
+                          <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
+                            {formatBdt(h.deferredTaxTotal)}
+                          </td>
+                          <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
+                            {h.postings.length === 0 ? "—" : (totalTopup >= 0 ? "+" : "−") + formatBdt(Math.abs(totalTopup))}
+                          </td>
+                          <td className="py-1.5 pr-3">
+                            {batchId ? (
+                              <Link
+                                href={`/journals/voucher/${batchId}`}
+                                className="font-mono text-[11px] underline-offset-2 hover:underline"
+                              >
+                                {batchId.slice(0, 8)}…
+                              </Link>
+                            ) : (
+                              <span className="text-zinc-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </section>
+            )}
           </>
         )}
       </div>
@@ -520,6 +592,73 @@ function TaxRow({
       </td>
       <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{formatBdt(tax)}</td>
     </tr>
+  );
+}
+
+function PostForm({
+  fy,
+  result,
+  mgmtFeeAtSource,
+  materialityPctInput,
+  carryForward,
+}: {
+  fy: { id: string; label: string; endsOn: Date; isClosed: boolean };
+  result: TaxProvisionResult;
+  mgmtFeeAtSource: number;
+  materialityPctInput: number;
+  carryForward: boolean;
+}) {
+  const cv = result.reconciliation.varianceCurrent;
+  const dv = result.reconciliation.varianceDeferred;
+  const noTopupNeeded = Math.abs(cv) < 0.005 && Math.abs(dv) < 0.005;
+  const parts: string[] = [];
+  if (Math.abs(cv) >= 0.005) parts.push(`current ${cv >= 0 ? "+" : "−"}৳${Math.abs(cv).toFixed(2)}`);
+  if (Math.abs(dv) >= 0.005) parts.push(`deferred ${dv >= 0 ? "+" : "−"}৳${Math.abs(dv).toFixed(2)}`);
+  const confirmMsg = noTopupNeeded
+    ? `No top-up needed for ${fy.label} — books already reconcile within ৳0.01. Submit anyway?`
+    : `Post top-up journal for ${fy.label}: ${parts.join(", ")}. This writes a new TX-prefixed voucher dated ${fy.endsOn.toISOString().slice(0, 10)} — it does NOT modify existing journals. Continue?`;
+
+  if (fy.isClosed) {
+    return (
+      <button
+        type="button"
+        disabled
+        className="cursor-not-allowed rounded-md border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-500"
+        title="Fiscal year is closed — reopen via /admin/fiscal-years"
+      >
+        Post to Ledger (FY closed)
+      </button>
+    );
+  }
+
+  return (
+    <form action={postTaxProvision} data-confirm={confirmMsg}>
+      <input type="hidden" name="fiscalYearId" value={fy.id} />
+      <input type="hidden" name="mgmtFeeAtSourceAmount" value={mgmtFeeAtSource} />
+      <input type="hidden" name="materialityPct" value={materialityPctInput} />
+      <input type="hidden" name="carryForward" value={carryForward ? "1" : "0"} />
+      <button
+        type="submit"
+        disabled={noTopupNeeded}
+        className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+      >
+        {noTopupNeeded ? "Books reconciled — nothing to post" : "Post to Ledger"}
+      </button>
+    </form>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const cls =
+    status === "POSTED"
+      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+      : status === "SUPERSEDED"
+        ? "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+        : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200";
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${cls}`}>
+      {status}
+    </span>
   );
 }
 

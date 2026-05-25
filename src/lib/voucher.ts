@@ -13,7 +13,7 @@
 
 import type { Prisma } from "@/generated/prisma";
 
-export type VoucherPrefix = "JV" | "OB" | "BV" | "SV" | "FV";
+export type VoucherPrefix = "JV" | "OB" | "BV" | "SV" | "FV" | "TX";
 
 /** Derive the short fiscal-year suffix from a FiscalYear.label.
  *  'FY2025-26' → '25-26'; 'FY2026-27' → '26-27'; falls back to stripping 'FY'. */

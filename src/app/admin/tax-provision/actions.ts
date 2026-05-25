@@ -1,14 +1,18 @@
 "use server";
 
-// Phase-2 server actions for the Tax Provision card. Only writes
-// supported here are rate edits — no posting (Phase 3) or locking
-// (Phase 3) yet.
+// Server actions for the Tax Provision card.
+// Phase 2: saveTaxRates (rate edits only).
+// Phase 3: postTaxProvision (writes the top-up journal entry,
+//   creates a TaxProvision + TaxPosting record, supersedes priors).
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { prisma } from "@/lib/prisma";
+import { prisma, withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
+import { allocateVoucherNo } from "@/lib/voucher";
+import { computeTaxProvision } from "@/lib/tax-provision";
 
 const ADMIN_PATH = "/admin/tax-provision";
 
@@ -132,4 +136,230 @@ export async function saveTaxRates(formData: FormData): Promise<void> {
   redirect(
     `${ADMIN_PATH}?ok=${encodeURIComponent(`Saved ${inserted} rate row${inserted === 1 ? "" : "s"}${skipped > 0 ? ` · ${skipped} unchanged` : ""}`)}`,
   );
+}
+
+// ─── Phase 3: postTaxProvision ───────────────────────────────────
+
+const PostBody = z.object({
+  fiscalYearId: z.string().uuid("Invalid fiscal year"),
+  mgmtFeeAtSourceAmount: z.coerce.number().min(0).default(0),
+  materialityPct: z.coerce.number().min(0).max(100).default(1.0),
+  carryForward: z.coerce.boolean().default(false),
+});
+
+const INCOME_TAX_EXPENSE = "Income Tax Expense";
+const PROVISION_INCOME_TAX = "Provision for income tax";
+const DEFERRED_TAX_EXPENSE = "Deferred Tax Expense";
+const DEFERRED_TAX = "Deferred Tax";
+
+/**
+ * Recompute the canonical tax provision for `fiscalYearId`, compare
+ * against journal accruals AND any prior posted top-ups for the same
+ * FY, and post an incremental top-up journal entry covering whatever
+ * delta remains. Supersedes prior TaxProvision rows in the same FY so
+ * the audit panel always shows one active row per FY.
+ */
+export async function postTaxProvision(formData: FormData): Promise<void> {
+  const profile = await requireRole(["admin"]);
+
+  const parsed = PostBody.safeParse({
+    fiscalYearId: String(formData.get("fiscalYearId") ?? ""),
+    mgmtFeeAtSourceAmount: String(formData.get("mgmtFeeAtSourceAmount") ?? "0"),
+    materialityPct: String(formData.get("materialityPct") ?? "1.0"),
+    carryForward: formData.get("carryForward") === "1" ? "true" : "false",
+  });
+  if (!parsed.success) {
+    back("", parsed.error.issues[0]?.message ?? "Invalid input");
+  }
+  const data = parsed.data;
+
+  const fy = await prisma.fiscalYear.findUnique({ where: { id: data.fiscalYearId } });
+  if (!fy) back(`fy=${data.fiscalYearId}`, "Fiscal year not found");
+  if (fy.isClosed) {
+    back(
+      `fy=${fy.id}`,
+      `Fiscal year ${fy.label} is closed. Reopen via /admin/fiscal-years before posting.`,
+    );
+  }
+
+  // Recompute the canonical numbers — never trust form-submitted
+  // tax amounts (would let an admin bypass rate/period validation by
+  // editing hidden inputs).
+  const result = await computeTaxProvision(fy.id, {
+    mgmtFeeAtSourceAmount: data.mgmtFeeAtSourceAmount,
+    materialityPct: data.materialityPct / 100,
+    lossCarryForwardEnabled: data.carryForward,
+  });
+
+  // Sum prior top-ups for the same FY so re-posting after a rate
+  // change writes the *delta*, never the full tax twice. Includes
+  // both POSTED (active) and SUPERSEDED rows — the journal entries
+  // they wrote are still on the books.
+  const priorTopups = await prisma.taxPosting.findMany({
+    where: { provision: { fiscalYearId: fy.id } },
+    select: { type: true, amount: true },
+  });
+  const currentTopupSum = sumByType(priorTopups, "CURRENT_TAX_TOPUP");
+  const deferredTopupSum = sumByType(priorTopups, "DEFERRED_TAX_TOPUP");
+
+  const currentTopup = round2(
+    result.currentTax.total - result.reconciliation.journaledCurrentTax - currentTopupSum,
+  );
+  const deferredTopup = round2(
+    result.deferredTax - result.reconciliation.journaledDeferredTax - deferredTopupSum,
+  );
+
+  if (Math.abs(currentTopup) < 0.005 && Math.abs(deferredTopup) < 0.005) {
+    redirect(
+      `${ADMIN_PATH}?fy=${fy.id}&ok=${encodeURIComponent(
+        `No top-up needed — current and deferred tax both reconcile within ৳0.01.`,
+      )}`,
+    );
+  }
+
+  // Build journal lines per spec §3.4. Current-tax leg pair + deferred-
+  // tax leg pair. Each pair only emitted when its respective topup is
+  // non-zero.
+  type Line = {
+    accountName: string;
+    debit: number;
+    credit: number;
+    description: string;
+  };
+  const lines: Line[] = [];
+  if (Math.abs(currentTopup) >= 0.005) {
+    if (currentTopup > 0) {
+      // Computed > journaled → ADD to provision.
+      lines.push({ accountName: INCOME_TAX_EXPENSE, debit: currentTopup, credit: 0, description: "Current-tax top-up" });
+      lines.push({ accountName: PROVISION_INCOME_TAX, debit: 0, credit: currentTopup, description: "Current-tax top-up" });
+    } else {
+      // Computed < journaled → REVERSE excess provision.
+      const abs = Math.abs(currentTopup);
+      lines.push({ accountName: PROVISION_INCOME_TAX, debit: abs, credit: 0, description: "Current-tax reversal" });
+      lines.push({ accountName: INCOME_TAX_EXPENSE, debit: 0, credit: abs, description: "Current-tax reversal" });
+    }
+  }
+  if (Math.abs(deferredTopup) >= 0.005) {
+    if (deferredTopup > 0) {
+      lines.push({ accountName: DEFERRED_TAX_EXPENSE, debit: deferredTopup, credit: 0, description: "Deferred-tax top-up (OCI)" });
+      lines.push({ accountName: DEFERRED_TAX, debit: 0, credit: deferredTopup, description: "Deferred-tax top-up (OCI)" });
+    } else {
+      const abs = Math.abs(deferredTopup);
+      lines.push({ accountName: DEFERRED_TAX, debit: abs, credit: 0, description: "Deferred-tax reversal (OCI)" });
+      lines.push({ accountName: DEFERRED_TAX_EXPENSE, debit: 0, credit: abs, description: "Deferred-tax reversal (OCI)" });
+    }
+  }
+
+  const batchId = randomUUID();
+  let voucherNo = "";
+  let provisionId = "";
+
+  await withActor(profile.id, async (tx) => {
+    voucherNo = await allocateVoucherNo(tx, fy.id, fy.label, "TX");
+
+    // 1. Journal lines — dated period-end (the spec says period_end,
+    // not today, so the entry lands in the right reporting window).
+    await tx.journal.createMany({
+      data: lines.map((l) => ({
+        entryDate: fy.endsOn,
+        description: l.description,
+        txnType: "TX",
+        voucherNo,
+        accountName: l.accountName,
+        debit: l.debit,
+        credit: l.credit,
+        fiscalYearId: fy.id,
+        batchId,
+        createdBy: profile.id,
+      })),
+    });
+
+    // 2. Mark any prior POSTED provisions for this FY as SUPERSEDED.
+    // The history panel still shows them; only the latest is "live".
+    await tx.taxProvision.updateMany({
+      where: { fiscalYearId: fy.id, status: "POSTED" },
+      data: { status: "SUPERSEDED" },
+    });
+
+    // 3. Find-or-create a TaxPeriod row for the FY's date range so
+    // the TaxProvision row has a periodId FK target. Status stays
+    // DRAFT — the FiscalYear.isClosed flag is the lock signal in
+    // this codebase, not TaxPeriod.status.
+    const period = await tx.taxPeriod.upsert({
+      where: { startDate_endDate: { startDate: fy.startsOn, endDate: fy.endsOn } },
+      update: {},
+      create: { startDate: fy.startsOn, endDate: fy.endsOn, status: "OPEN" },
+    });
+
+    // 4. TaxProvision snapshot.
+    const created = await tx.taxProvision.create({
+      data: {
+        periodId: period.id,
+        fiscalYearId: fy.id,
+        computedBy: profile.id,
+        currentTaxCg: result.currentTax.cg,
+        currentTaxDividend: result.currentTax.dividend,
+        currentTaxInterest: result.currentTax.interest,
+        currentTaxMgmt: result.currentTax.mgmt,
+        currentTaxTotal: result.currentTax.total,
+        deferredTaxTotal: result.deferredTax,
+        varianceCurrent: currentTopup,
+        varianceDeferred: deferredTopup,
+        ratesSnapshot: result.taxRates,
+        basesSnapshot: result.bases,
+        status: "POSTED",
+      },
+    });
+    provisionId = created.id;
+
+    // 5. TaxPosting rows — one per non-zero topup type.
+    const postings: Array<{ provisionId: string; journalBatchId: string; postedBy: string; amount: number; type: string }> = [];
+    if (Math.abs(currentTopup) >= 0.005) {
+      postings.push({
+        provisionId: created.id,
+        journalBatchId: batchId,
+        postedBy: profile.id,
+        amount: currentTopup,
+        type: "CURRENT_TAX_TOPUP",
+      });
+    }
+    if (Math.abs(deferredTopup) >= 0.005) {
+      postings.push({
+        provisionId: created.id,
+        journalBatchId: batchId,
+        postedBy: profile.id,
+        amount: deferredTopup,
+        type: "DEFERRED_TAX_TOPUP",
+      });
+    }
+    if (postings.length > 0) {
+      await tx.taxPosting.createMany({ data: postings });
+    }
+  });
+
+  revalidatePath(ADMIN_PATH);
+  revalidatePath("/balance-sheet");
+  revalidatePath("/income-statement");
+  revalidatePath("/trial-balance");
+  revalidatePath("/day-book");
+  revalidatePath("/journals");
+
+  const parts: string[] = [];
+  if (Math.abs(currentTopup) >= 0.005)
+    parts.push(`current ${currentTopup >= 0 ? "+" : "−"}৳${Math.abs(currentTopup).toFixed(2)}`);
+  if (Math.abs(deferredTopup) >= 0.005)
+    parts.push(`deferred ${deferredTopup >= 0 ? "+" : "−"}৳${Math.abs(deferredTopup).toFixed(2)}`);
+  redirect(
+    `${ADMIN_PATH}?fy=${fy.id}&ok=${encodeURIComponent(`Posted voucher ${voucherNo} · ${parts.join(", ")}`)}`,
+  );
+}
+
+function sumByType(rows: Array<{ type: string; amount: { toString(): string } }>, type: string): number {
+  return rows
+    .filter((r) => r.type === type)
+    .reduce((s, r) => s + Number(r.amount), 0);
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }

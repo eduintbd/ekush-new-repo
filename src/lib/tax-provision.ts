@@ -289,6 +289,59 @@ async function checkRatesEffective(periodStart: Date): Promise<SanityCheckResult
   };
 }
 
+// ─── History ─────────────────────────────────────────────────────
+
+export type ProvisionHistoryRow = {
+  id: string;
+  computedAt: Date;
+  computedBy: string | null;
+  status: string;
+  currentTaxTotal: number;
+  deferredTaxTotal: number;
+  varianceCurrent: number;
+  varianceDeferred: number;
+  postings: Array<{
+    id: string;
+    amount: number;
+    type: string;
+    journalBatchId: string;
+    postedAt: Date;
+  }>;
+};
+
+/**
+ * Last N TaxProvision rows for the given FY with their postings.
+ * Powers the audit-trail panel on /admin/tax-provision.
+ */
+export async function getProvisionHistory(
+  fiscalYearId: string,
+  limit: number = 10,
+): Promise<ProvisionHistoryRow[]> {
+  const rows = await prisma.taxProvision.findMany({
+    where: { fiscalYearId },
+    orderBy: { computedAt: "desc" },
+    take: limit,
+    include: { postings: true },
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    computedAt: r.computedAt,
+    computedBy: r.computedBy,
+    status: r.status,
+    currentTaxTotal: Number(r.currentTaxTotal),
+    deferredTaxTotal: Number(r.deferredTaxTotal),
+    varianceCurrent: Number(r.varianceCurrent),
+    varianceDeferred: Number(r.varianceDeferred),
+    postings: r.postings.map((p) => ({
+      id: p.id,
+      amount: Number(p.amount),
+      type: p.type,
+      journalBatchId: p.journalBatchId,
+      postedAt: p.postedAt,
+    })),
+  }));
+}
+
 // ─── helpers ─────────────────────────────────────────────────────
 
 function round2(n: number): number {

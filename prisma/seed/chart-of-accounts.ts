@@ -156,4 +156,16 @@ export const CHART_OF_ACCOUNTS_SEED: SeedAccount[] = [
   // Loan From UCB). Liability (credit-normal); grows when PBSL extends
   // margin against the AMC's BO balance.
   { sl: 131, name: "Margin Loan From Prime Bank Securities", normalBalance: "CREDIT" },
+  // ─── Tax Provision module (Phase 3) ────────────────────────────
+  // P&L expense leg of the current-tax accrual. Posted by
+  // src/app/admin/tax-provision/actions.ts → postTaxProvision in a
+  // compound entry that credits `Provision for income tax` (sl 20).
+  // Reading this account's net debit = the current-tax expense
+  // reported on the IS.
+  { sl: 132, name: "Income Tax Expense", normalBalance: "DEBIT" },
+  // OCI expense leg of the deferred-tax accrual. Posted by the same
+  // server action; credit side hits `Deferred Tax` (sl 19, DTL).
+  // Hits other comprehensive income, not P&L — kept separate from
+  // sl 132 so the IS can place it under the OCI heading.
+  { sl: 133, name: "Deferred Tax Expense", normalBalance: "DEBIT" },
 ];
