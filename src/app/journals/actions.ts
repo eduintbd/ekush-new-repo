@@ -24,16 +24,29 @@ const Body = z.object({
   investorCode: z.string().optional(),
   /** Stock ticker (Note 19.01) or bank-account code (Note 20). */
   instrumentCode: z.string().optional(),
+  /** NBR challan ref for mgmt-fee receipt vouchers (TDS at fund level →
+   * EWML's AIT). Optional but recommended for evidentiary support of the
+   * AY assessment claim. */
+  challanNo: z.string().optional(),
   fiscalYearId: z.string().min(1),
   lines: z.array(Line).min(2),
 });
+
+/** Accounts whose presence on any line requires a fundCode (so the AIT
+ * claim can be broken out per fund at AY assessment time). */
+const MGMT_FEE_ACCOUNTS = [
+  "Management Fee",
+  "Management Fee Accrued",
+  "Source Tax",
+] as const;
 
 export type JournalCreateError =
   | { kind: "validation"; message: string }
   | { kind: "unbalanced"; debitTotal: number; creditTotal: number }
   | { kind: "fy_closed" }
   | { kind: "fy_out_of_range" }
-  | { kind: "unknown_account"; account: string };
+  | { kind: "unknown_account"; account: string }
+  | { kind: "fund_code_required"; account: string };
 
 function back(error: JournalCreateError): never {
   const params = new URLSearchParams({ err: error.kind, msg: JSON.stringify(error) });
@@ -61,6 +74,7 @@ export async function createJournal(formData: FormData): Promise<void> {
     fundCode: String(formData.get("fundCode") ?? "") || undefined,
     investorCode: String(formData.get("investorCode") ?? "") || undefined,
     instrumentCode: String(formData.get("instrumentCode") ?? "") || undefined,
+    challanNo: String(formData.get("challanNo") ?? "") || undefined,
     fiscalYearId: String(formData.get("fiscalYearId") ?? ""),
     lines,
   });
@@ -95,6 +109,18 @@ export async function createJournal(formData: FormData): Promise<void> {
     if (!foundSet.has(a)) back({ kind: "unknown_account", account: a });
   }
 
+  // Fund-tag required when any mgmt-fee or Source-Tax (AIT) account is hit,
+  // so the AIT claim can be broken out per fund at AY assessment.
+  const touchesMgmtFee = data.lines.some((l) =>
+    (MGMT_FEE_ACCOUNTS as readonly string[]).includes(l.accountName),
+  );
+  if (touchesMgmtFee && !data.fundCode) {
+    const triggeringAccount = data.lines.find((l) =>
+      (MGMT_FEE_ACCOUNTS as readonly string[]).includes(l.accountName),
+    )!.accountName;
+    back({ kind: "fund_code_required", account: triggeringAccount });
+  }
+
   // Voucher prefix: OB for opening balance entries, JV for everything else.
   // (BV/SV reserved for buy/sell trade auto-journals in src/lib/trades.ts;
   // future RV/PV/CV when we add Receipt/Payment/Contra voucher types.)
@@ -124,6 +150,7 @@ export async function createJournal(formData: FormData): Promise<void> {
         investorCode: data.investorCode,
         fundCode: data.fundCode,
         instrumentCode: data.instrumentCode,
+        challanNo: data.challanNo,
         createdBy: profile.id,
       })),
     });
@@ -174,6 +201,7 @@ export async function updateJournalBatch(formData: FormData): Promise<void> {
     fundCode: String(formData.get("fundCode") ?? "") || undefined,
     investorCode: String(formData.get("investorCode") ?? "") || undefined,
     instrumentCode: String(formData.get("instrumentCode") ?? "") || undefined,
+    challanNo: String(formData.get("challanNo") ?? "") || undefined,
     fiscalYearId: String(formData.get("fiscalYearId") ?? ""),
     lines,
   });
@@ -186,6 +214,16 @@ export async function updateJournalBatch(formData: FormData): Promise<void> {
   const creditTotal = data.lines.reduce((s, l) => s + l.credit, 0);
   if (Math.abs(debitTotal - creditTotal) > 0.005) {
     editBack(batchId, { kind: "unbalanced", debitTotal, creditTotal });
+  }
+
+  const touchesMgmtFee = data.lines.some((l) =>
+    (MGMT_FEE_ACCOUNTS as readonly string[]).includes(l.accountName),
+  );
+  if (touchesMgmtFee && !data.fundCode) {
+    const triggeringAccount = data.lines.find((l) =>
+      (MGMT_FEE_ACCOUNTS as readonly string[]).includes(l.accountName),
+    )!.accountName;
+    editBack(batchId, { kind: "fund_code_required", account: triggeringAccount });
   }
 
   // Load existing batch to preserve voucherNo / createdBy / createdAt and to
@@ -237,6 +275,7 @@ export async function updateJournalBatch(formData: FormData): Promise<void> {
         investorCode: data.investorCode,
         fundCode: data.fundCode,
         instrumentCode: data.instrumentCode,
+        challanNo: data.challanNo,
         createdBy: originalCreatedBy,
         createdAt: originalCreatedAt,
       })),

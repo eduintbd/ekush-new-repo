@@ -239,6 +239,7 @@ export default async function LedgerPage({
                   <Th>Description / Particulars</Th>
                   <Th>Fund</Th>
                   <Th>Instrument</Th>
+                  <Th>Challan #</Th>
                   <Th align="right">Debit</Th>
                   <Th align="right">Credit</Th>
                   <Th align="right">Running balance</Th>
@@ -246,7 +247,7 @@ export default async function LedgerPage({
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 <tr className="bg-zinc-50 italic text-zinc-500 dark:bg-zinc-950">
-                  <Td colSpan={8}>Opening balance as at {openingCutoff.toISOString().slice(0, 10)}</Td>
+                  <Td colSpan={9}>Opening balance as at {openingCutoff.toISOString().slice(0, 10)}</Td>
                   <Td align="right">{drCr(openingBalance)}</Td>
                 </tr>
                 {rows.map(({ j, running }) => (
@@ -263,6 +264,7 @@ export default async function LedgerPage({
                     <Td className="text-zinc-600 dark:text-zinc-400">{j.description ?? "—"}</Td>
                     <Td className="text-xs text-zinc-500">{j.fundCode ?? "—"}</Td>
                     <Td className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{j.instrumentCode ?? "—"}</Td>
+                    <Td className="font-mono text-xs text-zinc-600 dark:text-zinc-400">{j.challanNo ?? "—"}</Td>
                     <Td align="right">{Number(j.debit) > 0 ? formatBdt(Number(j.debit)) : "—"}</Td>
                     <Td align="right">{Number(j.credit) > 0 ? formatBdt(Number(j.credit)) : "—"}</Td>
                     <Td align="right" className="font-medium">{drCr(running)}</Td>
@@ -271,7 +273,7 @@ export default async function LedgerPage({
               </tbody>
               <tfoot className="bg-zinc-50 dark:bg-zinc-950">
                 <tr className="font-semibold">
-                  <Td colSpan={6}>Period totals</Td>
+                  <Td colSpan={7}>Period totals</Td>
                   <Td align="right">{formatBdt(periodDebit)}</Td>
                   <Td align="right">{formatBdt(periodCredit)}</Td>
                   <Td align="right">{drCr(closingBalance)}</Td>

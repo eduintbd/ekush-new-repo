@@ -641,6 +641,10 @@ model Journal {
   /// Stock ticker for dividend lines (Note 19.01) or bank-account code for
   /// interest-income lines (Note 20). Free-form; the note builder groups by it.
   instrumentCode String?  @map("instrument_code")
+  /// NBR challan reference for AIT/TDS entries. Populated on mgmt-fee
+  /// receipt vouchers where the fund withholds TDS on EWML's behalf —
+  /// used to evidence the AIT claim at AY assessment time.
+  challanNo      String?  @map("challan_no")
   createdBy      String?  @map("created_by") @db.Uuid
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")

@@ -108,7 +108,7 @@ export default async function EditJournalPage({
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Field label="Txn type" name="txnType" defaultValue={head.txnType ?? "j"} />
             <Field
-              label="Fund (optional)"
+              label="Fund (required for mgmt-fee / Source Tax lines)"
               name="fundCode"
               placeholder="EFUF, EGF, ESRF"
               defaultValue={head.fundCode ?? ""}
@@ -125,11 +125,19 @@ export default async function EditJournalPage({
               defaultValue={head.instrumentCode ?? ""}
             />
           </div>
-          <Field
-            label="Description"
-            name="description"
-            defaultValue={head.description ?? ""}
-          />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field
+              label="Description"
+              name="description"
+              defaultValue={head.description ?? ""}
+            />
+            <Field
+              label="Challan ref (NBR — for mgmt-fee TDS / AIT)"
+              name="challanNo"
+              placeholder="e.g. NBR/25-26/12345"
+              defaultValue={head.challanNo ?? ""}
+            />
+          </div>
 
           <JournalLines
             accounts={accounts.map((a) => a.name)}

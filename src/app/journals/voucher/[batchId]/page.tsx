@@ -73,6 +73,7 @@ export default async function VoucherPage({
             {head.fundCode && <Row label="Fund" value={head.fundCode} />}
             {head.investorCode && <Row label="Investor" value={head.investorCode} mono />}
             {head.instrumentCode && <Row label="Instrument" value={head.instrumentCode} mono />}
+            {head.challanNo && <Row label="Challan #" value={head.challanNo} mono />}
           </dl>
 
           {head.description && (
