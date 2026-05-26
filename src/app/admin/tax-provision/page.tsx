@@ -366,11 +366,12 @@ export default async function TaxProvisionPage({
                     tax={result.currentTax.dividend}
                   />
                   <TaxRow
-                    label="Interest Income Tax"
+                    label="Interest (net) Tax"
                     sourceLink={`/ledger/${encodeURIComponent("Interest Income")}?fy=${fy.id}`}
-                    base={result.bases.interestIncomeTotal}
+                    base={result.bases.interestNetTaxable}
                     rate={result.taxRates.INTEREST}
                     tax={result.currentTax.interest}
+                    note={`Net basis: gross ${formatBdt(result.bases.interestIncomeTotal)} − interest expense ${formatBdt(result.bases.interestExpenseTotal)}`}
                   />
                   <TaxRow
                     label="Management Fee TDS"
@@ -378,7 +379,15 @@ export default async function TaxProvisionPage({
                     base={result.bases.mgmtFeeRevenue}
                     rate={null}
                     tax={result.currentTax.mgmt}
-                    note="Entered as amount — withheld at source."
+                    note="Final tax until FY 2027-28 — entered as amount withheld at source."
+                  />
+                  <TaxRow
+                    label="Business Income Tax"
+                    sourceLink={`/ledger/${encodeURIComponent("Advisory Fee")}?fy=${fy.id}`}
+                    base={result.bases.businessNetTaxable}
+                    rate={result.taxRates.CORPORATE}
+                    tax={result.currentTax.business}
+                    note={`Net basis: business income ${formatBdt(result.bases.businessIncomeGross)} (advisory + formation) − G&A ${formatBdt(result.bases.businessExpensesTotal)}`}
                   />
                 </tbody>
                 <tfoot>

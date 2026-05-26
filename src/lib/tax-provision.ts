@@ -41,7 +41,16 @@ export type TaxBases = {
   interestIncomeSnd: number;
   interestIncomeFdr: number;
   interestIncomeTotal: number;
+  interestExpenseTotal: number;
+  interestNetTaxable: number;
   mgmtFeeRevenue: number;
+  /** Advisory + formation + other "business" income streams that
+   *  flow into the corporate-rate bucket at AY assessment. */
+  businessIncomeGross: number;
+  /** G&A expenses charged against business income (not allocated to
+   *  the mgmt-fee/cap-gain/interest/dividend streams). */
+  businessExpensesTotal: number;
+  businessNetTaxable: number;
   /** Sign convention: positive = unrealised gain (increases DTL). */
   fairValueChange: number;
   /** Net Dr balance of "Source Tax" — AIT withheld at source. */
@@ -51,10 +60,19 @@ export type TaxBases = {
 };
 
 export type CurrentTaxBreakdown = {
+  /** (Capital Gain − Capital Loss) × CAPITAL_GAIN rate (15%). */
   cg: number;
+  /** Dividend Income × DIVIDEND rate (20% final per BD §54). */
   dividend: number;
+  /** (Interest Income − Interest Expense) × INTEREST rate (20% net). */
   interest: number;
+  /** Mgmt-fee TDS already withheld at source (final until FY 27-28). */
   mgmt: number;
+  /** (Business Income − Business Expenses) × CORPORATE rate (27%).
+   *  Business Income = advisory + formation + other ops income that
+   *  is NOT mgmt-fee / cap-gain / interest / dividend. Business
+   *  Expenses = G&A (everything in IS Operating Expenses). */
+  business: number;
   total: number;
 };
 
@@ -114,6 +132,15 @@ const ACCT = {
   SOURCE_TAX: "Source Tax",
   PROVISION_INCOME_TAX: "Provision for income tax",
   DEFERRED_TAX: "Deferred Tax",
+  // Business income streams (not mgmt fee, not cap gain, not int,
+  // not dividend) — feed the corporate-rate bucket.
+  ADVISORY_FEE: "Advisory Fee",
+  FORMATION_FEE: "Formation Fee Receivable from ESRF",
+  // Interest expense streams — netted against interest income.
+  INTEREST_ON_LOAN: "Interest on Loan",
+  INTEREST_ON_MARGIN: "Interest on Margin  Loan",
+  OTHER_CHARGES_ON_LOAN: "Other Charges on Loan",
+  EXCISE_DUTY_ON_LOAN: "Excise duty on Loan",
 } as const;
 
 // ─── Compute ─────────────────────────────────────────────────────
@@ -157,6 +184,24 @@ export async function computeTaxProvision(
   const mgmtFeeRevenue = netC(ACCT.MGMT_FEE);
   const sourceTaxCredits = netD(ACCT.SOURCE_TAX);
 
+  // Interest expense — netted against interest income for the 20%
+  // bucket per spec. Includes loan interest, margin-loan interest,
+  // and "other charges on loan" (excise duty on loan is treated as
+  // interest expense too).
+  const interestExpenseTotal =
+    netD(ACCT.INTEREST_ON_LOAN) +
+    netD(ACCT.INTEREST_ON_MARGIN) +
+    netD(ACCT.OTHER_CHARGES_ON_LOAN) +
+    netD(ACCT.EXCISE_DUTY_ON_LOAN);
+  const interestNetTaxable = Math.max(0, interestIncomeTotal - interestExpenseTotal);
+
+  // Business income — streams that are NOT mgmt fee (final TDS),
+  // NOT cap gain (15%), NOT interest (20% net), NOT dividend (20%
+  // final). Advisory + formation today; user can extend if other
+  // ops-income streams emerge.
+  const businessIncomeGross =
+    netC(ACCT.ADVISORY_FEE) + netC(ACCT.FORMATION_FEE);
+
   // 2. Tax rates — apply overrides on top of the DB lookup.
   const baseRates = await getTaxRatesAt(fy.endsOn);
   const taxRates: TaxRates = {
@@ -164,12 +209,17 @@ export async function computeTaxProvision(
     ...(overrides.taxRates ?? {}),
   };
 
-  // 3. IS pull for profit-before-tax + fair-value-change. getStatements
-  // runs the full pipeline (and reads its own rates from the DB — we
-  // accept its profitBeforeTax as authoritative since it's what the
-  // BS uses).
+  // 3. IS pull for profit-before-tax + fair-value-change + G&A. The
+  // G&A total drives the business-expenses deduction for the 27%
+  // bucket. getStatements runs the full pipeline (and reads its own
+  // rates from the DB — we accept its profitBeforeTax as authoritative).
   const stmts = await getStatements(fiscalYearId);
   const profitBeforeTax = stmts.incomeStatement.profitBeforeTax;
+  const businessExpensesTotal = stmts.incomeStatement.operatingExpenses.reduce(
+    (s, l) => s + l.amount,
+    0,
+  );
+  const businessNetTaxable = Math.max(0, businessIncomeGross - businessExpensesTotal);
 
   // OCI base — sign flipped per spec. ext.unrealisedFairValueLoss is
   // positive for a loss; the deferred-tax base wants positive for
@@ -184,22 +234,37 @@ export async function computeTaxProvision(
     interestIncomeSnd,
     interestIncomeFdr,
     interestIncomeTotal,
+    interestExpenseTotal,
+    interestNetTaxable,
     mgmtFeeRevenue,
+    businessIncomeGross,
+    businessExpensesTotal,
+    businessNetTaxable,
     fairValueChange,
     sourceTaxCredits,
     profitBeforeTax,
   };
 
-  // 4. Current tax
+  // 4. Current tax — per the BD AMC formula:
+  //   = mgmt-fee TDS (final until FY 27-28)
+  //   + dividend × 20% (final per §54)
+  //   + (interest income − interest expense) × 20%
+  //   + (capital gain − capital loss) × 15%
+  //   + (business income − business expenses) × 27%
   const currentTax: CurrentTaxBreakdown = {
     cg: round2(Math.max(0, capitalGainNet) * taxRates.CAPITAL_GAIN),
     dividend: round2(dividendIncome * taxRates.DIVIDEND),
-    interest: round2(interestIncomeTotal * taxRates.INTEREST),
+    interest: round2(interestNetTaxable * taxRates.INTEREST),
     mgmt: round2(overrides.mgmtFeeAtSourceAmount ?? 0),
+    business: round2(businessNetTaxable * taxRates.CORPORATE),
     total: 0,
   };
   currentTax.total = round2(
-    currentTax.cg + currentTax.dividend + currentTax.interest + currentTax.mgmt,
+    currentTax.cg +
+      currentTax.dividend +
+      currentTax.interest +
+      currentTax.mgmt +
+      currentTax.business,
   );
 
   // 5. Deferred tax

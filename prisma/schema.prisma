@@ -460,6 +460,8 @@ model TaxProvision {
   currentTaxDividend Decimal @map("current_tax_dividend") @db.Decimal(18, 2)
   currentTaxInterest Decimal @map("current_tax_interest") @db.Decimal(18, 2)
   currentTaxMgmt     Decimal @map("current_tax_mgmt") @db.Decimal(18, 2)
+  /// (Business Income − Business Expenses) × CORPORATE rate.
+  currentTaxBusiness Decimal @default(0) @map("current_tax_business") @db.Decimal(18, 2)
   currentTaxTotal    Decimal @map("current_tax_total") @db.Decimal(18, 2)
 
   // Deferred tax (OCI, Notes 13.01 H107..H108).

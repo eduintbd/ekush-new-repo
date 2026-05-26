@@ -308,6 +308,7 @@ export async function postTaxProvision(formData: FormData): Promise<void> {
         currentTaxDividend: result.currentTax.dividend,
         currentTaxInterest: result.currentTax.interest,
         currentTaxMgmt: result.currentTax.mgmt,
+        currentTaxBusiness: result.currentTax.business,
         currentTaxTotal: result.currentTax.total,
         deferredTaxTotal: result.deferredTax,
         varianceCurrent: currentTopup,

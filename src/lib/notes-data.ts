@@ -47,6 +47,7 @@ export type LatestTaxProvision = {
   currentTaxDividend: number;
   currentTaxInterest: number;
   currentTaxMgmt: number;
+  currentTaxBusiness: number;
   currentTaxTotal: number;
   deferredTaxTotal: number;
   ratesSnapshot: {
@@ -267,6 +268,7 @@ export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
         currentTaxDividend: Number(taxProvisionRow.currentTaxDividend),
         currentTaxInterest: Number(taxProvisionRow.currentTaxInterest),
         currentTaxMgmt: Number(taxProvisionRow.currentTaxMgmt),
+        currentTaxBusiness: Number(taxProvisionRow.currentTaxBusiness ?? 0),
         currentTaxTotal: Number(taxProvisionRow.currentTaxTotal),
         deferredTaxTotal: Number(taxProvisionRow.deferredTaxTotal),
         ratesSnapshot: coerceRatesSnapshot(taxProvisionRow.ratesSnapshot),
