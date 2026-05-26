@@ -361,6 +361,50 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** SUMIFS: net Dr on the "Source Tax" account for journal vouchers
+ *  that also include a "Management Fee" or "Management Fee Accrued"
+ *  leg, excluding OB. Mirrors the workbook's Notes(2)!F11 — the
+ *  source-tax-already-withheld figure that gets added to base income
+ *  tax to form the full current-tax provision.
+ *
+ *  Excludes OB explicitly: all opening balances share voucher
+ *  OB/25-26/0001, and that voucher does have Mgmt Fee lines (the
+ *  opening receivable), so it'd otherwise pull in the OB Source Tax
+ *  carryforward (~17L) that doesn't belong to the period. */
+export async function getMgmtFeeTdsFromLedger(
+  fiscalYearId: string,
+): Promise<number> {
+  const mgmtVouchers = await prisma.journal.findMany({
+    where: {
+      fiscalYearId,
+      accountName: { in: ["Management Fee", "Management Fee Accrued"] },
+      voucherNo: { not: null },
+    },
+    select: { voucherNo: true },
+    distinct: ["voucherNo"],
+  });
+  // Drop OB voucher numbers from the candidate set. The OB voucher
+  // does touch Mgmt Fee (opening receivable) but we don't want to
+  // pull its Source Tax Dr (~17L of prior-year carryforward). Avoids
+  // a downstream txnType filter and its NULL-handling gotcha.
+  const voucherNos = mgmtVouchers
+    .map((v) => v.voucherNo)
+    .filter((v): v is string => v !== null && !v.startsWith("OB/"));
+  if (voucherNos.length === 0) return 0;
+
+  const agg = await prisma.journal.aggregate({
+    where: {
+      fiscalYearId,
+      accountName: ACCT.SOURCE_TAX,
+      voucherNo: { in: voucherNos },
+    },
+    _sum: { debit: true, credit: true },
+  });
+  const dr = Number(agg._sum.debit ?? 0);
+  const cr = Number(agg._sum.credit ?? 0);
+  return Math.max(0, dr - cr);
+}
+
 /** Net credit balance for the period, excluding OB carryforward and
  *  our own TX top-ups. Uses subtraction rather than a NOT IN filter to
  *  correctly count rows whose txnType IS NULL. */

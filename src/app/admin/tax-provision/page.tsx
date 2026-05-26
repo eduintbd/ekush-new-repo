@@ -9,6 +9,7 @@ import { requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import {
   computeTaxProvision,
+  getMgmtFeeTdsFromLedger,
   getProvisionHistory,
   type TaxProvisionResult,
   type SanityCheckResult,
@@ -68,8 +69,17 @@ export default async function TaxProvisionPage({
     if (!latestRateByType.has(r.rateType)) latestRateByType.set(r.rateType, r);
   }
 
-  // Overrides from URL.
-  const mgmtFeeAtSourceAmount = sp.mgmtFeeAtSource ? Number(sp.mgmtFeeAtSource) : 0;
+  // Overrides from URL. Mgmt-fee TDS defaults to the journal SUMIFS
+  // (Source Tax Dr in vouchers also touching Mgmt Fee / Mgmt Fee
+  // Accrued, OB excluded) so the admin doesn't have to look it up;
+  // typing a different value in Panel A travels via the URL and wins.
+  const ledgerTds = fy ? await getMgmtFeeTdsFromLedger(fy.id) : 0;
+  const mgmtFeeAtSourceAmount =
+    sp.mgmtFeeAtSource !== undefined &&
+    sp.mgmtFeeAtSource !== "" &&
+    Number.isFinite(Number(sp.mgmtFeeAtSource))
+      ? Number(sp.mgmtFeeAtSource)
+      : ledgerTds;
   const materialityPctInput = sp.materialityPct ? Number(sp.materialityPct) : 1.0;
   const materialityPct = Number.isFinite(materialityPctInput) ? materialityPctInput / 100 : 0.01;
   const carryForward = sp.carryForward === "1";
@@ -152,6 +162,12 @@ export default async function TaxProvisionPage({
               placeholder="0.00"
               className="mt-1 block w-40 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-900"
             />
+            {ledgerTds > 0 && (
+              <span className="mt-1 block text-[10px] text-zinc-400">
+                Default from journal (Source Tax × Mgmt Fee vouchers):{" "}
+                ৳{ledgerTds.toLocaleString("en-IN")}
+              </span>
+            )}
           </label>
           <label className="block text-xs">
             <span className="font-medium text-zinc-500">Materiality (% of PBT)</span>
