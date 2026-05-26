@@ -73,68 +73,106 @@ export default async function DashboardPage() {
           </div>
         ))}
         <p className="text-sm text-zinc-600 dark:text-zinc-400">Quick links.</p>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <NavCard href="/trial-balance" title="Trial Balance" desc="Per-account net debit / net credit for the selected fiscal year." />
+
+        {/* ───────── Entry Management ───────── */}
+        <Section title="Entry Management" desc="Day-to-day bookkeeping: post vouchers, drill ledgers, verify balances, reconcile.">
           <NavCard href="/journals" title="Journals" desc="Browse and enter compound journal entries." />
-          <NavCard href="/day-book" title="Day Book" desc="All vouchers in a date range, grouped by date." />
           <NavCard href="/ledger" title="Ledgers" desc="Per-account ledger card with running balance." />
-          <NavCard href="/trades" title="Trades" desc="Buy/sell ledger. Each entry auto-posts a journal voucher (BV / SV)." />
-          <NavCard href="/portfolio" title="Portfolio" desc="Live holdings, market value, unrealised G/L. Revalue-to-market posts FVTPL journal." />
-          <NavCard href="/prices" title="Prices" desc="Enter close prices for the ~12 active instruments. Powers the Portfolio page." />
-          <NavCard href="/cash-book" title="Cash &amp; Bank Book" desc="Closing balance for every bank, cash and mobile-money account." />
-          <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position." />
-          <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI." />
-          <NavCard href="/changes-in-equity" title="Changes in Equity" desc="Rollforward of paid-up capital, fair value reserve, retained earnings." />
-          <NavCard href="/cash-flow-statement" title="Cash Flow Statement" desc="IAS 7 direct-method Statement of Cash Flows. Operating / Investing / Financing." />
-          <NavCard href="/cash-flow" title="Cash Flow (detail)" desc="Cash inflow/outflow by counter-account, for review." />
+          <NavCard href="/trial-balance" title="Trial Balance" desc="Per-account net debit / net credit for the selected fiscal year." />
+          <NavCard href="/day-book" title="Day Book" desc="All vouchers in a date range, grouped by date." />
           <NavCard href="/bank-reconciliation" title="Bank Reconciliation" desc="Per-account book vs statement balance comparison." />
-          <NavCard href="/management-fees" title="Management Fees" desc="Cross-verify fund FIN_STATS mgmt-fee imports; manual edit." />
-          {(profile.role === "admin" || profile.role === "auditor") && (
-            <NavCard href="/admin/audit" title="Audit Log" desc="Trigger-fed mutations on journals, agents, commission runs, fiscal years." />
-          )}
           {profile.role === "admin" && (
-            <>
-              <NavCard
-                href="/admin/accounts"
-                title="Chart of accounts"
-                desc="Add, rename, deactivate ledger accounts. 132 seeded; extend as needed."
-              />
-              <NavCard
-                href="/admin/groups"
-                title="Account groups"
-                desc="Hierarchical group tree (Asset / Liability / Equity / Income / Expense) with rollup."
-              />
-              <NavCard
-                href="/admin/banks"
-                title="Bank account master"
-                desc="Structured bank metadata: account no, IFSC, opening balance, BRS start date."
-              />
-              <NavCard
-                href="/admin/brokers"
-                title="Brokers"
-                desc="Panel of brokers (UCB / Prime Bank). Each links to its BO ledger + margin-loan account in the CoA."
-              />
-              <NavCard
-                href="/admin/opening-balances"
-                title="Opening balances"
-                desc="Per-FY editor for AccountOpeningBalance. Seed at year-start or via roll-forward."
-              />
-              <NavCard
-                href="/admin/fiscal-years"
-                title="Fiscal years"
-                desc="Create, close, reopen, and roll-forward closing balances to next year."
-              />
-              <NavCard
-                href="/admin/tax-provision"
-                title="Tax provision"
-                desc="Edit statutory rates, preview the current-tax computation, see variance vs journaled accruals. Posting + locking ship in a later phase."
-              />
-            </>
+            <NavCard href="/admin/tax-provision" title="Tax Provision" desc="Statutory rates, current-tax preview, reconciliation vs journal, post-to-ledger." />
           )}
-          <NavCard href="/admin/agents" title="Selling agents" desc="Approve, suspend, manage terms history." />
-        </div>
+        </Section>
+
+        {/* ───────── Investment Entry ───────── */}
+        <Section title="Investment Entry" desc="Trading book operations.">
+          <NavCard href="/trades" title="Trades" desc="Buy/sell ledger. Each entry auto-posts a journal voucher (BV / SV)." />
+          <NavCard href="/prices" title="Prices" desc="Enter close prices for the ~12 active instruments. Powers the Portfolio page." />
+          <NavCard href="/portfolio" title="Portfolio" desc="Live holdings, market value, unrealised G/L. Revalue-to-market posts FVTPL journal." />
+        </Section>
+
+        {/* ───────── Financial Statements ───────── */}
+        <Section title="Financial Statements" desc="The four primary statements + supporting schedules.">
+          <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI." />
+          <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position." />
+          <NavCard href="/cash-flow-statement" title="Cash Flow Statement" desc="IAS 7 direct-method. Operating / Investing / Financing + non-cash note." />
+          <NavCard href="/changes-in-equity" title="Changes in Equity" desc="Rollforward of paid-up capital, fair value reserve, retained earnings." />
+          <NavCard href="/cash-book" title="Cash &amp; Bank Book" desc="Closing balance for every bank, cash and mobile-money account." />
+          <NavCard href="/cash-flow" title="Cash Flow — detail" desc="Counter-account roll-up of every cash movement, for review." />
+        </Section>
+
+        {/* ───────── Settings ───────── */}
+        {profile.role === "admin" && (
+          <Section title="Settings" desc="Masters, configuration, and administrative oversight.">
+            <NavCard
+              href="/admin/accounts"
+              title="Chart of Accounts"
+              desc="Add, rename, deactivate ledger accounts."
+            />
+            <NavCard
+              href="/admin/groups"
+              title="Account Groups"
+              desc="Hierarchical group tree (Asset / Liability / Equity / Income / Expense) with rollup."
+            />
+            <NavCard
+              href="/admin/banks"
+              title="Bank Accounts Master"
+              desc="Structured bank metadata: account no, IFSC, opening balance, BRS start date."
+            />
+            <NavCard
+              href="/admin/brokers"
+              title="Brokers"
+              desc="Panel of brokers (UCB / Prime Bank). Each links to its BO ledger + margin-loan account."
+            />
+            <NavCard
+              href="/admin/opening-balances"
+              title="Opening Balances"
+              desc="Per-FY editor for AccountOpeningBalance. Seed at year-start or via roll-forward."
+            />
+            <NavCard
+              href="/admin/fiscal-years"
+              title="Fiscal Years"
+              desc="Create, close, reopen, and roll-forward closing balances to next year."
+            />
+            <NavCard href="/admin/agents" title="Selling Agents" desc="Approve, suspend, manage terms history." />
+            <NavCard href="/admin/audit" title="Activity Log" desc="Trigger-fed mutations on journals, agents, commission runs, fiscal years." />
+          </Section>
+        )}
+        {profile.role === "auditor" && (
+          <Section title="Audit oversight" desc="Read-only oversight links for auditors.">
+            <NavCard href="/admin/audit" title="Activity Log" desc="Trigger-fed mutations on journals, agents, commission runs, fiscal years." />
+          </Section>
+        )}
       </div>
     </main>
+  );
+}
+
+function Section({
+  title,
+  desc,
+  children,
+}: {
+  title: string;
+  desc?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="mt-8">
+      <header className="mb-3">
+        <h2 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">
+          {title}
+        </h2>
+        {desc && (
+          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+            {desc}
+          </p>
+        )}
+      </header>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
+    </section>
   );
 }
 
