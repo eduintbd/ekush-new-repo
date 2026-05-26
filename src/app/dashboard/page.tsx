@@ -136,8 +136,14 @@ export default async function DashboardPage() {
               title="Fiscal Years"
               desc="Create, close, reopen, and roll-forward closing balances to next year."
             />
-            <NavCard href="/admin/agents" title="Selling Agents" desc="Approve, suspend, manage terms history." />
             <NavCard href="/admin/audit" title="Activity Log" desc="Trigger-fed mutations on journals, agents, commission runs, fiscal years." />
+          </Section>
+        )}
+
+        {/* ───────── Selling Agents ───────── */}
+        {profile.role === "admin" && (
+          <Section title="Selling Agents" desc="Agent panel, commission terms, and approvals.">
+            <NavCard href="/admin/agents" title="Selling Agents" desc="Approve, suspend, manage terms history." />
           </Section>
         )}
         {profile.role === "auditor" && (
