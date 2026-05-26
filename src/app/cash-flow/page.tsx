@@ -185,14 +185,24 @@ export default async function CashFlowPage({
         <div>
           <p className="text-xs uppercase tracking-widest text-zinc-500">Staff portal</p>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Cash Flow
+            Cash Flow (detail)
           </h1>
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            {fromDate.toISOString().slice(0, 10)} → {toDate.toISOString().slice(0, 10)}
+            Counter-account roll-up · {fromDate.toISOString().slice(0, 10)} → {toDate.toISOString().slice(0, 10)}
             {" · "}
             {cashNames.size} cash/bank account{cashNames.size === 1 ? "" : "s"}
             {" · "}
             {cashLines.length} cash-side line{cashLines.length === 1 ? "" : "s"}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            For the IAS 7 direct-method statement, see{" "}
+            <Link
+              href={`/cash-flow-statement?fy=${fy.id}&from=${fromDate.toISOString().slice(0, 10)}&to=${toDate.toISOString().slice(0, 10)}`}
+              className="underline hover:text-zinc-700 dark:hover:text-zinc-300"
+            >
+              /cash-flow-statement
+            </Link>
+            .
           </p>
         </div>
         <form className="flex flex-wrap items-end gap-2 text-sm">

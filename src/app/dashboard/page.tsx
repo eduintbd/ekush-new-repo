@@ -85,7 +85,8 @@ export default async function DashboardPage() {
           <NavCard href="/balance-sheet" title="Balance Sheet" desc="Statement of Financial Position." />
           <NavCard href="/income-statement" title="Income Statement" desc="P&L + OCI." />
           <NavCard href="/changes-in-equity" title="Changes in Equity" desc="Rollforward of paid-up capital, fair value reserve, retained earnings." />
-          <NavCard href="/cash-flow" title="Cash Flow" desc="Cash inflow/outflow by counter-account category for the period." />
+          <NavCard href="/cash-flow-statement" title="Cash Flow Statement" desc="IAS 7 direct-method Statement of Cash Flows. Operating / Investing / Financing." />
+          <NavCard href="/cash-flow" title="Cash Flow (detail)" desc="Cash inflow/outflow by counter-account, for review." />
           <NavCard href="/bank-reconciliation" title="Bank Reconciliation" desc="Per-account book vs statement balance comparison." />
           <NavCard href="/management-fees" title="Management Fees" desc="Cross-verify fund FIN_STATS mgmt-fee imports; manual edit." />
           {(profile.role === "admin" || profile.role === "auditor") && (
