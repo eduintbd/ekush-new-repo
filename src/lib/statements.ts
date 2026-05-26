@@ -63,11 +63,15 @@ const ZERO_OVERRIDES: Required<StatementOverrides> = {
 export async function getStatements(
   fiscalYearId: string,
   overrides: StatementOverrides = {},
+  /** Period-to-date / "same-period" cutoff. When set, the TB only
+   * aggregates journals with entryDate ≤ asOfDate. Used by IS/BS/CE
+   * compare-mode = "period". Defaults to full-FY semantics. */
+  asOfDate?: Date,
 ): Promise<Statements> {
   const fiscalYear = await prisma.fiscalYear.findUniqueOrThrow({
     where: { id: fiscalYearId },
   });
-  const trialBalance = await getTrialBalance(fiscalYearId);
+  const trialBalance = await getTrialBalance(fiscalYearId, asOfDate);
   const tbMap = toMappingTrialBalance(trialBalance);
 
   // Derive unrealisedFairValueLoss from InvestmentHolding rows if the

@@ -37,7 +37,10 @@ export type TrialBalanceReport = {
  * for >100k journal rows, replace with a SQL view (`trial_balance_v` per
  * spec §5.11) and read via $queryRaw.
  */
-export async function getTrialBalance(fiscalYearId: string): Promise<TrialBalanceReport> {
+export async function getTrialBalance(
+  fiscalYearId: string,
+  asOfDate?: Date,
+): Promise<TrialBalanceReport> {
   const fy = await prisma.fiscalYear.findUniqueOrThrow({
     where: { id: fiscalYearId },
   });
@@ -47,10 +50,15 @@ export async function getTrialBalance(fiscalYearId: string): Promise<TrialBalanc
     orderBy: { sl: "asc" },
   });
 
-  // Aggregate journal lines for the period.
+  // Aggregate journal lines for the period. When `asOfDate` is provided
+  // (period-to-date / same-period comparison), only include rows with
+  // entryDate ≤ asOfDate. OB rows (dated day-before-FY-start) survive
+  // any cutoff inside the FY, so the running snapshot is preserved.
   const aggregates = await prisma.journal.groupBy({
     by: ["accountName"],
-    where: { fiscalYearId },
+    where: asOfDate
+      ? { fiscalYearId, entryDate: { lte: asOfDate } }
+      : { fiscalYearId },
     _sum: { debit: true, credit: true },
   });
   const aggMap = new Map(

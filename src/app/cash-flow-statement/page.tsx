@@ -26,7 +26,15 @@ import {
   type NonCashTransaction,
 } from "@/lib/cash-flow-statement";
 
-type Search = { fy?: string; from?: string; to?: string };
+type Search = {
+  fy?: string;
+  from?: string;
+  to?: string;
+  /** Comparison FY id (full-year or same-period per `cmode`). */
+  compare?: string;
+  /** "year" (default — full compare FY) | "period" (same days-into-FY range). */
+  cmode?: string;
+};
 
 export const metadata = { title: "Cash Flow Statement — Staff portal" };
 
@@ -58,8 +66,46 @@ export default async function CashFlowStatementPage({
   const fromDate = sp.from ? new Date(sp.from) : fy.startsOn;
   const toDate = sp.to ? new Date(sp.to) : fy.endsOn;
 
-  const cfs = await getCashFlowStatement(fy.id, fromDate, toDate);
-  const nonCash = await getNonCashTransactions(fy.id, fromDate, toDate);
+  const compareId = sp.compare && sp.compare !== fy.id ? sp.compare : undefined;
+  const compareMode: "year" | "period" = sp.cmode === "period" ? "period" : "year";
+  const compareFy = compareId
+    ? fiscalYears.find((y) => y.id === compareId)
+    : undefined;
+
+  // Derive compare date range:
+  //   year-wise: compareFy.startsOn → compareFy.endsOn
+  //   same-period: compareFy.startsOn + (fromDate - fy.startsOn) →
+  //                compareFy.startsOn + (toDate   - fy.startsOn)
+  let compareFromDate: Date | undefined;
+  let compareToDate: Date | undefined;
+  if (compareFy) {
+    if (compareMode === "period") {
+      const shiftDays = Math.floor(
+        (fromDate.getTime() - fy.startsOn.getTime()) / 86_400_000,
+      );
+      const spanDays = Math.floor(
+        (toDate.getTime() - fromDate.getTime()) / 86_400_000,
+      );
+      compareFromDate = new Date(compareFy.startsOn);
+      compareFromDate.setUTCDate(compareFromDate.getUTCDate() + shiftDays);
+      compareToDate = new Date(compareFromDate);
+      compareToDate.setUTCDate(compareToDate.getUTCDate() + spanDays);
+      // Clamp to compare FY range so we don't pull rows outside it.
+      if (compareFromDate < compareFy.startsOn) compareFromDate = compareFy.startsOn;
+      if (compareToDate > compareFy.endsOn) compareToDate = compareFy.endsOn;
+    } else {
+      compareFromDate = compareFy.startsOn;
+      compareToDate = compareFy.endsOn;
+    }
+  }
+
+  const [cfs, nonCash, compareCfs] = await Promise.all([
+    getCashFlowStatement(fy.id, fromDate, toDate),
+    getNonCashTransactions(fy.id, fromDate, toDate),
+    compareFy && compareFromDate && compareToDate
+      ? getCashFlowStatement(compareFy.id, compareFromDate, compareToDate)
+      : Promise.resolve(null),
+  ]);
 
   return (
     <Shell>
@@ -116,6 +162,39 @@ export default async function CashFlowStatementPage({
               className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
+          <label className="block">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+              Compare
+            </span>
+            <select
+              name="compare"
+              defaultValue={compareId ?? ""}
+              className="mt-1 block w-44 rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              <option value="">— none —</option>
+              {fiscalYears
+                .filter((y) => y.id !== fy.id)
+                .map((y) => (
+                  <option key={y.id} value={y.id}>
+                    {y.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+              Mode
+            </span>
+            <select
+              name="cmode"
+              defaultValue={compareMode}
+              title="Year-wise = full compare FY. Same period = same days-into-FY date range."
+              className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              <option value="year">Year-wise</option>
+              <option value="period">Same period</option>
+            </select>
+          </label>
           <button
             type="submit"
             className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
@@ -136,6 +215,15 @@ export default async function CashFlowStatementPage({
         </Link>
       </p>
 
+      {compareCfs && (
+        <p className="mt-2 text-xs text-zinc-500">
+          Compared with <strong>{compareFy?.label}</strong>{" "}
+          {compareMode === "period"
+            ? `(same period: ${compareFromDate?.toISOString().slice(0, 10)} → ${compareToDate?.toISOString().slice(0, 10)})`
+            : "(full year)"}
+        </p>
+      )}
+
       {cfs.cashAccounts.length === 0 ? (
         <p className="mt-10 text-sm text-zinc-500">
           No cash/bank accounts detected. Tag accounts with category &quot;Cash
@@ -143,18 +231,28 @@ export default async function CashFlowStatementPage({
         </p>
       ) : (
         <div className="mt-6 rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          {compareCfs && (
+            <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-6 border-b border-zinc-200 bg-zinc-50 px-5 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+              <span />
+              <span className="text-right">{fy.label}</span>
+              <span className="text-right">{compareFy?.label}</span>
+            </div>
+          )}
           <Activity
             cfs={cfs}
+            compare={compareCfs}
             activity="OPERATING"
             title="A. Cash flows from OPERATING activities"
           />
           <Activity
             cfs={cfs}
+            compare={compareCfs}
             activity="INVESTING"
             title="B. Cash flows from INVESTING activities"
           />
           <Activity
             cfs={cfs}
+            compare={compareCfs}
             activity="FINANCING"
             title="C. Cash flows from FINANCING activities"
           />
@@ -164,15 +262,18 @@ export default async function CashFlowStatementPage({
             <Row
               label="Net increase / (decrease) in cash"
               value={cfs.totals.netChange}
+              compareValue={compareCfs?.totals.netChange ?? undefined}
               bold
             />
             <Row
               label={`Cash at beginning of period (${fromDate.toISOString().slice(0, 10)})`}
               value={cfs.openingCash}
+              compareValue={compareCfs?.openingCash ?? undefined}
             />
             <Row
               label={`Cash at end of period (${toDate.toISOString().slice(0, 10)})`}
               value={cfs.closingCash}
+              compareValue={compareCfs?.closingCash ?? undefined}
               bold
               hilite
             />
@@ -303,14 +404,21 @@ function NonCashGroup({
 
 function Activity({
   cfs,
+  compare,
   activity,
   title,
 }: {
   cfs: CashFlowStatement;
+  compare: CashFlowStatement | null;
   activity: CfsActivity;
   title: string;
 }) {
   const lines = cfs.lines.filter((l) => l.activity === activity);
+  const compareLines = compare
+    ? compare.lines.filter((l) => l.activity === activity)
+    : [];
+  const findCompare = (subClass: string) =>
+    compareLines.find((l) => l.subClass === subClass);
   const t = cfs.totals;
   const net =
     activity === "OPERATING"
@@ -318,42 +426,69 @@ function Activity({
       : activity === "INVESTING"
         ? t.netInvesting
         : t.netFinancing;
+  const compareNet = compare
+    ? activity === "OPERATING"
+      ? compare.totals.netOperating
+      : activity === "INVESTING"
+        ? compare.totals.netInvesting
+        : compare.totals.netFinancing
+    : undefined;
+
+  // Merge sub-classes — show all that exist in either side.
+  const allSubClasses = new Set<string>([
+    ...lines.map((l) => l.subClass),
+    ...compareLines.map((l) => l.subClass),
+  ]);
+  const mergedLines = Array.from(allSubClasses).map((sc) => {
+    const cur = lines.find((l) => l.subClass === sc);
+    const cmp = findCompare(sc);
+    return {
+      subClass: sc,
+      order: cur?.order ?? cmp?.order ?? 99,
+      cur,
+      cmp,
+    };
+  });
+  mergedLines.sort((a, b) => a.order - b.order);
 
   return (
     <section className="border-b border-zinc-200 px-5 py-4 last:border-b-0 dark:border-zinc-800">
       <h2 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">
         {title}
       </h2>
-      {lines.length === 0 ? (
+      {mergedLines.length === 0 ? (
         <p className="mt-2 text-xs italic text-zinc-400">
           No flows classified to this activity in the period.
         </p>
       ) : (
         <div className="mt-2 space-y-1">
-          {lines.map((l) => {
-            const showInflow = l.inflow > 0.005;
-            const showOutflow = l.outflow > 0.005;
-            // Show gross inflow + gross outflow on separate rows when both
-            // exist (e.g. investments purchase + disposal); otherwise show
-            // a single net row.
+          {mergedLines.map(({ subClass, cur, cmp }) => {
+            const curIn = cur?.inflow ?? 0;
+            const curOut = cur?.outflow ?? 0;
+            const cmpIn = cmp?.inflow ?? 0;
+            const cmpOut = cmp?.outflow ?? 0;
+            const showInflow = curIn > 0.005 || cmpIn > 0.005;
+            const showOutflow = curOut > 0.005 || cmpOut > 0.005;
             return (
-              <div key={l.subClass} className="group">
+              <div key={subClass} className="group">
                 {showInflow && (
                   <Row
-                    label={l.subClass}
-                    value={l.inflow}
+                    label={subClass}
+                    value={curIn}
+                    compareValue={compare ? cmpIn : undefined}
                     indent
-                    drilldown={l.byAccount
+                    drilldown={(cur?.byAccount ?? [])
                       .filter((a) => a.inflow > 0.005)
                       .map((a) => ({ name: a.accountName, amount: a.inflow }))}
                   />
                 )}
                 {showOutflow && (
                   <Row
-                    label={showInflow ? `  less: payments / outflows` : l.subClass}
-                    value={-l.outflow}
+                    label={showInflow ? `  less: payments / outflows` : subClass}
+                    value={-curOut}
+                    compareValue={compare ? -cmpOut : undefined}
                     indent
-                    drilldown={l.byAccount
+                    drilldown={(cur?.byAccount ?? [])
                       .filter((a) => a.outflow > 0.005)
                       .map((a) => ({ name: a.accountName, amount: -a.outflow }))}
                   />
@@ -364,6 +499,7 @@ function Activity({
           <Row
             label={`Net cash ${net >= 0 ? "from" : "used in"} ${activity.toLowerCase()} activities`}
             value={net}
+            compareValue={compareNet}
             bold
             hilite
           />
@@ -376,6 +512,7 @@ function Activity({
 function Row({
   label,
   value,
+  compareValue,
   indent = false,
   bold = false,
   hilite = false,
@@ -383,12 +520,21 @@ function Row({
 }: {
   label: string;
   value: number;
+  compareValue?: number;
   indent?: boolean;
   bold?: boolean;
   hilite?: boolean;
   drilldown?: Array<{ name: string; amount: number }>;
 }) {
   const isNeg = value < -0.005;
+  const hasCompare = compareValue !== undefined;
+  const cmpIsNeg = (compareValue ?? 0) < -0.005;
+  const fmtCell = (v: number, neg: boolean) =>
+    Math.abs(v) < 0.005
+      ? "—"
+      : neg
+        ? `(${formatBdt(Math.abs(v))})`
+        : formatBdt(v);
   return (
     <details
       className={[
@@ -399,7 +545,9 @@ function Row({
     >
       <summary
         className={[
-          "flex items-center justify-between py-1 text-sm",
+          hasCompare
+            ? "grid grid-cols-[1fr_auto_auto] items-center gap-x-6 py-1 text-sm"
+            : "flex items-center justify-between py-1 text-sm",
           indent ? "pl-4" : "",
           drilldown && drilldown.length > 0
             ? "cursor-pointer list-none [&::-webkit-details-marker]:hidden"
@@ -416,12 +564,22 @@ function Row({
         </span>
         <span
           className={[
-            "tabular-nums",
+            "tabular-nums text-right",
             isNeg ? "text-red-700 dark:text-red-300" : "",
           ].join(" ")}
         >
-          {isNeg ? `(${formatBdt(Math.abs(value))})` : formatBdt(value)}
+          {fmtCell(value, isNeg)}
         </span>
+        {hasCompare && (
+          <span
+            className={[
+              "tabular-nums text-right text-zinc-500",
+              cmpIsNeg ? "text-red-700 dark:text-red-300" : "",
+            ].join(" ")}
+          >
+            {fmtCell(compareValue ?? 0, cmpIsNeg)}
+          </span>
+        )}
       </summary>
       {drilldown && drilldown.length > 0 && (
         <div className="ml-8 mt-1 space-y-0.5 border-l border-zinc-200 pl-3 text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">

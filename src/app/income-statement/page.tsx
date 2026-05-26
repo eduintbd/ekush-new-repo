@@ -17,6 +17,8 @@ import { PrintButton } from "@/components/print-button";
 type Search = {
   fy?: string;
   compare?: string;
+  /** "year" (default) | "period" (same days-into-FY YTD). */
+  cmode?: string;
   mgmtFeeTax?: string;
   fvLoss?: string;
   fvRecv?: string;
@@ -68,14 +70,38 @@ export default async function IncomeStatementPage({
 
   const selectedId = sp.fy ?? fiscalYears[0].id;
   const compareId = sp.compare && sp.compare !== selectedId ? sp.compare : undefined;
+  const compareMode: "year" | "period" = sp.cmode === "period" ? "period" : "year";
   const overrides = parseOverrides(sp);
+
+  const fyRecords = await prisma.fiscalYear.findMany({
+    where: { id: { in: compareId ? [selectedId, compareId] : [selectedId] } },
+    select: { id: true, startsOn: true, endsOn: true },
+  });
+  const fyById = new Map(fyRecords.map((y) => [y.id, y]));
+  const currentFy = fyById.get(selectedId);
+  const compareFy = compareId ? fyById.get(compareId) : undefined;
+
+  let currentAsOf: Date | undefined;
+  let compareAsOf: Date | undefined;
+  if (compareMode === "period" && currentFy && compareFy) {
+    const today = new Date();
+    const clamp = (d: Date, lo: Date, hi: Date) =>
+      d < lo ? new Date(lo) : d > hi ? new Date(hi) : new Date(d);
+    currentAsOf = clamp(today, currentFy.startsOn, currentFy.endsOn);
+    const daysIn = Math.floor(
+      (currentAsOf.getTime() - currentFy.startsOn.getTime()) / 86_400_000,
+    );
+    const target = new Date(compareFy.startsOn);
+    target.setUTCDate(target.getUTCDate() + daysIn);
+    compareAsOf = clamp(target, compareFy.startsOn, compareFy.endsOn);
+  }
 
   let statements;
   let compareStatements;
   try {
     [statements, compareStatements] = await Promise.all([
-      getStatements(selectedId, overrides),
-      compareId ? getStatements(compareId, overrides) : Promise.resolve(null),
+      getStatements(selectedId, overrides, currentAsOf),
+      compareId ? getStatements(compareId, overrides, compareAsOf) : Promise.resolve(null),
     ]);
   } catch {
     statements = null;
@@ -103,6 +129,7 @@ export default async function IncomeStatementPage({
               selectedId={selectedId}
               overrides={overrides}
               compareId={compareId}
+              compareMode={compareMode}
             />
             <PrintButton />
           </div>
@@ -113,9 +140,19 @@ export default async function IncomeStatementPage({
             <ExternalInputsBanner overrides={overrides} />
             <Report
               statement={statements.incomeStatement}
-              fyLabel={statements.fiscalYear.label}
+              fyLabel={
+                currentAsOf
+                  ? `${statements.fiscalYear.label} (YTD to ${currentAsOf.toISOString().slice(0, 10)})`
+                  : statements.fiscalYear.label
+              }
               compareStatement={compareStatements?.incomeStatement ?? null}
-              compareLabel={compareStatements?.fiscalYear.label ?? null}
+              compareLabel={
+                compareStatements
+                  ? compareAsOf
+                    ? `${compareStatements.fiscalYear.label} (YTD to ${compareAsOf.toISOString().slice(0, 10)})`
+                    : compareStatements.fiscalYear.label
+                  : null
+              }
             />
           </>
         ) : (
@@ -317,14 +354,16 @@ function FiscalYearPicker({
   selectedId,
   overrides,
   compareId,
+  compareMode,
 }: {
   years: Array<{ id: string; label: string }>;
   selectedId: string;
   overrides: StatementOverrides;
   compareId?: string;
+  compareMode: "year" | "period";
 }) {
   return (
-    <form action="" className="flex items-center gap-2">
+    <form action="" className="flex flex-wrap items-center gap-2">
       <label htmlFor="fy" className="text-xs uppercase tracking-wide text-zinc-500">
         Fiscal year
       </label>
@@ -350,6 +389,15 @@ function FiscalYearPicker({
         {years.filter((y) => y.id !== selectedId).map((y) => (
           <option key={y.id} value={y.id}>{y.label}</option>
         ))}
+      </select>
+      <select
+        name="cmode"
+        defaultValue={compareMode}
+        title="Year-wise = full FY P&L. Same period = YTD to the same days-into-FY offset."
+        className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+      >
+        <option value="year">Year-wise</option>
+        <option value="period">Same period</option>
       </select>
       {overrides.mgmtFeeTaxAtSource !== undefined && (
         <input type="hidden" name="mgmtFeeTax" value={overrides.mgmtFeeTaxAtSource} />
