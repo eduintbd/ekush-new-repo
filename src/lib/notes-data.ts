@@ -55,6 +55,7 @@ export type LatestTaxProvision = {
     INTEREST: number;
     DEFERRED: number;
     MGMT_FEE: number;
+    CORPORATE: number;
   };
   basesSnapshot: {
     capitalGainNet: number;
@@ -299,6 +300,7 @@ function coerceRatesSnapshot(raw: unknown): LatestTaxProvision["ratesSnapshot"] 
     INTEREST: n("INTEREST"),
     DEFERRED: n("DEFERRED"),
     MGMT_FEE: n("MGMT_FEE"),
+    CORPORATE: n("CORPORATE"),
   };
 }
 

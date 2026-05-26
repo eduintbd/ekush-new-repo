@@ -66,6 +66,10 @@ export type ExternalInputs = {
     INTEREST: number;
     DEFERRED: number;
     MGMT_FEE: number;
+    /** Corporate (business) income-tax rate — applied to regular
+     *  taxable income at AY assessment (mgmt-fee income, FDR
+     *  interest above the §49 withheld floor, etc.). */
+    CORPORATE: number;
   };
 };
 

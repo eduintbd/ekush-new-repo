@@ -90,6 +90,7 @@ async function main() {
       INTEREST: 0.10,
       DEFERRED: 0.15,
       MGMT_FEE: 0,
+      CORPORATE: 0.275,
     },
   };
   console.log(

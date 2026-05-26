@@ -29,18 +29,28 @@ type Search = {
 
 export const metadata = { title: "Tax Provision — Staff portal" };
 
-const RATE_TYPES = ["CAPITAL_GAIN", "DIVIDEND", "INTEREST", "DEFERRED"] as const;
+const RATE_TYPES = [
+  "CAPITAL_GAIN",
+  "DIVIDEND",
+  "INTEREST",
+  "DEFERRED",
+  "CORPORATE",
+] as const;
 const RATE_LABEL: Record<(typeof RATE_TYPES)[number], string> = {
   CAPITAL_GAIN: "Capital Gain",
   DIVIDEND: "Dividend Income",
   INTEREST: "Interest Income (SND / FDR)",
   DEFERRED: "Deferred Tax",
+  CORPORATE: "Corporate (Business) Income",
 };
 const RATE_HELP: Record<(typeof RATE_TYPES)[number], string> = {
   CAPITAL_GAIN: "Applied to net realised capital gain on listed securities.",
   DIVIDEND: "Withheld at source on gross dividend income; treated as final tax.",
-  INTEREST: "Withheld at source on SND / FDR interest; treated as final tax.",
+  INTEREST:
+    "Withheld at source on SND / FDR interest. NOT final for AMC — re-assessed at the corporate rate; TDS is credited as AIT.",
   DEFERRED: "Applied to change in unrealised fair-value gain/loss; offsets DTL.",
+  CORPORATE:
+    "Regular business income-tax rate applied to total taxable income at AY assessment. Default 27.5% non-listed / 22.5% listed (BD Finance Act).",
 };
 
 export default async function TaxProvisionPage({

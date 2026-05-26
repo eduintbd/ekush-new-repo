@@ -16,7 +16,14 @@ import { computeTaxProvision } from "@/lib/tax-provision";
 
 const ADMIN_PATH = "/admin/tax-provision";
 
-const RATE_TYPES = ["CAPITAL_GAIN", "DIVIDEND", "INTEREST", "DEFERRED", "MGMT_FEE"] as const;
+const RATE_TYPES = [
+  "CAPITAL_GAIN",
+  "DIVIDEND",
+  "INTEREST",
+  "DEFERRED",
+  "MGMT_FEE",
+  "CORPORATE",
+] as const;
 
 const RateRow = z.object({
   rateType: z.enum(RATE_TYPES),

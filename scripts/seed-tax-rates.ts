@@ -21,7 +21,13 @@ const prisma = new PrismaClient();
 
 type SeedRow = {
   jurisdiction: string;
-  rateType: "CAPITAL_GAIN" | "DIVIDEND" | "INTEREST" | "DEFERRED" | "MGMT_FEE";
+  rateType:
+    | "CAPITAL_GAIN"
+    | "DIVIDEND"
+    | "INTEREST"
+    | "DEFERRED"
+    | "MGMT_FEE"
+    | "CORPORATE";
   value: number;
   effectiveFrom: string;
   note: string;
@@ -55,6 +61,13 @@ const ROWS: SeedRow[] = [
     value: 0.15,
     effectiveFrom: "2024-07-01",
     note: "Deferred-tax rate on unrealised fair-value gains/losses; tracks the capital-gain rate.",
+  },
+  {
+    jurisdiction: "BD",
+    rateType: "CORPORATE",
+    value: 0.275,
+    effectiveFrom: "2024-07-01",
+    note: "BD Finance Act 2024 — non-listed company income-tax rate (27.5%). Listed companies use 22.5%; edit the row if EWML lists.",
   },
 ];
 

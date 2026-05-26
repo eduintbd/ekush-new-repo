@@ -16,7 +16,8 @@ export type TaxRateType =
   | "DIVIDEND"
   | "INTEREST"
   | "DEFERRED"
-  | "MGMT_FEE";
+  | "MGMT_FEE"
+  | "CORPORATE";
 
 /** BD statutory defaults at the time of writing — see
  *  Finance Act 2024 §82C / §54 / §49 references. The DB is the source
@@ -30,6 +31,11 @@ export const DEFAULT_RATES: Record<TaxRateType, number> = {
   // (varies by client). Stored as 0 here and entered as an amount
   // on the admin card.
   MGMT_FEE: 0,
+  // Corporate (business) income-tax rate on regular taxable income at
+  // AY assessment. AMC mgmt-fee income, FDR interest above the §49
+  // withheld floor, etc. flow through this rate. BD non-listed
+  // company default: 27.5%; listed company: 22.5%.
+  CORPORATE: 0.275,
 };
 
 export type TaxRates = Record<TaxRateType, number>;
@@ -81,5 +87,6 @@ export async function getTaxRatesAt(
     INTEREST: byType.get("INTEREST") ?? DEFAULT_RATES.INTEREST,
     DEFERRED: byType.get("DEFERRED") ?? DEFAULT_RATES.DEFERRED,
     MGMT_FEE: byType.get("MGMT_FEE") ?? DEFAULT_RATES.MGMT_FEE,
+    CORPORATE: byType.get("CORPORATE") ?? DEFAULT_RATES.CORPORATE,
   };
 }

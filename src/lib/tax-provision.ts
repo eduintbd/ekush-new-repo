@@ -286,7 +286,7 @@ export async function computeTaxProvision(
 }
 
 async function checkRatesEffective(periodStart: Date): Promise<SanityCheckResult> {
-  const types = ["CAPITAL_GAIN", "DIVIDEND", "INTEREST", "DEFERRED"] as const;
+  const types = ["CAPITAL_GAIN", "DIVIDEND", "INTEREST", "DEFERRED", "CORPORATE"] as const;
   const missing: string[] = [];
   for (const t of types) {
     const row = await prisma.taxRate.findFirst({
