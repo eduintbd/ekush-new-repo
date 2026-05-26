@@ -19,8 +19,11 @@ import { formatBdt } from "@/lib/format";
 import { PrintButton } from "@/components/print-button";
 import {
   getCashFlowStatement,
+  getNonCashTransactions,
   type CashFlowStatement,
   type CfsActivity,
+  type NonCashSection,
+  type NonCashTransaction,
 } from "@/lib/cash-flow-statement";
 
 type Search = { fy?: string; from?: string; to?: string };
@@ -56,6 +59,7 @@ export default async function CashFlowStatementPage({
   const toDate = sp.to ? new Date(sp.to) : fy.endsOn;
 
   const cfs = await getCashFlowStatement(fy.id, fromDate, toDate);
+  const nonCash = await getNonCashTransactions(fy.id, fromDate, toDate);
 
   return (
     <Shell>
@@ -175,7 +179,125 @@ export default async function CashFlowStatementPage({
           </div>
         </div>
       )}
+
+      <NonCashDisclosure section={nonCash} />
     </Shell>
+  );
+}
+
+function NonCashDisclosure({ section }: { section: NonCashSection }) {
+  const noMaterial =
+    section.marginLoanFundedAcquisitions.length === 0 &&
+    section.brokerSettledDisposals.length === 0;
+
+  return (
+    <div className="mt-8 rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
+        <h2 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">
+          Note · Non-cash investing &amp; financing transactions (IAS 7.43)
+        </h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          Material transactions that did not require the use of cash or
+          cash equivalents and are therefore excluded from the statement
+          above. Disclosed for the user&apos;s understanding of investing
+          and financing activity in the period.
+        </p>
+      </div>
+
+      {noMaterial ? (
+        <p className="px-5 py-4 text-sm italic text-zinc-500">
+          No material non-cash investing or financing transactions in
+          the period.
+        </p>
+      ) : (
+        <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+          {section.marginLoanFundedAcquisitions.length > 0 && (
+            <NonCashGroup
+              title="Acquisitions of investments funded by borrowings"
+              note="Margin loan / broker liability increased to fund a share purchase; no bank account involved."
+              txns={section.marginLoanFundedAcquisitions}
+              total={section.totals.marginLoanFunded}
+            />
+          )}
+          {section.brokerSettledDisposals.length > 0 && (
+            <NonCashGroup
+              title="Disposals settled through broker accounts (P&L recognised, no cash leg)"
+              note="Share sales whose proceeds remained parked at the broker; realised gain or loss was recognised but no cash hit the bank in this voucher."
+              txns={section.brokerSettledDisposals}
+              total={section.totals.brokerSettledNet}
+            />
+          )}
+        </div>
+      )}
+
+      {section.internalReallocations.length > 0 && (
+        <details className="border-t border-zinc-200 px-5 py-3 text-xs dark:border-zinc-800">
+          <summary className="cursor-pointer text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
+            Plus {section.internalReallocations.length} reallocation
+            voucher{section.internalReallocations.length === 1 ? "" : "s"}{" "}
+            between investment / broker accounts —{" "}
+            {formatBdt(section.totals.internalReallocation)} aggregate Dr
+            volume (not material per IAS 7.43)
+          </summary>
+          <ul className="mt-2 space-y-0.5 text-zinc-500">
+            {section.internalReallocations.slice(0, 20).map((t) => (
+              <li key={t.voucherNo ?? Math.random()} className="font-mono">
+                {t.date.toISOString().slice(0, 10)} · {t.voucherNo ?? "—"} ·{" "}
+                {formatBdt(t.amount)} ·{" "}
+                <span className="font-sans">{t.accounts.join(" / ")}</span>
+              </li>
+            ))}
+            {section.internalReallocations.length > 20 && (
+              <li className="italic">
+                … {section.internalReallocations.length - 20} more
+              </li>
+            )}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function NonCashGroup({
+  title,
+  note,
+  txns,
+  total,
+}: {
+  title: string;
+  note: string;
+  txns: NonCashTransaction[];
+  total: number;
+}) {
+  return (
+    <div className="px-5 py-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+          {title}
+        </h3>
+        <span className="font-mono text-sm tabular-nums text-zinc-700 dark:text-zinc-300">
+          {formatBdt(total)}
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-zinc-500">{note}</p>
+      <ul className="mt-2 space-y-0.5 text-xs">
+        {txns.map((t) => (
+          <li
+            key={t.voucherNo ?? Math.random()}
+            className="flex flex-wrap items-baseline justify-between gap-2"
+          >
+            <span className="font-mono text-zinc-600 dark:text-zinc-400">
+              {t.date.toISOString().slice(0, 10)} · {t.voucherNo ?? "—"}
+            </span>
+            <span className="text-zinc-500">{t.accounts.join(" + ")}</span>
+            <span className="font-mono tabular-nums text-zinc-700 dark:text-zinc-300">
+              {formatBdt(t.amount)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

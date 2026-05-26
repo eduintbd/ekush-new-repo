@@ -167,6 +167,7 @@ export function classifyAccount(
   if (
     /^Share Capital/i.test(n) ||
     /^Retained Earning/i.test(n) ||
+    /^Fair Value Reserve/i.test(n) ||
     /^Margin Loan/i.test(n) ||
     /^Short Term Loan/i.test(n) ||
     /^IPDC Finance Limited \(Loan\)/i.test(n) ||
@@ -414,6 +415,158 @@ export async function getCashFlowStatement(
       netChange,
     },
   };
+}
+
+// ─── Non-cash investing & financing disclosure (IAS 7.43) ────────
+
+export type NonCashTransaction = {
+  voucherNo: string | null;
+  date: Date;
+  /** Net amount on the investing side (Dr = acquisition, Cr = disposal). */
+  amount: number;
+  /** Short human description built from the counterparty pair. */
+  description: string;
+  /** Account names touched (for drill-down). */
+  accounts: string[];
+};
+
+export type NonCashSection = {
+  /** Material category: margin-loan-funded investment acquisitions. */
+  marginLoanFundedAcquisitions: NonCashTransaction[];
+  /** Disposals settled through broker accounts (no cash leg) where
+   *  realised G/L was recognised — disclosed for transparency. */
+  brokerSettledDisposals: NonCashTransaction[];
+  /** Pure reallocations between broker / investment accounts (not
+   *  considered material per IAS 7.43 but shown collapsed). */
+  internalReallocations: NonCashTransaction[];
+  totals: {
+    marginLoanFunded: number;
+    brokerSettledNet: number;
+    internalReallocation: number;
+  };
+};
+
+export async function getNonCashTransactions(
+  fiscalYearId: string,
+  fromDate: Date,
+  toDate: Date,
+): Promise<NonCashSection> {
+  const cashNames = await getCashAccountNames();
+
+  // Pull every batch's lines in the period, skipping OB.
+  const allLines = await prisma.journal.findMany({
+    where: {
+      fiscalYearId,
+      entryDate: { gte: fromDate, lte: toDate },
+      NOT: { voucherNo: { startsWith: "OB/" } },
+    },
+    select: {
+      batchId: true,
+      voucherNo: true,
+      entryDate: true,
+      accountName: true,
+      debit: true,
+      credit: true,
+    },
+  });
+
+  const byBatch = new Map<
+    string,
+    Array<{
+      voucherNo: string | null;
+      date: Date;
+      accountName: string;
+      debit: number;
+      credit: number;
+    }>
+  >();
+  for (const r of allLines) {
+    if (!r.batchId) continue;
+    const arr = byBatch.get(r.batchId) ?? [];
+    arr.push({
+      voucherNo: r.voucherNo,
+      date: r.entryDate,
+      accountName: r.accountName,
+      debit: Number(r.debit),
+      credit: Number(r.credit),
+    });
+    byBatch.set(r.batchId, arr);
+  }
+
+  const section: NonCashSection = {
+    marginLoanFundedAcquisitions: [],
+    brokerSettledDisposals: [],
+    internalReallocations: [],
+    totals: {
+      marginLoanFunded: 0,
+      brokerSettledNet: 0,
+      internalReallocation: 0,
+    },
+  };
+
+  for (const [, rows] of byBatch) {
+    if (rows.some((r) => cashNames.has(r.accountName))) continue; // has cash leg → already in CFS
+    const acts = new Set(
+      rows.map((r) => classifyAccount(r.accountName).activity),
+    );
+    const grossAmount =
+      rows.reduce((s, r) => s + r.debit, 0) / 1; // total Dr side (= Cr side for balanced vouchers)
+    const voucherNo = rows[0].voucherNo;
+    const date = rows[0].date;
+    const accounts = Array.from(new Set(rows.map((r) => r.accountName)));
+
+    if (acts.has("INVESTING") && acts.has("FINANCING")) {
+      // Investing acquisition funded by a financing source (most often
+      // margin loan: Dr Investment / Cr Margin Loan From Broker).
+      section.marginLoanFundedAcquisitions.push({
+        voucherNo,
+        date,
+        amount: grossAmount,
+        description: `Acquisition funded by ${
+          accounts.find((n) =>
+            classifyAccount(n).activity === "FINANCING",
+          ) ?? "borrowings"
+        }`,
+        accounts,
+      });
+      section.totals.marginLoanFunded += grossAmount;
+    } else if (acts.has("INVESTING") && acts.has("OPERATING")) {
+      // Investment movements where realised G/L (operating) was recognised
+      // without a cash leg — typically a sale settled inside the broker
+      // account where the proceeds stay parked.
+      section.brokerSettledDisposals.push({
+        voucherNo,
+        date,
+        amount: grossAmount,
+        description: `Disposal / acquisition with P&L recognition (no cash leg)`,
+        accounts,
+      });
+      section.totals.brokerSettledNet += grossAmount;
+    } else if (acts.size === 1 && acts.has("INVESTING")) {
+      // Pure reclassification between broker accounts and investment
+      // sub-ledger entries. Not material under IAS 7.43 but disclosed
+      // for completeness.
+      section.internalReallocations.push({
+        voucherNo,
+        date,
+        amount: grossAmount,
+        description: `Reallocation among investment / broker accounts`,
+        accounts,
+      });
+      section.totals.internalReallocation += grossAmount;
+    }
+  }
+
+  // Sort each list by date desc for display.
+  for (const arr of [
+    section.marginLoanFundedAcquisitions,
+    section.brokerSettledDisposals,
+    section.internalReallocations,
+  ]) {
+    arr.sort((a, b) => b.date.getTime() - a.date.getTime());
+  }
+
+  return section;
 }
 
 function emptyStatement(
