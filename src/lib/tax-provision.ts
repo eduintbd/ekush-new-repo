@@ -205,9 +205,22 @@ export async function computeTaxProvision(
   // 5. Deferred tax
   const deferredTax = round2(fairValueChange * taxRates.DEFERRED);
 
-  // 6. Reconciliation vs journaled accruals
-  const journaledCurrentTax = netC(ACCT.PROVISION_INCOME_TAX);
-  const journaledDeferredTax = netC(ACCT.DEFERRED_TAX);
+  // 6. Reconciliation vs journaled accruals.
+  // Period accrual = (total activity) − (OB carryforward) − (our own
+  // TX top-ups). Computed by subtraction rather than a `NOT IN`
+  // filter because Postgres `NOT IN ('OB','TX')` excludes rows where
+  // txnType IS NULL (e.g. plain manual JVs entered without a
+  // txnType), which would understate the real period accrual.
+  // Without this fix the engine reads the 19.87L FY24-25 OB Cr as
+  // "already provided" current tax and posts a reversal.
+  const journaledCurrentTax = await periodNetCredit(
+    fiscalYearId,
+    ACCT.PROVISION_INCOME_TAX,
+  );
+  const journaledDeferredTax = await periodNetCredit(
+    fiscalYearId,
+    ACCT.DEFERRED_TAX,
+  );
   const varianceCurrent = round2(currentTax.total - journaledCurrentTax);
   const varianceDeferred = round2(deferredTax - journaledDeferredTax);
   const materialityPct = overrides.materialityPct ?? 0.01;
@@ -346,6 +359,38 @@ export async function getProvisionHistory(
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Net credit balance for the period, excluding OB carryforward and
+ *  our own TX top-ups. Uses subtraction rather than a NOT IN filter to
+ *  correctly count rows whose txnType IS NULL. */
+async function periodNetCredit(
+  fiscalYearId: string,
+  accountName: string,
+): Promise<number> {
+  const [total, ob, tx] = await Promise.all([
+    prisma.journal.aggregate({
+      where: { fiscalYearId, accountName },
+      _sum: { debit: true, credit: true },
+    }),
+    prisma.journal.aggregate({
+      where: { fiscalYearId, accountName, txnType: "OB" },
+      _sum: { debit: true, credit: true },
+    }),
+    prisma.journal.aggregate({
+      where: { fiscalYearId, accountName, txnType: "TX" },
+      _sum: { debit: true, credit: true },
+    }),
+  ]);
+  const dr =
+    Number(total._sum.debit ?? 0) -
+    Number(ob._sum.debit ?? 0) -
+    Number(tx._sum.debit ?? 0);
+  const cr =
+    Number(total._sum.credit ?? 0) -
+    Number(ob._sum.credit ?? 0) -
+    Number(tx._sum.credit ?? 0);
+  return Math.max(0, cr - dr);
 }
 
 function fmt(n: number): string {
