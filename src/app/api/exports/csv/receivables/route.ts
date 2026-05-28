@@ -18,14 +18,13 @@ export async function GET(req: NextRequest) {
   const lines = await prisma.journal.findMany({
     where: { accountName, entryDate: { lte: asOf } },
     orderBy: [{ entryDate: "asc" }, { createdAt: "asc" }],
-    select: { id: true, entryDate: true, description: true, debit: true, credit: true, fundCode: true, voucherNo: true },
+    select: { id: true, entryDate: true, description: true, debit: true, credit: true, voucherNo: true },
   });
 
   type Open = {
     id: string;
     entryDate: Date;
     description: string | null;
-    fundCode: string | null;
     voucherNo: string | null;
     original: number;
     remaining: number;
@@ -34,7 +33,7 @@ export async function GET(req: NextRequest) {
   for (const l of lines) {
     const d = Number(l.debit);
     const c = Number(l.credit);
-    if (d > 0) queue.push({ id: l.id, entryDate: l.entryDate, description: l.description, fundCode: l.fundCode, voucherNo: l.voucherNo, original: d, remaining: d });
+    if (d > 0) queue.push({ id: l.id, entryDate: l.entryDate, description: l.description, voucherNo: l.voucherNo, original: d, remaining: d });
     else if (c > 0) {
       let toSettle = c;
       for (const i of queue) {
@@ -55,7 +54,6 @@ export async function GET(req: NextRequest) {
     return {
       Date: i.entryDate.toISOString().slice(0, 10),
       Voucher: i.voucherNo ?? "",
-      Fund: i.fundCode ?? "",
       Description: i.description ?? "",
       "Original (Dr)": i.original,
       Outstanding: i.remaining,

@@ -70,8 +70,6 @@ export default async function VoucherPage({
             <Row label="Date" value={head.entryDate.toISOString().slice(0, 10)} mono />
             <Row label="Type" value={head.txnType ?? "JV"} />
             <Row label="Fiscal year" value={head.fiscalYear.label} />
-            {head.fundCode && <Row label="Fund" value={head.fundCode} />}
-            {head.investorCode && <Row label="Investor" value={head.investorCode} mono />}
             {head.instrumentCode && <Row label="Instrument" value={head.instrumentCode} mono />}
             {head.challanNo && <Row label="Challan #" value={head.challanNo} mono />}
           </dl>

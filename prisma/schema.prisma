@@ -637,11 +637,10 @@ model Journal {
   credit         Decimal  @default(0) @db.Decimal(18, 2)
   fiscalYearId   String   @map("fiscal_year_id") @db.Uuid
   batchId        String?  @map("batch_id") @db.Uuid
-  investorCode   String?  @map("investor_code")
   agentId        String?  @map("agent_id") @db.Uuid
-  fundCode       String?  @map("fund_code") // 'EFUF','EGF','ESRF'
   /// Stock ticker for dividend lines (Note 19.01) or bank-account code for
   /// interest-income lines (Note 20). Free-form; the note builder groups by it.
+  /// Auto-stamped by the trade engine + portfolio FVA revaluation.
   instrumentCode String?  @map("instrument_code")
   /// NBR challan reference for AIT/TDS entries. Populated on mgmt-fee
   /// receipt vouchers where the fund withholds TDS on EWML's behalf —

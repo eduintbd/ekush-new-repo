@@ -18,7 +18,6 @@ export async function GET(req: NextRequest) {
   const where: Prisma.JournalWhereInput = {
     fiscalYearId: fyId,
     ...(sp.get("account") ? { accountName: { contains: sp.get("account")!, mode: "insensitive" } } : {}),
-    ...(sp.get("fund") ? { fundCode: sp.get("fund")! } : {}),
     ...(sp.get("txnType") ? { txnType: sp.get("txnType")! } : {}),
     ...(sp.get("q") ? { description: { contains: sp.get("q")!, mode: "insensitive" } } : {}),
     ...(sp.get("voucher") ? { voucherNo: { contains: sp.get("voucher")!, mode: "insensitive" } } : {}),
@@ -43,8 +42,6 @@ export async function GET(req: NextRequest) {
     Type: j.txnType ?? "",
     Account: j.accountName,
     Description: j.description ?? "",
-    Fund: j.fundCode ?? "",
-    Investor: j.investorCode ?? "",
     Instrument: j.instrumentCode ?? "",
     Debit: Number(j.debit),
     Credit: Number(j.credit),

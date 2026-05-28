@@ -88,7 +88,7 @@ export default async function CashFlowPage({
       accountName: { in: Array.from(cashNames) },
       entryDate: { gte: fromDate, lte: toDate },
     },
-    select: { id: true, entryDate: true, batchId: true, accountName: true, debit: true, credit: true, description: true, fundCode: true },
+    select: { id: true, entryDate: true, batchId: true, accountName: true, debit: true, credit: true, description: true },
     take: 5000,
   });
 

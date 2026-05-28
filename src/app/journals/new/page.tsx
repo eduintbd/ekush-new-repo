@@ -57,21 +57,8 @@ export default async function NewJournalPage({
               ))}
             </SelectField>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Txn type" name="txnType" defaultValue="j" />
-            <Field
-              label="Fund (required for mgmt-fee / Source Tax lines)"
-              name="fundCode"
-              placeholder="EFUF, EGF, ESRF"
-            />
-            <Field label="Investor (optional)" name="investorCode" />
-            <Field
-              label="Instrument (optional)"
-              name="instrumentCode"
-              placeholder="BRACBANK, BATBC, …"
-            />
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Description" name="description" />
             <Field
               label="Challan ref (NBR — for mgmt-fee TDS / AIT)"

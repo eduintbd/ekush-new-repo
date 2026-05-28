@@ -74,10 +74,9 @@ export type NotesData = {
   /** Sum of `sharesHeld` across active shareholders. 0 if none recorded. */
   totalSharesIssued: number;
   employeeDisclosure: EmployeeDisclosureData | null;
-  /** Sum keyed by `fundCode` for Note 16 / 17 etc. */
-  fundManagementFees: Map<string, number>;
-  fundCapitalGains: Map<string, number>;
-  /** Per-instrument breakdown for Notes 19.01 / 20. */
+  /** Per-instrument breakdown for Notes 19.01 / 20. Keyed by
+   *  `instrumentCode`, which the trade engine + FVA revaluation stamp
+   *  on dividend / interest journal lines. */
   dividendByInstrument: Map<string, number>;
   interestByInstrument: Map<string, number>;
   /** Latest POSTED TaxProvision for the FY; null if none posted yet. */
@@ -90,8 +89,6 @@ const EMPTY: NotesData = {
   shareholders: [],
   totalSharesIssued: 0,
   employeeDisclosure: null,
-  fundManagementFees: new Map(),
-  fundCapitalGains: new Map(),
   dividendByInstrument: new Map(),
   interestByInstrument: new Map(),
   latestTaxProvision: null,
@@ -104,9 +101,6 @@ export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
     depreciations,
     shareholderRows,
     employee,
-    mgmtFee,
-    capitalGainCr,
-    capitalLossDr,
     dividend,
     interestFdr,
     interestSnd,
@@ -132,27 +126,6 @@ export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
       }),
     ),
     safe(() => prisma.employeeDisclosure.findUnique({ where: { fiscalYearId } })),
-    safe(() =>
-      prisma.journal.groupBy({
-        by: ["fundCode"],
-        where: { fiscalYearId, accountName: "Management Fee" },
-        _sum: { debit: true, credit: true },
-      }),
-    ),
-    safe(() =>
-      prisma.journal.groupBy({
-        by: ["fundCode"],
-        where: { fiscalYearId, accountName: "Capital Gain" },
-        _sum: { credit: true },
-      }),
-    ),
-    safe(() =>
-      prisma.journal.groupBy({
-        by: ["fundCode"],
-        where: { fiscalYearId, accountName: "Capital Loss" },
-        _sum: { debit: true },
-      }),
-    ),
     safe(() =>
       prisma.journal.groupBy({
         by: ["instrumentCode"],
@@ -226,23 +199,6 @@ export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
       }
     : null;
 
-  const fundManagementFees = new Map<string, number>();
-  for (const row of mgmtFee ?? []) {
-    const key = row.fundCode ?? "(unspecified)";
-    const net = Number(row._sum.credit ?? 0) - Number(row._sum.debit ?? 0);
-    fundManagementFees.set(key, (fundManagementFees.get(key) ?? 0) + net);
-  }
-
-  const fundCapitalGains = new Map<string, number>();
-  for (const row of capitalGainCr ?? []) {
-    const key = row.fundCode ?? "(unspecified)";
-    fundCapitalGains.set(key, (fundCapitalGains.get(key) ?? 0) + Number(row._sum.credit ?? 0));
-  }
-  for (const row of capitalLossDr ?? []) {
-    const key = row.fundCode ?? "(unspecified)";
-    fundCapitalGains.set(key, (fundCapitalGains.get(key) ?? 0) - Number(row._sum.debit ?? 0));
-  }
-
   const dividendByInstrument = new Map<string, number>();
   for (const row of dividend ?? []) {
     const key = row.instrumentCode ?? "(unspecified)";
@@ -282,8 +238,6 @@ export async function getNotesData(fiscalYearId: string): Promise<NotesData> {
     shareholders,
     totalSharesIssued,
     employeeDisclosure,
-    fundManagementFees,
-    fundCapitalGains,
     dividendByInstrument,
     interestByInstrument,
     latestTaxProvision,

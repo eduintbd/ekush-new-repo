@@ -60,7 +60,6 @@ export async function GET(
     Voucher: string;
     Type: string;
     Description: string;
-    Fund: string;
     Instrument: string;
     Debit: number | string;
     Credit: number | string;
@@ -75,7 +74,6 @@ export async function GET(
       Voucher: "",
       Type: "OB",
       Description: obDescr,
-      Fund: "",
       Instrument: instrumentFilter ?? "",
       Debit: "",
       Credit: "",
@@ -91,7 +89,6 @@ export async function GET(
       Voucher: j.voucherNo ?? "",
       Type: j.txnType ?? "",
       Description: j.description ?? "",
-      Fund: j.fundCode ?? "",
       Instrument: j.instrumentCode ?? "",
       Debit: d > 0 ? d : "",
       Credit: c > 0 ? c : "",

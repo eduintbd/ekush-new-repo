@@ -94,7 +94,6 @@ export default async function DayBookPage({
     voucherNo: string | null;
     txnType: string | null;
     description: string | null;
-    fundCode: string | null;
     lines: Line[];
     debit: number;
     credit: number;
@@ -117,7 +116,6 @@ export default async function DayBookPage({
         voucherNo: l.voucherNo,
         txnType: l.txnType,
         description: l.description,
-        fundCode: l.fundCode,
         lines: [],
         debit: 0,
         credit: 0,
@@ -217,7 +215,7 @@ export default async function DayBookPage({
   );
 }
 
-function DayBlock({ day, canMutate, fyId }: { day: { date: string; batches: { batchId: string | null; voucherNo: string | null; txnType: string | null; description: string | null; fundCode: string | null; lines: { id: string; accountName: string; debit: unknown; credit: unknown; instrumentCode: string | null }[]; debit: number; credit: number }[]; debit: number; credit: number; voucherCount: number }; canMutate: boolean; fyId: string }) {
+function DayBlock({ day, canMutate, fyId }: { day: { date: string; batches: { batchId: string | null; voucherNo: string | null; txnType: string | null; description: string | null; lines: { id: string; accountName: string; debit: unknown; credit: unknown; instrumentCode: string | null }[]; debit: number; credit: number }[]; debit: number; credit: number; voucherCount: number }; canMutate: boolean; fyId: string }) {
   return (
     <section>
       <header className="flex items-end justify-between border-b border-zinc-200 pb-2 dark:border-zinc-800">
@@ -253,11 +251,6 @@ function DayBlock({ day, canMutate, fyId }: { day: { date: string; batches: { ba
                 <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium uppercase text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                   {b.txnType ?? "j"}
                 </span>
-                {b.fundCode && (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                    {b.fundCode}
-                  </span>
-                )}
                 <span className="text-zinc-600 dark:text-zinc-400">{b.description ?? "—"}</span>
               </div>
               <div className="flex items-center gap-2">

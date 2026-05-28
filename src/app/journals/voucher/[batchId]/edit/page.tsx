@@ -105,27 +105,8 @@ export default async function EditJournalPage({
               ))}
             </SelectField>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Txn type" name="txnType" defaultValue={head.txnType ?? "j"} />
-            <Field
-              label="Fund (required for mgmt-fee / Source Tax lines)"
-              name="fundCode"
-              placeholder="EFUF, EGF, ESRF"
-              defaultValue={head.fundCode ?? ""}
-            />
-            <Field
-              label="Investor (optional)"
-              name="investorCode"
-              defaultValue={head.investorCode ?? ""}
-            />
-            <Field
-              label="Instrument (optional)"
-              name="instrumentCode"
-              placeholder="BRACBANK, BATBC, …"
-              defaultValue={head.instrumentCode ?? ""}
-            />
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field
               label="Description"
               name="description"

@@ -42,7 +42,7 @@ export default async function ReceivablesPage({
   const lines = await prisma.journal.findMany({
     where: { accountName: selectedAccount, entryDate: { lte: asOf } },
     orderBy: [{ entryDate: "asc" }, { createdAt: "asc" }],
-    select: { id: true, entryDate: true, description: true, debit: true, credit: true, fundCode: true, voucherNo: true },
+    select: { id: true, entryDate: true, description: true, debit: true, credit: true, voucherNo: true },
   });
 
   // FIFO settlement: each debit creates an outstanding receivable. Each
@@ -51,7 +51,6 @@ export default async function ReceivablesPage({
     id: string;
     entryDate: Date;
     description: string | null;
-    fundCode: string | null;
     voucherNo: string | null;
     original: number;
     remaining: number;
@@ -65,7 +64,6 @@ export default async function ReceivablesPage({
         id: l.id,
         entryDate: l.entryDate,
         description: l.description,
-        fundCode: l.fundCode,
         voucherNo: l.voucherNo,
         original: d,
         remaining: d,
@@ -100,14 +98,6 @@ export default async function ReceivablesPage({
     b.total += item.remaining;
     b.items.push(item);
   }
-
-  // Per-fund summary
-  const byFund = new Map<string, number>();
-  for (const item of open) {
-    const k = item.fundCode ?? "(unfunded)";
-    byFund.set(k, (byFund.get(k) ?? 0) + item.remaining);
-  }
-  const fundRows = Array.from(byFund.entries()).sort((a, b) => b[1] - a[1]);
 
   const totalOpen = open.reduce((s, i) => s + i.remaining, 0);
 
@@ -183,23 +173,6 @@ export default async function ReceivablesPage({
           ))}
         </div>
 
-        {/* Per-fund split */}
-        {fundRows.length > 0 && (
-          <section className="mt-6">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">By fund</h2>
-            <div className="mt-2 grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              {fundRows.map(([fund, amt]) => (
-                <div key={fund} className="flex items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-                    {fund}
-                  </span>
-                  <span className="font-mono text-xs tabular-nums">{formatBdt(amt)}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
         {/* Detail by bucket */}
         <section className="mt-8 space-y-4">
           {buckets.filter((b) => b.items.length > 0).map((b) => (
@@ -217,7 +190,6 @@ export default async function ReceivablesPage({
                   <tr>
                     <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Date</th>
                     <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Voucher</th>
-                    <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Fund</th>
                     <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Description</th>
                     <th className="px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Original</th>
                     <th className="px-4 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Outstanding</th>
@@ -231,7 +203,6 @@ export default async function ReceivablesPage({
                       <tr key={item.id}>
                         <td className="px-4 py-1.5 whitespace-nowrap">{item.entryDate.toISOString().slice(0, 10)}</td>
                         <td className="px-4 py-1.5 font-mono text-[10px] text-zinc-500">{item.voucherNo ?? "—"}</td>
-                        <td className="px-4 py-1.5 text-[10px]">{item.fundCode ?? "—"}</td>
                         <td className="px-4 py-1.5 text-zinc-600 dark:text-zinc-400">{item.description ?? "—"}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{formatBdt(item.original)}</td>
                         <td className="px-4 py-1.5 text-right font-medium tabular-nums">{formatBdt(item.remaining)}</td>

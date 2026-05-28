@@ -490,62 +490,25 @@ function note15_01_pfRollforward({ tb, data }: NotesContext): Note {
   };
 }
 
-function note16_managementFees({ tb, data }: NotesContext): Note {
+function note16_managementFees({ tb }: NotesContext): Note {
+  // Per-fund split is maintained manually in the workbook; the live
+  // note shows the authoritative TB total.
   const total = netC(tb, ACCOUNT.managementFee);
-  const splits = data.fundManagementFees;
-  const rows: NoteRow[] = [];
-  // Standard fund order
-  for (const [code, label] of [
-    ["EFUF", "Ekush First Unit Fund"],
-    ["EGF", "Ekush Growth Fund"],
-    ["ESRF", "Ekush Stable Return Fund"],
-  ] as const) {
-    rows.push({ label, amount: splits.has(code) ? splits.get(code) : undefined });
-  }
-  // Any other fundCodes present in journals
-  for (const [code, amount] of splits) {
-    if (code === "EFUF" || code === "EGF" || code === "ESRF") continue;
-    rows.push({ label: `Fund: ${code}`, amount });
-  }
-  rows.push({ label: "Total Management Fee (from TB)", amount: total, subtotal: true });
   return {
     number: "16.00",
     title: "Management Fees",
-    rows,
+    rows: [{ label: "Total Management Fee (from TB)", amount: total, subtotal: true }],
     total,
-    needsInputs:
-      splits.size === 0
-        ? ["Set `fundCode` on management-fee journal lines (EFUF / EGF / ESRF)"]
-        : undefined,
   };
 }
 
-function note17_capitalGainLoss({ tb, data }: NotesContext): Note {
+function note17_capitalGainLoss({ tb }: NotesContext): Note {
   const total = grossC(tb, ACCOUNT.capitalGain) - grossD(tb, ACCOUNT.capitalLoss);
-  const splits = data.fundCapitalGains;
-  const rows: NoteRow[] = [];
-  for (const [code, label] of [
-    ["EFUF", "Ekush First Unit Fund"],
-    ["EGF", "Ekush Growth Fund"],
-    ["ESRF", "Ekush Stable Return Fund"],
-    ["LISTED", "Listed Securities"],
-  ] as const) {
-    rows.push({ label, amount: splits.has(code) ? splits.get(code) : undefined });
-  }
-  for (const [code, amount] of splits) {
-    if (["EFUF", "EGF", "ESRF", "LISTED"].includes(code)) continue;
-    rows.push({ label: `Fund: ${code}`, amount });
-  }
-  rows.push({ label: "Total Capital Gain (from TB)", amount: total, subtotal: true });
   return {
     number: "17.00",
     title: "Capital Gain/(Loss)",
-    rows,
+    rows: [{ label: "Total Capital Gain (from TB)", amount: total, subtotal: true }],
     total,
-    needsInputs:
-      splits.size === 0
-        ? ["Set `fundCode` on capital-gain / capital-loss journal lines"]
-        : undefined,
   };
 }
 

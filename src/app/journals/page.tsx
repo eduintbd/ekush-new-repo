@@ -16,7 +16,6 @@ type Search = {
   from?: string;
   to?: string;
   account?: string;
-  fund?: string;
   txnType?: string;
   q?: string;
   voucher?: string;
@@ -28,7 +27,6 @@ type Search = {
 };
 
 const PAGE_SIZE = 50;
-const FUND_CODES = ["", "EFUF", "EGF", "ESRF"];
 const TXN_TYPES = ["", "j", "OB", "c"];
 
 export const metadata = { title: "Journals — Staff portal" };
@@ -52,7 +50,6 @@ export default async function JournalsPage({
     ? {
         fiscalYearId: fyId,
         ...(sp.account ? { accountName: { contains: sp.account, mode: "insensitive" } } : {}),
-        ...(sp.fund ? { fundCode: sp.fund } : {}),
         ...(sp.txnType ? { txnType: sp.txnType } : {}),
         ...(sp.q ? { description: { contains: sp.q, mode: "insensitive" } } : {}),
         ...(sp.voucher
@@ -90,7 +87,7 @@ export default async function JournalsPage({
   const sumDebit = Number(sums._sum.debit ?? 0);
   const sumCredit = Number(sums._sum.credit ?? 0);
   const hasFilters = Boolean(
-    sp.account || sp.fund || sp.txnType || sp.q || sp.voucher || sp.from || sp.to,
+    sp.account || sp.txnType || sp.q || sp.voucher || sp.from || sp.to,
   );
 
   return (
@@ -184,20 +181,6 @@ export default async function JournalsPage({
             />
           </label>
           <label className="block">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">Fund</span>
-            <select
-              name="fund"
-              defaultValue={sp.fund ?? ""}
-              className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
-            >
-              {FUND_CODES.map((f) => (
-                <option key={f || "any"} value={f}>
-                  {f || "any"}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">Type</span>
             <select
               name="txnType"
@@ -265,7 +248,6 @@ export default async function JournalsPage({
                     <Th>Type</Th>
                     <Th>Account</Th>
                     <Th>Description</Th>
-                    <Th>Fund</Th>
                     <Th>Instrument</Th>
                     <Th align="right">Debit</Th>
                     <Th align="right">Credit</Th>
@@ -298,7 +280,6 @@ export default async function JournalsPage({
                         </Link>
                       </Td>
                       <Td className="text-zinc-600 dark:text-zinc-400">{j.description ?? "—"}</Td>
-                      <Td className="text-xs text-zinc-500">{j.fundCode ?? "—"}</Td>
                       <Td>
                         {j.instrumentCode ? (
                           <Link
@@ -318,7 +299,7 @@ export default async function JournalsPage({
                 </tbody>
                 <tfoot className="bg-zinc-50 dark:bg-zinc-950">
                   <tr className="font-semibold">
-                    <Td colSpan={7}>Page totals</Td>
+                    <Td colSpan={6}>Page totals</Td>
                     <Td align="right">
                       {formatBdt(
                         lines.reduce((s, j) => s + Number(j.debit), 0),
