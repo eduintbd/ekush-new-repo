@@ -261,14 +261,23 @@ export async function postTaxProvision(formData: FormData): Promise<void> {
   let voucherNo = "";
   let provisionId = "";
 
+  // Date the entry on the posting day so the Day Book reads
+  // chronologically (no future-dated rows for an interim posting),
+  // clamped to the FY range. A year-end-closing post (after FY end)
+  // clamps back to fy.endsOn so it still lands inside this FY. The
+  // statements aggregate by fiscalYearId, so the FY allocation is
+  // unaffected either way.
+  const clampToFy = (d: Date) =>
+    d < fy.startsOn ? fy.startsOn : d > fy.endsOn ? fy.endsOn : d;
+  const postDate = clampToFy(new Date());
+
   await withActor(profile.id, async (tx) => {
     voucherNo = await allocateVoucherNo(tx, fy.id, fy.label, "TX");
 
-    // 1. Journal lines — dated period-end (the spec says period_end,
-    // not today, so the entry lands in the right reporting window).
+    // 1. Journal lines — dated the posting day (clamped to the FY).
     await tx.journal.createMany({
       data: lines.map((l) => ({
-        entryDate: fy.endsOn,
+        entryDate: postDate,
         description: l.description,
         txnType: "TX",
         voucherNo,
