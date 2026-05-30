@@ -136,6 +136,11 @@ export default async function DashboardPage() {
               title="Fiscal Years"
               desc="Create, close, reopen, and roll-forward closing balances to next year."
             />
+            <NavCard
+              href="/admin/team"
+              title="Team &amp; Permissions"
+              desc="Invite back-office staff and assign roles (admin / accountant / auditor)."
+            />
             <NavCard href="/admin/audit" title="Activity Log" desc="Trigger-fed mutations on journals, agents, commission runs, fiscal years." />
           </Section>
         )}
