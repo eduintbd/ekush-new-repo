@@ -28,7 +28,7 @@ const DEFAULT_TERM_FIXED_INCOME = {
 };
 
 export async function approveAgent(id: string): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const today = new Date();
   await withActor(me.id, async (tx) => {
     await tx.sellingAgent.update({
@@ -59,7 +59,7 @@ export async function approveAgent(id: string): Promise<void> {
 }
 
 export async function suspendAgent(id: string): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   await withActor(me.id, (tx) =>
     tx.sellingAgent.update({ where: { id }, data: { status: "suspended" } }),
   );
@@ -68,7 +68,7 @@ export async function suspendAgent(id: string): Promise<void> {
 }
 
 export async function reinstateAgent(id: string): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   await withActor(me.id, (tx) =>
     tx.sellingAgent.update({ where: { id }, data: { status: "approved" } }),
   );
@@ -84,7 +84,7 @@ export async function reinstateAgent(id: string): Promise<void> {
  * we update that row in-place instead of inserting a new one.
  */
 export async function addAgentTerm(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const agentId = String(formData.get("agentId") ?? "").trim();
   const fundCategory = String(formData.get("fundCategory") ?? "").trim() as FundCategoryT;
   const upfront = parsePct(String(formData.get("upfrontPct") ?? ""));
@@ -167,7 +167,7 @@ export async function addAgentTerm(formData: FormData): Promise<void> {
  * effective dates (use addAgentTerm to introduce a new effective period).
  */
 export async function updateAgentTerm(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "").trim();
   const agentId = String(formData.get("agentId") ?? "").trim();
   if (!id || !agentId) return;
@@ -204,7 +204,7 @@ export async function updateAgentTerm(formData: FormData): Promise<void> {
  * portal use to identify who the agent sourced.
  */
 export async function linkInvestorToAgent(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const agentId = String(formData.get("agentId") ?? "").trim();
   const investorCode = String(formData.get("investorCode") ?? "").trim();
   const fundCode = String(formData.get("fundCode") ?? "").trim();
@@ -255,7 +255,7 @@ export async function linkInvestorToAgent(formData: FormData): Promise<void> {
  * this link become impossible — historical runs are preserved).
  */
 export async function unlinkInvestor(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "").trim();
   const agentId = String(formData.get("agentId") ?? "").trim();
   if (!id || !agentId) return;
@@ -265,7 +265,7 @@ export async function unlinkInvestor(formData: FormData): Promise<void> {
 }
 
 export async function createAgent(formData: FormData): Promise<void> {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
   const code = String(formData.get("code") ?? "").trim();
   const fullName = String(formData.get("fullName") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim().toLowerCase();

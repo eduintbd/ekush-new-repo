@@ -18,7 +18,7 @@ export default async function BrokersPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
   const sp = await searchParams;
 
   const [brokers, debitAccounts, creditAccounts] = await Promise.all([

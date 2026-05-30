@@ -52,7 +52,7 @@ function back(qs: string, msg: string): never {
 }
 
 export async function revalueToMarket(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) redirect(`${PORTFOLIO_PATH}?error=Insufficient+role`);
 
   const parsed = Schema.safeParse({

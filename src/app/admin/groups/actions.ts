@@ -8,7 +8,7 @@ import { requireRole } from "@/lib/auth";
 const NATURES = ["ASSET", "LIABILITY", "EQUITY", "INCOME", "EXPENSE"] as const;
 
 export async function createGroup(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const name = String(formData.get("name") ?? "").trim();
   const nature = String(formData.get("nature") ?? "").trim() as (typeof NATURES)[number];
   const parentId = String(formData.get("parentId") ?? "").trim() || null;
@@ -34,7 +34,7 @@ export async function createGroup(formData: FormData): Promise<void> {
 }
 
 export async function updateGroup(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
   const nature = String(formData.get("nature") ?? "").trim() as (typeof NATURES)[number];
@@ -63,7 +63,7 @@ export async function updateGroup(formData: FormData): Promise<void> {
 }
 
 export async function deleteGroup(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return;
 

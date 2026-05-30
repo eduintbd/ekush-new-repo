@@ -6,7 +6,7 @@ import { withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
 
 export async function upsertOpeningBalance(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const fiscalYearId = String(formData.get("fiscalYearId") ?? "").trim();
   const accountName = String(formData.get("accountName") ?? "").trim();
   const debit = Number(formData.get("openingDebit") ?? "0") || 0;
@@ -33,7 +33,7 @@ export async function upsertOpeningBalance(formData: FormData): Promise<void> {
 }
 
 export async function clearOpeningBalance(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const fiscalYearId = String(formData.get("fiscalYearId") ?? "").trim();
   const accountName = String(formData.get("accountName") ?? "").trim();
   if (!fiscalYearId || !accountName) return;

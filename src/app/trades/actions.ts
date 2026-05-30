@@ -43,7 +43,7 @@ function backWithError(returnPath: string, msg: string): never {
 }
 
 export async function createTrade(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) backWithError(TRADE_LIST_PATH, "Insufficient role");
 
   const parsed = Body.safeParse({
@@ -179,7 +179,7 @@ export async function createTrade(formData: FormData): Promise<void> {
 }
 
 export async function deleteTrade(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) redirect(`${TRADE_LIST_PATH}?error=Insufficient+role`);
 
   const id = String(formData.get("id") ?? "");

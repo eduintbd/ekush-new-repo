@@ -53,7 +53,7 @@ function back(qs: string, msg: string): never {
  * the new value.
  */
 export async function saveTaxRates(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin"]);
+  const profile = await requireRole(["admin", "checker"]);
 
   // Form payload is repeated rateType[]/valuePct[]/effectiveFrom[]/note[]
   // fields, one per rate row.
@@ -167,7 +167,7 @@ const DEFERRED_TAX = "Deferred Tax";
  * the audit panel always shows one active row per FY.
  */
 export async function postTaxProvision(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin"]);
+  const profile = await requireRole(["admin", "checker"]);
 
   const parsed = PostBody.safeParse({
     fiscalYearId: String(formData.get("fiscalYearId") ?? ""),

@@ -22,7 +22,7 @@ export default async function NewTradePage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin", "accountant"]);
+  await requireRole(["admin", "checker", "accountant"]);
   const sp = await searchParams;
 
   const [fiscalYears, instruments, banks, brokers] = await Promise.all([

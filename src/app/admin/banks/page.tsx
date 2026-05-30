@@ -22,7 +22,7 @@ export default async function BanksPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
   const sp = await searchParams;
 
   const banks = await prisma.bankAccount

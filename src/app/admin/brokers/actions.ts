@@ -29,7 +29,7 @@ async function validateCoa(name: string, requireDebit: boolean): Promise<void> {
 }
 
 export async function createBroker(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
 
   const code = String(formData.get("code") ?? "").trim().toUpperCase();
   const name = String(formData.get("name") ?? "").trim();
@@ -61,7 +61,7 @@ export async function createBroker(formData: FormData): Promise<void> {
 }
 
 export async function updateBroker(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
 
   const code = String(formData.get("code") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
@@ -90,7 +90,7 @@ export async function updateBroker(formData: FormData): Promise<void> {
 }
 
 export async function deleteBroker(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const code = String(formData.get("code") ?? "").trim();
   if (!code) back("Missing broker code");
 

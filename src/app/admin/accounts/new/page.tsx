@@ -21,7 +21,7 @@ export default async function NewAccountPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
   const sp = await searchParams;
 
   const max = await prisma.chartOfAccount.aggregate({ _max: { sl: true } });

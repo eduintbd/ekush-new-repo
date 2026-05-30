@@ -39,7 +39,7 @@ export default async function AgentDetailPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
   const { id } = await params;
   const sp = await searchParams;
 

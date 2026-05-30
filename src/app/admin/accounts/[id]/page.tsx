@@ -15,7 +15,7 @@ export default async function EditAccountPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ error?: string }>;
 }) {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
   const { id } = await params;
   const sp = await searchParams;
 

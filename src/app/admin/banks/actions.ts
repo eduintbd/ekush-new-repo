@@ -8,7 +8,7 @@ import { requireRole } from "@/lib/auth";
 const TYPES = ["current", "savings", "std", "md", "fdr", "mobile_money", "other"] as const;
 
 export async function createBankAccount(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const accountName = String(formData.get("accountName") ?? "").trim();
   const bankName = String(formData.get("bankName") ?? "").trim();
   const branch = String(formData.get("branch") ?? "").trim() || null;
@@ -52,7 +52,7 @@ export async function createBankAccount(formData: FormData): Promise<void> {
 }
 
 export async function updateBankAccount(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return;
 
@@ -91,7 +91,7 @@ export async function updateBankAccount(formData: FormData): Promise<void> {
 }
 
 export async function deleteBankAccount(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return;
   await withActor(me.id, (tx) => tx.bankAccount.delete({ where: { id } }));

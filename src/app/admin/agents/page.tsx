@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 export const metadata = { title: "Agents — Admin" };
 
 export default async function AdminAgentsPage() {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
 
   const agents = await prisma.sellingAgent
     .findMany({

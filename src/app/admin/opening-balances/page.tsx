@@ -20,7 +20,7 @@ export default async function OpeningBalancesPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
   const sp = await searchParams;
 
   const fiscalYears = await prisma.fiscalYear

@@ -25,6 +25,11 @@ datasource db {
 
 enum UserRole {
   admin
+  /// Co-admin for accounting: same authority as admin on masters,
+  /// high-impact posts (tax provision, FVA, FY close), audit log, and
+  /// day-to-day journals. Cannot manage team / invite members — that
+  /// stays admin-only. Mirrors the portal's Checker concept.
+  checker
   accountant
   selling_agent
   auditor

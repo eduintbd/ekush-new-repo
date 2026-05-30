@@ -41,7 +41,7 @@ export async function getCurrentProfile(): Promise<CurrentProfile | null> {
   }
 }
 
-const STAFF_ROLES: ReadonlyArray<UserRole> = ["admin", "accountant", "auditor"];
+const STAFF_ROLES: ReadonlyArray<UserRole> = ["admin", "checker", "accountant", "auditor"];
 
 /**
  * Page guard for routes that only require the user to be signed in
@@ -119,5 +119,9 @@ async function enforceMfaOptional(challengePath: string): Promise<void> {
 
 /** True iff the current staff user can perform write operations. */
 export function canEdit(profile: CurrentProfile): boolean {
-  return profile.role === "admin" || profile.role === "accountant";
+  return (
+    profile.role === "admin" ||
+    profile.role === "checker" ||
+    profile.role === "accountant"
+  );
 }

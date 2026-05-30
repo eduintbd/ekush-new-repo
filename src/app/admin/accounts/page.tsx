@@ -17,7 +17,7 @@ export default async function AdminAccountsPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
   const sp = await searchParams;
 
   const showInactive = sp.show === "all";

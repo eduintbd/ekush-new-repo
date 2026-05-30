@@ -24,7 +24,7 @@ import { createSupabaseAdminClient, adminClientAvailable } from "@/lib/supabase/
 
 const ADMIN_PATH = "/admin/team";
 
-const STAFF_ROLES = ["admin", "accountant", "auditor"] as const;
+const STAFF_ROLES = ["admin", "checker", "accountant", "auditor"] as const;
 type StaffRole = (typeof STAFF_ROLES)[number];
 
 const InviteBody = z.object({

@@ -6,7 +6,7 @@ import { prisma, withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
 
 export async function createFiscalYear(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const label = String(formData.get("label") ?? "").trim();
   const startsOn = String(formData.get("startsOn") ?? "").trim();
   const endsOn = String(formData.get("endsOn") ?? "").trim();
@@ -28,7 +28,7 @@ export async function createFiscalYear(formData: FormData): Promise<void> {
 }
 
 export async function closeFiscalYear(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return;
   await withActor(me.id, (tx) =>
@@ -42,7 +42,7 @@ export async function closeFiscalYear(formData: FormData): Promise<void> {
 }
 
 export async function reopenFiscalYear(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return;
   await withActor(me.id, (tx) =>
@@ -74,7 +74,7 @@ export async function reopenFiscalYear(formData: FormData): Promise<void> {
  * account touched (uses upsert).
  */
 export async function rollForward(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const sourceId = String(formData.get("sourceId") ?? "").trim();
   const targetId = String(formData.get("targetId") ?? "").trim();
   const reAccount = String(formData.get("retainedEarningsAccount") ?? "").trim();

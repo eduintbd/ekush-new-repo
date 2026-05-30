@@ -112,7 +112,7 @@ async function parseManagementFeeFromXlsx(
  * the `computedAmount` but preserves any `manualAmount` already set.
  */
 export async function runImportLatest(): Promise<void> {
-  const me = await requireRole(["admin", "accountant"]);
+  const me = await requireRole(["admin", "checker", "accountant"]);
 
   // Read funds from public schema
   const funds = await prisma.$queryRawUnsafe<Array<{ id: string; code: string; name: string }>>(
@@ -193,7 +193,7 @@ export async function runImportLatest(): Promise<void> {
 }
 
 export async function setManualAmount(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin", "accountant"]);
+  const me = await requireRole(["admin", "checker", "accountant"]);
   const id = String(formData.get("id") ?? "").trim();
   const raw = String(formData.get("manualAmount") ?? "").trim();
   if (!id) return;
@@ -213,7 +213,7 @@ export async function setManualAmount(formData: FormData): Promise<void> {
 }
 
 export async function setStatus(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin", "accountant"]);
+  const me = await requireRole(["admin", "checker", "accountant"]);
   const id = String(formData.get("id") ?? "").trim();
   const status = String(formData.get("status") ?? "").trim();
   if (!id || !["imported", "reviewed", "verified"].includes(status)) return;

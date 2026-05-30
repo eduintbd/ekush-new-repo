@@ -27,7 +27,7 @@ export default async function AuditPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin", "auditor"]);
+  await requireRole(["admin", "checker", "auditor"]);
   const sp = await searchParams;
   const page = Math.max(1, Number(sp.page ?? "1") || 1);
 

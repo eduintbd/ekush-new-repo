@@ -10,7 +10,7 @@ function back(error: string): never {
 }
 
 export async function saveBankStatement(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin", "accountant"]);
+  const me = await requireRole(["admin", "checker", "accountant"]);
 
   const accountName = String(formData.get("accountName") ?? "").trim();
   const fiscalYearId = String(formData.get("fiscalYearId") ?? "").trim();
@@ -66,7 +66,7 @@ export async function saveBankStatement(formData: FormData): Promise<void> {
 }
 
 export async function deleteBankStatement(formData: FormData): Promise<void> {
-  await requireRole(["admin", "accountant"]);
+  await requireRole(["admin", "checker", "accountant"]);
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return;
   await prisma.bankStatement.delete({ where: { id } });

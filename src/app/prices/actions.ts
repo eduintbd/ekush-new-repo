@@ -31,7 +31,7 @@ function back(msg: string): never {
 }
 
 export async function upsertPrices(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) back("Insufficient role");
 
   const parsed = Schema.safeParse({
@@ -75,7 +75,7 @@ export async function upsertPrices(formData: FormData): Promise<void> {
 }
 
 export async function addInstrument(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) back("Insufficient role");
 
   const codeRaw = String(formData.get("code") ?? "").trim().toUpperCase();
@@ -129,7 +129,7 @@ export async function addInstrument(formData: FormData): Promise<void> {
 }
 
 export async function deactivateInstrument(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) back("Insufficient role");
 
   const code = String(formData.get("code") ?? "").trim();

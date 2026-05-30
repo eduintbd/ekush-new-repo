@@ -16,6 +16,11 @@ export default async function DashboardPage() {
   const mfa = await getMfaStatus(supabase);
   const mfaEnrolled = hasVerifiedFactor(mfa);
   const mfaRequired = mfaRequiredForRole(profile.role);
+  // Admin = sole role that can manage the team (invite/role change).
+  // Checker = co-admin on accounting (masters, FY close, tax/FVA posts)
+  // but cannot manage team membership.
+  const isAdmin = profile.role === "admin";
+  const isAdminOrChecker = isAdmin || profile.role === "checker";
   const currentFy = await prisma.fiscalYear
     .findFirst({ where: { isClosed: false }, orderBy: { startsOn: "desc" }, select: { id: true, label: true } })
     .catch(() => null);
@@ -81,7 +86,7 @@ export default async function DashboardPage() {
           <NavCard href="/trial-balance" title="Trial Balance" desc="Per-account net debit / net credit for the selected fiscal year." />
           <NavCard href="/day-book" title="Day Book" desc="All vouchers in a date range, grouped by date." />
           <NavCard href="/bank-reconciliation" title="Bank Reconciliation" desc="Per-account book vs statement balance comparison." />
-          {profile.role === "admin" && (
+          {isAdminOrChecker && (
             <NavCard href="/admin/tax-provision" title="Tax Provision" desc="Statutory rates, current-tax preview, reconciliation vs journal, post-to-ledger." />
           )}
         </Section>
@@ -104,7 +109,7 @@ export default async function DashboardPage() {
         </Section>
 
         {/* ───────── Settings ───────── */}
-        {profile.role === "admin" && (
+        {isAdminOrChecker && (
           <Section title="Settings" desc="Masters, configuration, and administrative oversight.">
             <NavCard
               href="/admin/accounts"
@@ -136,17 +141,19 @@ export default async function DashboardPage() {
               title="Fiscal Years"
               desc="Create, close, reopen, and roll-forward closing balances to next year."
             />
-            <NavCard
-              href="/admin/team"
-              title="Team &amp; Permissions"
-              desc="Invite back-office staff and assign roles (admin / accountant / auditor)."
-            />
+            {isAdmin && (
+              <NavCard
+                href="/admin/team"
+                title="Team &amp; Permissions"
+                desc="Invite back-office staff and assign roles (admin / checker / accountant / auditor). Admin-only."
+              />
+            )}
             <NavCard href="/admin/audit" title="Activity Log" desc="Trigger-fed mutations on journals, agents, commission runs, fiscal years." />
           </Section>
         )}
 
         {/* ───────── Selling Agents ───────── */}
-        {profile.role === "admin" && (
+        {isAdminOrChecker && (
           <Section title="Selling Agents" desc="Agent panel, commission terms, and approvals.">
             <NavCard href="/admin/agents" title="Selling Agents" desc="Approve, suspend, manage terms history." />
           </Section>

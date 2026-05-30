@@ -17,10 +17,11 @@ import {
 
 type Search = { ok?: string; error?: string };
 
-const STAFF_ROLES = ["admin", "accountant", "auditor"] as const;
+const STAFF_ROLES = ["admin", "checker", "accountant", "auditor"] as const;
 
 const ROLE_DESC: Record<(typeof STAFF_ROLES)[number], string> = {
-  admin: "Full access. Masters, fiscal-year close, tax provision, FVA revalue.",
+  admin: "Full access including team management. Only admins can invite or change roles.",
+  checker: "Co-admin for accounting — same authority as admin on masters, fiscal-year close, tax provision, FVA, journals. Cannot manage the team.",
   accountant: "Day-to-day entries: journals, prices, portfolio, bank-recon. No masters or FY close.",
   auditor: "Read-only. All statements + activity log; no edit buttons render.",
 };
@@ -90,7 +91,7 @@ export default async function TeamPage({
         )}
 
         {/* Role legend */}
-        <div className="mt-6 grid gap-3 sm:grid-cols-3">
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {STAFF_ROLES.map((r) => (
             <div
               key={r}

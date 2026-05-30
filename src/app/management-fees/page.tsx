@@ -19,7 +19,7 @@ export default async function MgmtFeesPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin", "accountant", "auditor"]);
+  await requireRole(["admin", "checker", "accountant", "auditor"]);
   const sp = await searchParams;
 
   const imports = await prisma.managementFeeImport

@@ -18,7 +18,7 @@ export default async function NewBRSPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
-  await requireRole(["admin", "accountant"]);
+  await requireRole(["admin", "checker", "accountant"]);
   const sp = await searchParams;
 
   const fiscalYears = await prisma.fiscalYear

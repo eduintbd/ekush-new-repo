@@ -8,7 +8,7 @@ import { createAgent } from "@/app/admin/agents/actions";
 export const metadata = { title: "Invite agent — Admin" };
 
 export default async function NewAgentPage() {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">

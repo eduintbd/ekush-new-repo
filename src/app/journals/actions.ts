@@ -41,7 +41,7 @@ function back(error: JournalCreateError): never {
 }
 
 export async function createJournal(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) back({ kind: "validation", message: "Insufficient role" });
 
   // Lines come as parallel arrays from the form: account[], debit[], credit[]
@@ -148,7 +148,7 @@ function editBack(batchId: string, error: JournalCreateError): never {
  * batches in a closed fiscal year.
  */
 export async function updateJournalBatch(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) redirect("/day-book?err=role");
 
   const batchId = String(formData.get("batchId") ?? "");
@@ -248,7 +248,7 @@ export async function updateJournalBatch(formData: FormData): Promise<void> {
  * the deletes against the current profile.
  */
 export async function deleteJournalBatch(formData: FormData): Promise<void> {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) redirect("/day-book?err=role");
 
   const batchId = String(formData.get("batchId") ?? "");

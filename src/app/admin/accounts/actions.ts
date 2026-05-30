@@ -16,7 +16,7 @@ function backTo(id: string, error: string): never {
 }
 
 export async function createAccount(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
 
   const name = String(formData.get("name") ?? "").trim();
   const normalBalance = String(formData.get("normalBalance") ?? "").trim().toUpperCase();
@@ -56,7 +56,7 @@ export async function createAccount(formData: FormData): Promise<void> {
 }
 
 export async function updateAccount(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "");
   const name = String(formData.get("name") ?? "").trim();
   const normalBalance = String(formData.get("normalBalance") ?? "").trim().toUpperCase();
@@ -88,7 +88,7 @@ export async function updateAccount(formData: FormData): Promise<void> {
 }
 
 export async function toggleAccountActive(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin"]);
+  const me = await requireRole(["admin", "checker"]);
   const id = String(formData.get("id") ?? "");
   if (!id) redirect("/admin/accounts?error=Missing+id");
 

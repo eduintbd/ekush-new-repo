@@ -31,7 +31,7 @@ export default async function GroupsPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin"]);
+  await requireRole(["admin", "checker"]);
   const sp = await searchParams;
 
   const fy = await prisma.fiscalYear

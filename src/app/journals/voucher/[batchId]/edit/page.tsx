@@ -21,7 +21,7 @@ export default async function EditJournalPage({
   params: Promise<{ batchId: string }>;
   searchParams: Promise<Search>;
 }) {
-  const profile = await requireRole(["admin", "accountant"]);
+  const profile = await requireRole(["admin", "checker", "accountant"]);
   const { batchId } = await params;
   const sp = await searchParams;
 

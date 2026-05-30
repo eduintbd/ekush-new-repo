@@ -17,7 +17,7 @@ export default async function NewJournalPage({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin", "accountant"]);
+  await requireRole(["admin", "checker", "accountant"]);
   const sp = await searchParams;
 
   const fiscalYears = await prisma.fiscalYear

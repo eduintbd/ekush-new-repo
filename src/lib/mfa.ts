@@ -21,7 +21,11 @@ import { prisma } from "@/lib/prisma";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { UserRole } from "@/generated/prisma";
 
-export const MFA_REQUIRED_ROLES: ReadonlyArray<UserRole> = ["admin", "accountant"];
+export const MFA_REQUIRED_ROLES: ReadonlyArray<UserRole> = [
+  "admin",
+  "checker",
+  "accountant",
+];
 
 /** True iff the role must be at AAL2 to use the portal. */
 export function mfaRequiredForRole(role: UserRole | null | undefined): boolean {
