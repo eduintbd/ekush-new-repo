@@ -11,6 +11,7 @@ import { formatBdt } from "@/lib/format";
 import { getStatements, type StatementOverrides } from "@/lib/statements";
 import { requireStaff } from "@/lib/auth";
 import type { BalanceSheet, StatementLine } from "@/lib/statement_mapping";
+import type { TrialBalanceRow } from "@/lib/trial-balance";
 import { PrintButton } from "@/components/print-button";
 
 type Search = {
@@ -143,6 +144,7 @@ export default async function BalanceSheetPage({
             <ExternalInputsBanner overrides={overrides} />
             <Report
               bs={statements.balanceSheet}
+              tbRows={statements.trialBalance.rows}
               fyLabel={
                 currentAsOf
                   ? `${statements.fiscalYear.label} (as at ${currentAsOf.toISOString().slice(0, 10)})`
@@ -178,11 +180,13 @@ export default async function BalanceSheetPage({
 
 function Report({
   bs,
+  tbRows,
   fyLabel,
   compareBs,
   compareLabel,
 }: {
   bs: BalanceSheet;
+  tbRows: TrialBalanceRow[];
   fyLabel: string;
   compareBs: BalanceSheet | null;
   compareLabel: string | null;
@@ -196,6 +200,9 @@ function Report({
   const eq = totals(bs.equity);
   const ncl = totals(bs.nonCurrentLiabilities);
   const cl = totals(bs.currentLiabilities);
+
+  const tbMap = new Map(tbRows.map((r) => [r.accountName, r]));
+  const hasCompare = !!compareBs;
 
   return (
     <div className="mt-8">
@@ -227,21 +234,21 @@ function Report({
             </thead>
           )}
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            <Section title="Non-Current Assets" lines={bs.nonCurrentAssets} compare={compareBs?.nonCurrentAssets} />
+            <Section title="Non-Current Assets" lines={bs.nonCurrentAssets} compare={compareBs?.nonCurrentAssets} tbMap={tbMap} hasCompare={hasCompare} />
             <SubtotalRow label="Total Non-Current Assets" amount={nca} compareAmount={compareBs ? totals(compareBs.nonCurrentAssets) : null} />
 
-            <Section title="Current Assets" lines={bs.currentAssets} compare={compareBs?.currentAssets} />
+            <Section title="Current Assets" lines={bs.currentAssets} compare={compareBs?.currentAssets} tbMap={tbMap} hasCompare={hasCompare} />
             <SubtotalRow label="Total Current Assets" amount={ca} compareAmount={compareBs ? totals(compareBs.currentAssets) : null} />
 
             <TotalRow label="Total Assets" amount={bs.totalAssets} compareAmount={compareBs?.totalAssets ?? null} emphatic />
 
-            <Section title="Equity" lines={bs.equity} compare={compareBs?.equity} />
+            <Section title="Equity" lines={bs.equity} compare={compareBs?.equity} tbMap={tbMap} hasCompare={hasCompare} />
             <SubtotalRow label="Total Equity" amount={eq} compareAmount={compareBs ? totals(compareBs.equity) : null} />
 
-            <Section title="Non-Current Liabilities" lines={bs.nonCurrentLiabilities} compare={compareBs?.nonCurrentLiabilities} />
+            <Section title="Non-Current Liabilities" lines={bs.nonCurrentLiabilities} compare={compareBs?.nonCurrentLiabilities} tbMap={tbMap} hasCompare={hasCompare} />
             <SubtotalRow label="Total Non-Current Liabilities" amount={ncl} compareAmount={compareBs ? totals(compareBs.nonCurrentLiabilities) : null} />
 
-            <Section title="Current Liabilities" lines={bs.currentLiabilities} compare={compareBs?.currentLiabilities} />
+            <Section title="Current Liabilities" lines={bs.currentLiabilities} compare={compareBs?.currentLiabilities} tbMap={tbMap} hasCompare={hasCompare} />
             <SubtotalRow label="Total Current Liabilities" amount={cl} compareAmount={compareBs ? totals(compareBs.currentLiabilities) : null} />
 
             <TotalRow label="Total Equity & Liabilities" amount={bs.totalEquityAndLiabilities} compareAmount={compareBs?.totalEquityAndLiabilities ?? null} emphatic />
@@ -252,33 +259,140 @@ function Report({
   );
 }
 
-function Section({ title, lines, compare }: { title: string; lines: StatementLine[]; compare?: StatementLine[] }) {
+function Section({
+  title,
+  lines,
+  compare,
+  tbMap,
+  hasCompare,
+}: {
+  title: string;
+  lines: StatementLine[];
+  compare?: StatementLine[];
+  tbMap: Map<string, TrialBalanceRow>;
+  hasCompare: boolean;
+}) {
   if (lines.length === 0) return null;
   const compareMap = compare ? new Map(compare.map((l) => [l.label, l.amount])) : null;
+  const colSpan = hasCompare ? 3 : 2;
   return (
     <>
       <tr className="bg-zinc-50 dark:bg-zinc-950">
-        <td colSpan={compareMap ? 3 : 2} className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        <td colSpan={colSpan} className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
           {title}
         </td>
       </tr>
       {lines.map((l) => (
-        <tr key={l.label}>
-          <td className="px-4 py-2 pl-8">{l.label}</td>
-          <td className="px-4 py-2 text-right tabular-nums">
-            {l.amount === 0 ? "—" : formatBdt(l.amount)}
-          </td>
-          {compareMap && (
-            <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
-              {(() => {
-                const v = compareMap.get(l.label) ?? 0;
-                return v === 0 ? "—" : formatBdt(v);
-              })()}
-            </td>
-          )}
-        </tr>
+        <ExpandableLine
+          key={l.label}
+          line={l}
+          compareAmount={compareMap?.get(l.label) ?? null}
+          tbMap={tbMap}
+          hasCompare={hasCompare}
+        />
       ))}
     </>
+  );
+}
+
+function ExpandableLine({
+  line,
+  compareAmount,
+  tbMap,
+  hasCompare,
+}: {
+  line: StatementLine;
+  compareAmount: number | null;
+  tbMap: Map<string, TrialBalanceRow>;
+  hasCompare: boolean;
+}) {
+  const expandable = (line.sources?.length ?? 0) > 0;
+  const colSpan = hasCompare ? 3 : 2;
+  const fmt = (v: number) => (Math.abs(v) < 0.005 ? "—" : formatBdt(v));
+
+  if (!expandable) {
+    return (
+      <tr>
+        <td className="px-4 py-2 pl-8">{line.label}</td>
+        <td className="px-4 py-2 text-right tabular-nums">{fmt(line.amount)}</td>
+        {hasCompare && (
+          <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
+            {fmt(compareAmount ?? 0)}
+          </td>
+        )}
+      </tr>
+    );
+  }
+
+  // Build the per-source breakdown rows from the trial balance.
+  const sourceRows = (line.sources ?? []).map((accountName) => {
+    const tb = tbMap.get(accountName);
+    return {
+      accountName,
+      grossDebit: tb?.grossDebit ?? 0,
+      grossCredit: tb?.grossCredit ?? 0,
+      netDebit: tb?.netDebit ?? 0,
+      netCredit: tb?.netCredit ?? 0,
+    };
+  });
+
+  return (
+    <tr>
+      <td colSpan={colSpan} className="p-0">
+        <details className="group block border-b border-transparent open:bg-zinc-50/50 dark:open:bg-zinc-950/30">
+          <summary
+            className="grid cursor-pointer list-none items-center text-sm [&::-webkit-details-marker]:hidden"
+            style={{
+              gridTemplateColumns: hasCompare ? "1fr auto auto" : "1fr auto",
+            }}
+          >
+            <span className="flex items-center gap-1.5 px-4 py-2 pl-6">
+              <span className="inline-block w-3 text-[10px] font-semibold text-zinc-500 transition-transform group-open:rotate-45">
+                +
+              </span>
+              {line.label}
+            </span>
+            <span className="px-4 py-2 text-right tabular-nums">{fmt(line.amount)}</span>
+            {hasCompare && (
+              <span className="px-4 py-2 text-right tabular-nums text-zinc-500">
+                {fmt(compareAmount ?? 0)}
+              </span>
+            )}
+          </summary>
+          <div className="border-t border-zinc-200 bg-zinc-50/70 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-950/50">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-zinc-500">
+                  <th className="px-2 py-1 text-left font-medium">Account</th>
+                  <th className="px-2 py-1 text-right font-medium">Gross Dr</th>
+                  <th className="px-2 py-1 text-right font-medium">Gross Cr</th>
+                  <th className="px-2 py-1 text-right font-medium">Net Dr</th>
+                  <th className="px-2 py-1 text-right font-medium">Net Cr</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sourceRows.map((r) => (
+                  <tr key={r.accountName} className="text-zinc-700 dark:text-zinc-300">
+                    <td className="px-2 py-1">
+                      <Link
+                        href={`/ledger/${encodeURIComponent(r.accountName)}`}
+                        className="hover:underline"
+                      >
+                        {r.accountName}
+                      </Link>
+                    </td>
+                    <td className="px-2 py-1 text-right tabular-nums">{fmt(r.grossDebit)}</td>
+                    <td className="px-2 py-1 text-right tabular-nums">{fmt(r.grossCredit)}</td>
+                    <td className="px-2 py-1 text-right font-medium tabular-nums">{fmt(r.netDebit)}</td>
+                    <td className="px-2 py-1 text-right font-medium tabular-nums">{fmt(r.netCredit)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </td>
+    </tr>
   );
 }
 

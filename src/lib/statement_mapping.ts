@@ -272,6 +272,12 @@ export type StatementLine = {
   amount: number;
   /** Optional sub-grouping for the renderer. */
   group?: string;
+  /** Chart-of-accounts names that contributed to this line. The IS/BS
+   *  page uses this to render an expand/collapse drill-down per line —
+   *  on expand, the renderer looks each name up in the trial balance
+   *  and shows its Dr / Cr / net contribution. Empty for lines whose
+   *  amount comes from external inputs (e.g. unrealisedFairValueLoss). */
+  sources?: readonly string[];
 };
 
 export type IncomeStatement = {
@@ -328,11 +334,19 @@ export function buildIncomeStatement(
   const dividendIncome = netC(tb, ACCOUNT.dividendIncome);
 
   const operatingIncome: StatementLine[] = [
-    { label: "Management Fees", amount: managementFees },
-    { label: "Capital Gain", amount: capitalGain },
-    { label: "Interest Income", amount: interestIncome },
-    { label: "Advisory Fees", amount: advisoryFees },
-    { label: "Dividend Income", amount: dividendIncome },
+    { label: "Management Fees", amount: managementFees, sources: [ACCOUNT.managementFee] },
+    {
+      label: "Capital Gain",
+      amount: capitalGain,
+      sources: [ACCOUNT.capitalGain, ACCOUNT.capitalLoss, ACCOUNT.realisedGainOnInvestments],
+    },
+    {
+      label: "Interest Income",
+      amount: interestIncome,
+      sources: [ACCOUNT.interestIncomeOfFdr, ACCOUNT.interestIncome],
+    },
+    { label: "Advisory Fees", amount: advisoryFees, sources: [ACCOUNT.advisoryFee] },
+    { label: "Dividend Income", amount: dividendIncome, sources: [ACCOUNT.dividendIncome] },
   ];
   const totalOperatingIncome = operatingIncome.reduce((s, l) => s + l.amount, 0);
 
@@ -383,11 +397,30 @@ export function buildIncomeStatement(
     + netD(tb, ACCOUNT.bankCharge)                        // K71
     + netD(tb, ACCOUNT.exciseDuty);                       // K73
 
+  const gaSources: readonly string[] = [
+    ...gaSumAccounts,
+    ACCOUNT.professioalFee,
+    ACCOUNT.sellingAgentFees,
+    ACCOUNT.employeerContributionForPf,
+    ACCOUNT.bankCharge,
+    ACCOUNT.exciseDuty,
+    ACCOUNT.regulatoryComplianceExpenses,
+  ];
   const operatingExpenses: StatementLine[] = [
-    { label: "General & Administrative Expenses", amount: ga },
+    { label: "General & Administrative Expenses", amount: ga, sources: gaSources },
   ];
   const financialExpenses: StatementLine[] = [
-    { label: "Financial Expenses", amount: financialExpenseMagnitude },
+    {
+      label: "Financial Expenses",
+      amount: financialExpenseMagnitude,
+      sources: [
+        ACCOUNT.interestOnMarginLoan,
+        ACCOUNT.interestExpense,
+        ACCOUNT.shortTermLoan,
+        ACCOUNT.bankCharge,
+        ACCOUNT.exciseDuty,
+      ],
+    },
   ];
 
   const profitBeforeTax = totalOperatingIncome - ga - financialExpenseMagnitude;
@@ -406,7 +439,7 @@ export function buildIncomeStatement(
   // That's the correct accrual semantic.
   const currentTaxProvision = netD(tb, "Income Tax Expense");
   const taxExpense: StatementLine[] = [
-    { label: "Current Tax Expense", amount: currentTaxProvision },
+    { label: "Current Tax Expense", amount: currentTaxProvision, sources: ["Income Tax Expense"] },
   ];
 
   const profitForPeriod = profitBeforeTax - currentTaxProvision;
@@ -419,8 +452,17 @@ export function buildIncomeStatement(
   // computing inline. Net Dr balance = OCI deferred-tax expense.
   const deferredTax = netD(tb, "Deferred Tax Expense");
   const oci: StatementLine[] = [
-    { label: "Unrealised Loss on Investment in Stocks", amount: ociUnrealisedLoss },
-    { label: "Deferred Tax Expense", amount: deferredTax },
+    {
+      label: "Unrealised Loss on Investment in Stocks",
+      amount: ociUnrealisedLoss,
+      // External input — derived from InvestmentHolding rows, not the TB.
+      sources: [],
+    },
+    {
+      label: "Deferred Tax Expense",
+      amount: deferredTax,
+      sources: ["Deferred Tax Expense"],
+    },
   ];
   const totalComprehensiveIncome = profitForPeriod + ociUnrealisedLoss + deferredTax;
 
@@ -511,15 +553,72 @@ export function buildBalanceSheet(
     + netC(tb, ACCOUNT.primeBankSecurities);
 
   const nonCurrentAssets: StatementLine[] = [
-    { label: "Property, Plant & Equipment", amount: ppe },
-    { label: "Security Deposit-Office Rent", amount: securityDeposit },
-    { label: "Investment in Securities", amount: investmentInSecurities },
+    {
+      label: "Property, Plant & Equipment",
+      amount: ppe,
+      sources: [ACCOUNT.computers, ACCOUNT.officeDecoration, ACCOUNT.officeEquipment],
+    },
+    {
+      label: "Security Deposit-Office Rent",
+      amount: securityDeposit,
+      sources: [ACCOUNT.securityDepositOfficeRent],
+    },
+    {
+      label: "Investment in Securities",
+      amount: investmentInSecurities,
+      sources: [
+        ACCOUNT.investmentEfuf,
+        ACCOUNT.investmentInShare,
+        ACCOUNT.ipoInvestment,
+        ACCOUNT.investmentEgf,
+        ACCOUNT.investmentSrf,
+        ACCOUNT.investmentInPlacementShares,
+      ],
+    },
   ];
   const currentAssets: StatementLine[] = [
-    { label: "Sundry Receivables", amount: sundryReceivables },
-    { label: "AIT Receivables against Mgmt Fee", amount: aitReceivablesMgmtFee },
-    { label: "Cash and Cash Equivalents", amount: cashAndEquivalents },
-    { label: "Advance, Deposit and Pre-payment", amount: advanceDepositPrepayment },
+    {
+      label: "Sundry Receivables",
+      amount: sundryReceivables,
+      sources: [
+        ACCOUNT.accruedInterestOnFdr,
+        ACCOUNT.dividendReceivable,
+        ACCOUNT.managementFeeAccrued,
+        ACCOUNT.formationFeeReceivableEsrf,
+        ACCOUNT.receivableForClientHsbc,
+        ACCOUNT.commission,
+      ],
+    },
+    {
+      label: "AIT Receivables against Mgmt Fee",
+      amount: aitReceivablesMgmtFee,
+      sources: [ACCOUNT.aitReceivableAgainstMgmtFee],
+    },
+    {
+      label: "Cash and Cash Equivalents",
+      amount: cashAndEquivalents,
+      sources: [
+        ACCOUNT.bracBank1,
+        ACCOUNT.bracBank2,
+        ACCOUNT.midland,
+        ACCOUNT.modhumotiAccount,
+        ACCOUNT.pettyCash,
+        ACCOUNT.bkash,
+        ACCOUNT.abaciInvestmentC2505,
+        ACCOUNT.midlandBank,
+        ACCOUNT.abaciInvestment,
+      ],
+    },
+    {
+      label: "Advance, Deposit and Pre-payment",
+      amount: advanceDepositPrepayment,
+      sources: [
+        ACCOUNT.advanceTaxDepositsPrepayments,
+        ACCOUNT.sourceTax,
+        ACCOUNT.advanceIncomeTaxPayment,
+        ACCOUNT.advanceToBsec,
+      ],
+    },
   ];
   // Margin loan only appears on the liability side (see nonCurrentLiabilities
   // below). Spec §5.11 lists it as a single line; the contra-asset rendering
@@ -530,8 +629,11 @@ export function buildBalanceSheet(
 
   // Equity
   const equity: StatementLine[] = [
-    // Share Capital = L20
-    { label: "Share Capital", amount: netC(tb, ACCOUNT.shareCapital) },
+    {
+      label: "Share Capital",
+      amount: netC(tb, ACCOUNT.shareCapital),
+      sources: [ACCOUNT.shareCapital],
+    },
     // Retained Earnings = signed balance of the RE account + IS profit.
     // Using `netC` alone silently drops a Dr balance (accumulated
     // deficit) because netC = max(0, grossCr − grossDr) returns zero
@@ -544,15 +646,22 @@ export function buildBalanceSheet(
         netC(tb, ACCOUNT.retainedEarning)
         - netD(tb, ACCOUNT.retainedEarning)
         + ext.currentPeriodNetProfit,
+      sources: [ACCOUNT.retainedEarning],
     },
-    // Fair Value Reserve = L22
-    { label: "Fair Value Reserve", amount: netC(tb, ACCOUNT.fairValueReserve) },
+    {
+      label: "Fair Value Reserve",
+      amount: netC(tb, ACCOUNT.fairValueReserve),
+      sources: [ACCOUNT.fairValueReserve],
+    },
   ];
 
   // Non-current liabilities
   const nonCurrentLiabilities: StatementLine[] = [
-    // Deferred Tax Liability = L26
-    { label: "Deferred Tax Liability", amount: netC(tb, ACCOUNT.deferredTax) },
+    {
+      label: "Deferred Tax Liability",
+      amount: netC(tb, ACCOUNT.deferredTax),
+      sources: [ACCOUNT.deferredTax],
+    },
   ];
 
   // Current liabilities — Provision for Income Tax. After Phase 4 of
@@ -577,11 +686,42 @@ export function buildBalanceSheet(
     + netC(tb, ACCOUNT.withholdingTaxEmployees); // L114
 
   const currentLiabilities: StatementLine[] = [
-    { label: "Provision for Income Tax", amount: provisionForIncomeTax },
-    { label: "Margin Loan to Stock Brokers", amount: marginLoanToBrokers },
-    { label: "Liability for Other Expenses", amount: liabilityForOtherExpenses },
-    { label: "Liab. For Provident Fund", amount: liabForProvidentFund },
-    { label: "Withholding VAT & TDs", amount: withholdingVatAndTds },
+    {
+      label: "Provision for Income Tax",
+      amount: provisionForIncomeTax,
+      sources: [ACCOUNT.provisionForIncomeTax],
+    },
+    {
+      label: "Margin Loan to Stock Brokers",
+      amount: marginLoanToBrokers,
+      sources: [
+        ACCOUNT.marginLoanFromUcb,
+        ACCOUNT.marginLoanFromPbsl,
+        ACCOUNT.ucbBo,
+        ACCOUNT.primeBankSecurities,
+      ],
+    },
+    {
+      label: "Liability for Other Expenses",
+      amount: liabilityForOtherExpenses,
+      sources: [
+        ACCOUNT.auditFeeAccrued,
+        ACCOUNT.liabForEmployeeAllowance,
+        ACCOUNT.liabOfficeRent,
+        ACCOUNT.liabilityAuditFee,
+        ACCOUNT.liabUtilityExp,
+      ],
+    },
+    {
+      label: "Liab. For Provident Fund",
+      amount: liabForProvidentFund,
+      sources: [ACCOUNT.liabForPfFund],
+    },
+    {
+      label: "Withholding VAT & TDs",
+      amount: withholdingVatAndTds,
+      sources: [ACCOUNT.withholdingVatAndTds, ACCOUNT.withholdingTaxEmployees],
+    },
   ];
 
   const totalEquityAndLiabilities =

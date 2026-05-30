@@ -12,6 +12,7 @@ import { formatBdt } from "@/lib/format";
 import { getStatements, type StatementOverrides } from "@/lib/statements";
 import { requireStaff } from "@/lib/auth";
 import type { IncomeStatement, StatementLine } from "@/lib/statement_mapping";
+import type { TrialBalanceRow } from "@/lib/trial-balance";
 import { PrintButton } from "@/components/print-button";
 
 type Search = {
@@ -140,6 +141,7 @@ export default async function IncomeStatementPage({
             <ExternalInputsBanner overrides={overrides} />
             <Report
               statement={statements.incomeStatement}
+              tbRows={statements.trialBalance.rows}
               fyLabel={
                 currentAsOf
                   ? `${statements.fiscalYear.label} (YTD to ${currentAsOf.toISOString().slice(0, 10)})`
@@ -175,11 +177,13 @@ export default async function IncomeStatementPage({
 
 function Report({
   statement,
+  tbRows,
   fyLabel,
   compareStatement,
   compareLabel,
 }: {
   statement: IncomeStatement;
+  tbRows: TrialBalanceRow[];
   fyLabel: string;
   compareStatement: IncomeStatement | null;
   compareLabel: string | null;
@@ -189,6 +193,8 @@ function Report({
     statement.profitForPeriod + ociTotal - statement.totalComprehensiveIncome,
   ) < 1;
   const sumLines = (lines: StatementLine[]) => lines.reduce((s, l) => s + l.amount, 0);
+  const tbMap = new Map(tbRows.map((r) => [r.accountName, r]));
+  const hasCompare = !!compareStatement;
 
   return (
     <div className="mt-8">
@@ -220,23 +226,23 @@ function Report({
             </thead>
           )}
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            <Section title="Operating Income" lines={statement.operatingIncome} compare={compareStatement?.operatingIncome} />
+            <Section title="Operating Income" lines={statement.operatingIncome} compare={compareStatement?.operatingIncome} tbMap={tbMap} hasCompare={hasCompare} />
             <SubtotalRow
               label="Total Operating Income"
               amount={sumLines(statement.operatingIncome)}
               compareAmount={compareStatement ? sumLines(compareStatement.operatingIncome) : null}
             />
 
-            <Section title="Operating Expenses" lines={statement.operatingExpenses} negate compare={compareStatement?.operatingExpenses} />
-            <Section title="Financial Expenses" lines={statement.financialExpenses} negate compare={compareStatement?.financialExpenses} />
+            <Section title="Operating Expenses" lines={statement.operatingExpenses} negate compare={compareStatement?.operatingExpenses} tbMap={tbMap} hasCompare={hasCompare} />
+            <Section title="Financial Expenses" lines={statement.financialExpenses} negate compare={compareStatement?.financialExpenses} tbMap={tbMap} hasCompare={hasCompare} />
 
             <TotalRow label="Profit Before Tax" amount={statement.profitBeforeTax} compareAmount={compareStatement?.profitBeforeTax ?? null} />
 
-            <Section title="Income Tax" lines={statement.taxExpense} negate compare={compareStatement?.taxExpense} />
+            <Section title="Income Tax" lines={statement.taxExpense} negate compare={compareStatement?.taxExpense} tbMap={tbMap} hasCompare={hasCompare} />
 
             <TotalRow label="Profit For the Period" amount={statement.profitForPeriod} compareAmount={compareStatement?.profitForPeriod ?? null} />
 
-            <Section title="Other Comprehensive Income" lines={statement.oci} compare={compareStatement?.oci} />
+            <Section title="Other Comprehensive Income" lines={statement.oci} compare={compareStatement?.oci} tbMap={tbMap} hasCompare={hasCompare} />
 
             <TotalRow label="Total Comprehensive Income" amount={statement.totalComprehensiveIncome} compareAmount={compareStatement?.totalComprehensiveIncome ?? null} emphatic />
           </tbody>
@@ -251,35 +257,143 @@ function Section({
   lines,
   negate = false,
   compare,
+  tbMap,
+  hasCompare,
 }: {
   title: string;
   lines: StatementLine[];
   /** If true, render amounts in parentheses (expense convention). */
   negate?: boolean;
   compare?: StatementLine[];
+  tbMap: Map<string, TrialBalanceRow>;
+  hasCompare: boolean;
 }) {
   if (lines.length === 0) return null;
   const compareMap = compare ? new Map(compare.map((l) => [l.label, l.amount])) : null;
-  const fmt = (v: number) => (v === 0 ? "—" : negate ? `(${formatBdt(v)})` : formatBdt(v));
+  const fmt = (v: number) => (Math.abs(v) < 0.005 ? "—" : negate ? `(${formatBdt(v)})` : formatBdt(v));
+  const colSpan = hasCompare ? 3 : 2;
   return (
     <>
       <tr className="bg-zinc-50 dark:bg-zinc-950">
-        <td colSpan={compareMap ? 3 : 2} className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        <td colSpan={colSpan} className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
           {title}
         </td>
       </tr>
       {lines.map((l) => (
-        <tr key={l.label}>
-          <td className="px-4 py-2 pl-8">{l.label}</td>
-          <td className="px-4 py-2 text-right tabular-nums">{fmt(l.amount)}</td>
-          {compareMap && (
-            <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
-              {fmt(compareMap.get(l.label) ?? 0)}
-            </td>
-          )}
-        </tr>
+        <ExpandableLine
+          key={l.label}
+          line={l}
+          compareAmount={compareMap?.get(l.label) ?? null}
+          tbMap={tbMap}
+          hasCompare={hasCompare}
+          fmt={fmt}
+        />
       ))}
     </>
+  );
+}
+
+function ExpandableLine({
+  line,
+  compareAmount,
+  tbMap,
+  hasCompare,
+  fmt,
+}: {
+  line: StatementLine;
+  compareAmount: number | null;
+  tbMap: Map<string, TrialBalanceRow>;
+  hasCompare: boolean;
+  fmt: (v: number) => string;
+}) {
+  const expandable = (line.sources?.length ?? 0) > 0;
+  const colSpan = hasCompare ? 3 : 2;
+
+  if (!expandable) {
+    return (
+      <tr>
+        <td className="px-4 py-2 pl-8">{line.label}</td>
+        <td className="px-4 py-2 text-right tabular-nums">{fmt(line.amount)}</td>
+        {hasCompare && (
+          <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
+            {fmt(compareAmount ?? 0)}
+          </td>
+        )}
+      </tr>
+    );
+  }
+
+  const sourceRows = (line.sources ?? []).map((accountName) => {
+    const tb = tbMap.get(accountName);
+    return {
+      accountName,
+      grossDebit: tb?.grossDebit ?? 0,
+      grossCredit: tb?.grossCredit ?? 0,
+      netDebit: tb?.netDebit ?? 0,
+      netCredit: tb?.netCredit ?? 0,
+    };
+  });
+  // Render plain BDT (not negated) inside the breakdown — the breakdown
+  // shows raw TB values, not the negate convention used for expenses.
+  const fmtRaw = (v: number) => (Math.abs(v) < 0.005 ? "—" : formatBdt(v));
+
+  return (
+    <tr>
+      <td colSpan={colSpan} className="p-0">
+        <details className="group block open:bg-zinc-50/50 dark:open:bg-zinc-950/30">
+          <summary
+            className="grid cursor-pointer list-none items-center text-sm [&::-webkit-details-marker]:hidden"
+            style={{
+              gridTemplateColumns: hasCompare ? "1fr auto auto" : "1fr auto",
+            }}
+          >
+            <span className="flex items-center gap-1.5 px-4 py-2 pl-6">
+              <span className="inline-block w-3 text-[10px] font-semibold text-zinc-500 transition-transform group-open:rotate-45">
+                +
+              </span>
+              {line.label}
+            </span>
+            <span className="px-4 py-2 text-right tabular-nums">{fmt(line.amount)}</span>
+            {hasCompare && (
+              <span className="px-4 py-2 text-right tabular-nums text-zinc-500">
+                {fmt(compareAmount ?? 0)}
+              </span>
+            )}
+          </summary>
+          <div className="border-t border-zinc-200 bg-zinc-50/70 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-950/50">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-zinc-500">
+                  <th className="px-2 py-1 text-left font-medium">Account</th>
+                  <th className="px-2 py-1 text-right font-medium">Gross Dr</th>
+                  <th className="px-2 py-1 text-right font-medium">Gross Cr</th>
+                  <th className="px-2 py-1 text-right font-medium">Net Dr</th>
+                  <th className="px-2 py-1 text-right font-medium">Net Cr</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sourceRows.map((r) => (
+                  <tr key={r.accountName} className="text-zinc-700 dark:text-zinc-300">
+                    <td className="px-2 py-1">
+                      <Link
+                        href={`/ledger/${encodeURIComponent(r.accountName)}`}
+                        className="hover:underline"
+                      >
+                        {r.accountName}
+                      </Link>
+                    </td>
+                    <td className="px-2 py-1 text-right tabular-nums">{fmtRaw(r.grossDebit)}</td>
+                    <td className="px-2 py-1 text-right tabular-nums">{fmtRaw(r.grossCredit)}</td>
+                    <td className="px-2 py-1 text-right font-medium tabular-nums">{fmtRaw(r.netDebit)}</td>
+                    <td className="px-2 py-1 text-right font-medium tabular-nums">{fmtRaw(r.netCredit)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </td>
+    </tr>
   );
 }
 
