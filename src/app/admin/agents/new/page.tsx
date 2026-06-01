@@ -5,10 +5,17 @@ import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { createAgent } from "@/app/admin/agents/actions";
 
+type Search = { error?: string };
+
 export const metadata = { title: "Invite agent — Admin" };
 
-export default async function NewAgentPage() {
+export default async function NewAgentPage({
+  searchParams,
+}: {
+  searchParams: Promise<Search>;
+}) {
   await requireRole(["admin", "checker"]);
+  const sp = await searchParams;
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
@@ -26,6 +33,12 @@ export default async function NewAgentPage() {
           seed default terms (Equity 0.20%/0.40%/0.35%; Fixed Income
           0.20%/0.20%/0.15%).
         </p>
+
+        {sp.error && (
+          <div className="mt-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+            {sp.error}
+          </div>
+        )}
 
         <form action={createAgent} className="mt-8 space-y-4">
           <Field name="code" label="Agent code (e.g. SB0001)" required />

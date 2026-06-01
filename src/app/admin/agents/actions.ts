@@ -2,8 +2,15 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { Prisma } from "@/generated/prisma";
 import { prisma, withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
+
+const NEW_AGENT_PATH = "/admin/agents/new";
+
+function backToInvite(msg: string): never {
+  redirect(`${NEW_AGENT_PATH}?error=${encodeURIComponent(msg)}`);
+}
 
 const FUND_CATEGORIES = ["equity", "fixed_income"] as const;
 type FundCategoryT = (typeof FUND_CATEGORIES)[number];
@@ -272,11 +279,28 @@ export async function createAgent(formData: FormData): Promise<void> {
   const phone = String(formData.get("phone") ?? "").trim() || null;
 
   if (!code || !fullName || !email) {
-    throw new Error("code, fullName, email required");
+    backToInvite("Agent code, full name and email are all required.");
   }
 
-  const created = await prisma.sellingAgent.create({
-    data: { code, fullName, email, phone, status: "pending" },
-  });
+  let created;
+  try {
+    created = await prisma.sellingAgent.create({
+      data: { code, fullName, email, phone, status: "pending" },
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      // Unique violation. `meta.target` tells which column collided.
+      const target = (err.meta?.target as string[] | undefined) ?? [];
+      const field = target[0] ?? "field";
+      const friendlyField =
+        field === "email" ? "email" : field === "code" ? "agent code" : field;
+      const existingValue = field === "email" ? email : field === "code" ? code : "";
+      backToInvite(
+        `An agent with this ${friendlyField}${existingValue ? ` (${existingValue})` : ""} already exists. Pick a different ${friendlyField}, or open the existing record from /admin/agents.`,
+      );
+    }
+    throw err;
+  }
+  revalidatePath("/admin/agents");
   redirect(`/admin/agents/${created.id}`);
 }
