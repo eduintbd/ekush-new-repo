@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { getMfaStatus, hasVerifiedFactor, isStepped } from "@/lib/mfa";
 import type { UserRole } from "@/generated/prisma";
 
-const STAFF_ROLES: ReadonlyArray<UserRole> = ["admin", "accountant", "auditor"];
+const STAFF_ROLES: ReadonlyArray<UserRole> = ["admin", "checker", "accountant", "auditor"];
 
 function back(path: "/login" | "/agent/login", error: string, next?: string): never {
   const params = new URLSearchParams({ error });

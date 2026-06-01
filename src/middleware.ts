@@ -16,7 +16,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { updateSupabaseSession } from "@/lib/supabase/middleware";
 
-const STAFF_ROLES = new Set(["admin", "accountant", "auditor"]);
+const STAFF_ROLES = new Set(["admin", "checker", "accountant", "auditor"]);
 
 function isPublic(pathname: string): boolean {
   return (

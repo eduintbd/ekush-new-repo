@@ -38,7 +38,7 @@ export default async function TeamPage({
 
   const members = await prisma.profile
     .findMany({
-      where: { role: { in: ["admin", "accountant", "auditor"] } },
+      where: { role: { in: ["admin", "checker", "accountant", "auditor"] } },
       orderBy: [{ isActive: "desc" }, { role: "asc" }, { email: "asc" }],
     })
     .catch(() => []);
