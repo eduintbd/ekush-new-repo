@@ -61,7 +61,10 @@ export default async function AgentDetailPage({
   const [portalInvestorMap, fundMap, portalPicker] = await Promise.all([
     getInvestorsByCode(linkedInvestorCodes).catch(() => new Map<string, PortalInvestor>()),
     getAllFunds().catch(() => new Map<string, PortalFund>()),
-    listInvestorsForPicker(500).catch(() => [] as PortalInvestor[]),
+    // Cap at 10000 so codes after the first 500 (e.g. BR0001, anything
+    // alphabetically after A…) still appear. The portal has ~500 codes
+    // today; 10000 covers near-term growth without runaway query cost.
+    listInvestorsForPicker(10000).catch(() => [] as PortalInvestor[]),
   ]);
   const holdingPairs = agent.investors
     .map((i) => ({
