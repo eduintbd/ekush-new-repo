@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { Prisma } from "@/generated/prisma";
 import { prisma, withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
+import { computeAgentCommissionPreview } from "@/lib/agent-commission-preview";
 
 const NEW_AGENT_PATH = "/admin/agents/new";
 
@@ -286,6 +287,102 @@ export async function unlinkInvestor(formData: FormData): Promise<void> {
   await withActor(me.id, (tx) => tx.agentInvestor.delete({ where: { id } }));
   revalidatePath(`/admin/agents/${agentId}`);
   redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent("Investor unlinked")}`);
+}
+
+/**
+ * Post the previewed commission lines to xsystem.commission_runs.
+ *
+ * Writes one `upfront` row per (investor, fund) bucket using the
+ * per-spec initial-only amount (the engine's interpretation: upfront ×
+ * initial sourcing gross). Writes one `trail` row per completed
+ * quarter from the preview (skips partial quarters where periodEnd >=
+ * today, since the cron will pick those up at quarter close).
+ *
+ * Idempotency comes from the (agent_investor_id, type, period_start,
+ * period_end) unique index on commission_runs — re-clicking Post will
+ * fail-silently on duplicates and only insert new rows.
+ */
+export async function postAgentCommissions(formData: FormData): Promise<void> {
+  const me = await requireRole(["admin", "checker"]);
+  const agentId = String(formData.get("agentId") ?? "").trim();
+  if (!agentId) return;
+
+  const preview = await computeAgentCommissionPreview(prisma, agentId);
+  const today = new Date();
+  let createdUpfront = 0;
+  let createdTrail = 0;
+  let skipped = 0;
+
+  await withActor(me.id, async (tx) => {
+    for (const b of preview.buckets) {
+      if (b.isDirectSubscription) continue;
+      if (b.initialUpfront <= 0) continue;
+      const term = preview.termsActive.find((t) => t.fundCategory === b.category);
+      if (!term) continue;
+      const initialGross = round2BD(
+        // Reconstruct base = initialUpfront / rate so the BS-friendly
+        // base_amount lines up with the rate_applied column.
+        term.upfrontPct > 0 ? b.initialUpfront / term.upfrontPct : 0,
+      );
+      try {
+        await tx.commissionRun.create({
+          data: {
+            agentId,
+            agentInvestorId: b.agentInvestorId,
+            type: "upfront",
+            periodStart: null,
+            periodEnd: b.sourcedOn,
+            baseAmount: initialGross,
+            rateApplied: term.upfrontPct,
+            amount: b.initialUpfront,
+            notes: `Posted from /admin/agents preview on ${today.toISOString().slice(0, 10)}`,
+          },
+        });
+        createdUpfront++;
+      } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === "P2002"
+        ) {
+          skipped++;
+        } else throw err;
+      }
+    }
+    for (const r of preview.trailRows) {
+      if (r.partial) continue; // wait for quarter close
+      try {
+        await tx.commissionRun.create({
+          data: {
+            agentId,
+            agentInvestorId: r.agentInvestorId,
+            type: "trail",
+            periodStart: r.quarterStart,
+            periodEnd: r.quarterEnd,
+            baseAmount: round2BD(r.avgValue),
+            rateApplied: r.rateQuarter,
+            amount: r.trail,
+            notes: `${r.navPoints} NAV pts · ${r.tier} tier · posted from preview ${today.toISOString().slice(0, 10)}`,
+          },
+        });
+        createdTrail++;
+      } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === "P2002"
+        ) {
+          skipped++;
+        } else throw err;
+      }
+    }
+  });
+
+  revalidatePath(`/admin/agents/${agentId}`);
+  const msg = `Posted ${createdUpfront} upfront + ${createdTrail} trail row(s)${skipped ? `; ${skipped} skipped as duplicates` : ""}.`;
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(msg)}`);
+}
+
+function round2BD(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 export async function createAgent(formData: FormData): Promise<void> {

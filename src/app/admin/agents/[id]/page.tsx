@@ -11,11 +11,13 @@ import {
   approveAgent,
   deleteAgentTerm,
   linkInvestorToAgent,
+  postAgentCommissions,
   reinstateAgent,
   suspendAgent,
   unlinkInvestor,
   updateAgentTerm,
 } from "@/app/admin/agents/actions";
+import { computeAgentCommissionPreview } from "@/lib/agent-commission-preview";
 import { formatBdt } from "@/lib/format";
 import {
   getAllFunds,
@@ -83,6 +85,12 @@ export default async function AgentDetailPage({
       () => new Map<string, PortalRedemption[]>(),
     ),
   ]);
+
+  // On-demand commission preview (no DB write). Mirrors the
+  // scripts/calc-agent-commissions.ts engine — same numbers in the UI,
+  // in the Excel download, and what gets persisted if the admin clicks
+  // "Post these to CommissionRun".
+  const preview = await computeAgentCommissionPreview(prisma, agent.id).catch(() => null);
 
   // Filter the picker to exclude investors already linked to this agent
   const alreadyLinkedSet = new Set(agent.investors.map((i) => `${i.investorCode}|${i.fundCode}`));
@@ -456,6 +464,8 @@ export default async function AgentDetailPage({
 
         <MethodologyPanel />
 
+        <CommissionPreviewPanel agentId={agent.id} preview={preview} />
+
         <Section title={`Recent commissions (${agent.commissionRuns.length})`}>
           {agent.commissionRuns.length === 0 ? (
             <p className="text-sm text-zinc-500">No runs yet.</p>
@@ -824,6 +834,272 @@ function Method({
         ))}
       </ul>
     </article>
+  );
+}
+
+function CommissionPreviewPanel({
+  agentId,
+  preview,
+}: {
+  agentId: string;
+  preview: Awaited<ReturnType<typeof computeAgentCommissionPreview>> | null;
+}) {
+  if (!preview) {
+    return (
+      <Section title="Calculate as of today">
+        <p className="text-sm text-red-700 dark:text-red-300">
+          Preview failed — see server logs. The portal database may be unreachable.
+        </p>
+      </Section>
+    );
+  }
+  if (preview.buckets.length === 0) {
+    return (
+      <Section title="Calculate as of today">
+        <p className="text-sm text-zinc-500">
+          No transactions yet for any linked investor. Link investors below — once they
+          execute BUYs in the portal, the preview will populate.
+        </p>
+      </Section>
+    );
+  }
+  const partialCount = preview.trailRows.filter((r) => r.partial).length;
+  return (
+    <Section title={`Calculate as of today — ${preview.asOf.toISOString().slice(0, 10)}`}>
+      {/* Totals strip */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <Stat label="Total inflow" value={formatBdt(preview.totals.inflow)} muted />
+        <Stat
+          label="Upfront (per-spec)"
+          value={formatBdt(preview.totals.initialUpfront)}
+          muted
+          hint="initial sourcing only — what the engine writes"
+        />
+        <Stat
+          label="Upfront (every BUY)"
+          value={formatBdt(preview.totals.perInflowUpfront)}
+          hint="practical: every BUY incl. SIP"
+        />
+        <Stat label="Trail (quarters to date)" value={formatBdt(preview.totals.trail)} />
+        <Stat
+          label="Total payable"
+          value={formatBdt(preview.totals.totalPayable)}
+          emphasis
+          hint="per-inflow upfront + trail"
+        />
+      </div>
+
+      {/* Action buttons */}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <a
+          href={`/api/admin/agents/${agentId}/commissions/excel`}
+          className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800"
+        >
+          Download Excel workbook
+        </a>
+        <form
+          action={postAgentCommissions}
+          data-confirm={`Post ${countPostable(preview)} commission row(s) to CommissionRun? Idempotent — duplicates are skipped. Partial quarters (cut off at today) are not posted; the cron will pick them up at quarter close.`}
+        >
+          <input type="hidden" name="agentId" value={agentId} />
+          <button
+            type="submit"
+            className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            Post these to CommissionRun
+          </button>
+        </form>
+        {partialCount > 0 && (
+          <span className="text-[11px] text-zinc-500">
+            {partialCount} partial quarter row(s) shown but not posted yet (cron picks up at
+            close).
+          </span>
+        )}
+      </div>
+
+      {/* Per-investor breakdown */}
+      <div className="mt-5 overflow-x-auto">
+        <table className="min-w-full divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
+          <thead className="text-left text-[11px] uppercase tracking-wider text-zinc-500">
+            <tr>
+              <th className="py-2 pr-3">Investor</th>
+              <th className="py-2 pr-3">Name</th>
+              <th className="py-2 pr-3">Fund</th>
+              <th className="py-2 pr-3">Sourced</th>
+              <th className="py-2 pr-3 text-right"># Txns</th>
+              <th className="py-2 pr-3 text-right">Inflow</th>
+              <th className="py-2 pr-3 text-right">Initial upfront</th>
+              <th className="py-2 pr-3 text-right">Per-inflow upfront</th>
+              <th className="py-2 pr-3 text-right">Trail</th>
+              <th className="py-2 pr-3 text-right">Payable</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {preview.buckets.map((b) => (
+              <tr
+                key={`${b.investorCode}|${b.fundCode}`}
+                className={b.isDirectSubscription ? "text-zinc-400" : ""}
+              >
+                <td className="py-1.5 pr-3 font-mono text-xs">{b.investorCode}</td>
+                <td className="py-1.5 pr-3">
+                  {b.name || <span className="italic text-zinc-400">—</span>}
+                  {b.isDirectSubscription && (
+                    <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium uppercase text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                      direct
+                    </span>
+                  )}
+                </td>
+                <td className="py-1.5 pr-3 text-xs">{b.fundCode}</td>
+                <td className="py-1.5 pr-3 text-xs">{b.sourcedOn.toISOString().slice(0, 10)}</td>
+                <td className="py-1.5 pr-3 text-right tabular-nums">{b.txCount}</td>
+                <td className="py-1.5 pr-3 text-right tabular-nums">
+                  {formatBdt(b.inflowTotal)}
+                </td>
+                <td className="py-1.5 pr-3 text-right tabular-nums">
+                  {formatBdt(b.initialUpfront)}
+                </td>
+                <td className="py-1.5 pr-3 text-right tabular-nums">
+                  {formatBdt(b.perInflowUpfront)}
+                </td>
+                <td className="py-1.5 pr-3 text-right tabular-nums">
+                  {formatBdt(b.trailTotal)}
+                </td>
+                <td className="py-1.5 pr-3 text-right font-semibold tabular-nums">
+                  {formatBdt(b.perInflowUpfront + b.trailTotal)}
+                </td>
+              </tr>
+            ))}
+            <tr className="border-t-2 border-zinc-300 font-semibold dark:border-zinc-700">
+              <td className="py-1.5 pr-3" colSpan={5}>
+                TOTAL
+              </td>
+              <td className="py-1.5 pr-3 text-right tabular-nums">
+                {formatBdt(preview.totals.inflow)}
+              </td>
+              <td className="py-1.5 pr-3 text-right tabular-nums">
+                {formatBdt(preview.totals.initialUpfront)}
+              </td>
+              <td className="py-1.5 pr-3 text-right tabular-nums">
+                {formatBdt(preview.totals.perInflowUpfront)}
+              </td>
+              <td className="py-1.5 pr-3 text-right tabular-nums">
+                {formatBdt(preview.totals.trail)}
+              </td>
+              <td className="py-1.5 pr-3 text-right tabular-nums">
+                {formatBdt(preview.totals.totalPayable)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Trail per-quarter detail */}
+      {preview.trailRows.length > 0 && (
+        <details className="mt-4">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Trail commission — quarter-by-quarter ({preview.trailRows.length} rows)
+          </summary>
+          <div className="mt-2 overflow-x-auto">
+            <table className="min-w-full divide-y divide-zinc-200 text-xs dark:divide-zinc-800">
+              <thead className="text-left text-[10px] uppercase tracking-wider text-zinc-500">
+                <tr>
+                  <th className="py-1.5 pr-3">Investor</th>
+                  <th className="py-1.5 pr-3">Fund</th>
+                  <th className="py-1.5 pr-3">Quarter</th>
+                  <th className="py-1.5 pr-3">Tier</th>
+                  <th className="py-1.5 pr-3 text-right">Rate p.a.</th>
+                  <th className="py-1.5 pr-3 text-right"># NAV</th>
+                  <th className="py-1.5 pr-3 text-right">Avg value</th>
+                  <th className="py-1.5 pr-3 text-right">Trail</th>
+                  <th className="py-1.5 pr-3">Notes</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {preview.trailRows.map((r, i) => (
+                  <tr key={i}>
+                    <td className="py-1 pr-3 font-mono">{r.investorCode}</td>
+                    <td className="py-1 pr-3">{r.fundCode}</td>
+                    <td className="py-1 pr-3 font-mono text-[10px]">
+                      {r.quarterStart.toISOString().slice(0, 10)} →{" "}
+                      {r.quarterEnd.toISOString().slice(0, 10)}
+                    </td>
+                    <td className="py-1 pr-3">{r.tier}</td>
+                    <td className="py-1 pr-3 text-right tabular-nums">
+                      {(r.ratePa * 100).toFixed(4)}%
+                    </td>
+                    <td className="py-1 pr-3 text-right tabular-nums">{r.navPoints}</td>
+                    <td className="py-1 pr-3 text-right tabular-nums">
+                      {formatBdt(r.avgValue)}
+                    </td>
+                    <td className="py-1 pr-3 text-right font-semibold tabular-nums">
+                      {formatBdt(r.trail)}
+                    </td>
+                    <td className="py-1 pr-3 text-[10px] text-amber-700 dark:text-amber-300">
+                      {r.partial ? "partial — not posted yet" : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+
+      <p className="mt-3 text-[10px] text-zinc-500">
+        Preview is computed live from <code className="font-mono">public.transactions</code> +{" "}
+        <code className="font-mono">public.nav_records</code> using the LATEST effective term
+        per category. The Excel download contains the same numbers plus a per-transaction
+        breakdown. Posting writes rows to{" "}
+        <code className="font-mono">xsystem.commission_runs</code> — duplicates are skipped
+        via the unique-period index.
+      </p>
+    </Section>
+  );
+}
+
+function countPostable(
+  preview: Awaited<ReturnType<typeof computeAgentCommissionPreview>>,
+): number {
+  const upfront = preview.buckets.filter(
+    (b) => !b.isDirectSubscription && b.initialUpfront > 0,
+  ).length;
+  const trail = preview.trailRows.filter((r) => !r.partial).length;
+  return upfront + trail;
+}
+
+function Stat({
+  label,
+  value,
+  hint,
+  emphasis = false,
+  muted = false,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  emphasis?: boolean;
+  muted?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-md border p-3 ${
+        emphasis
+          ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950"
+          : muted
+            ? "border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950"
+            : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+      }`}
+    >
+      <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">{label}</p>
+      <p
+        className={`mt-0.5 font-mono tabular-nums ${
+          emphasis ? "text-lg font-bold text-emerald-800 dark:text-emerald-200" : "text-base"
+        }`}
+      >
+        {value}
+      </p>
+      {hint && <p className="mt-0.5 text-[10px] text-zinc-500">{hint}</p>}
+    </div>
   );
 }
 
