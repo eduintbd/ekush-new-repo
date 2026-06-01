@@ -61,24 +61,13 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-/** Pick the LATEST effective term for a category as of `asOf`. The
- *  commission engine's pickTerm uses .find() which returns the first
- *  match in arbitrary array order — this implementation sorts by
- *  effectiveFrom DESC first, so the most-recent applicable term wins. */
-function pickActiveTerm(
-  terms: Term[],
-  category: "equity" | "fixed_income",
-  asOf: Date,
-): Term | null {
-  const sorted = terms
-    .filter(
-      (t) =>
-        t.fundCategory === category &&
-        t.effectiveFrom <= asOf &&
-        (t.effectiveTo === null || t.effectiveTo > asOf),
-    )
-    .sort((a, b) => +b.effectiveFrom - +a.effectiveFrom);
-  return sorted[0] ?? null;
+/** Look up the term for a category. The caller has already pre-filtered
+ *  `terms` to just the latest one per category, so this is essentially
+ *  a category match — the date check is intentionally absent so that
+ *  the current canonical rates apply retroactively to every BUY in
+ *  the cohort (per admin instruction). */
+function termFor(terms: Term[], category: "equity" | "fixed_income"): Term | null {
+  return terms.find((t) => t.fundCategory === category) ?? null;
 }
 
 async function main() {
@@ -102,7 +91,7 @@ async function main() {
   console.log(`Agent: ${agent.code} — ${agent.fullName}  (${agent.status})`);
   console.log(`Term rows: ${agent.terms.length}, investor links: ${agent.investors.length}`);
 
-  const terms: Term[] = agent.terms.map((t) => ({
+  const allTerms: Term[] = agent.terms.map((t) => ({
     fundCategory: t.fundCategory as "equity" | "fixed_income",
     upfrontPct: Number(t.upfrontPct),
     trailY1PctPa: Number(t.trailY1PctPa),
@@ -112,6 +101,25 @@ async function main() {
     effectiveFrom: t.effectiveFrom,
     effectiveTo: t.effectiveTo,
   }));
+
+  // Use the LATEST term per category for ALL transactions (retroactive
+  // application of the current rates). This is what the admin asked for —
+  // the older term rows had data-entry errors (percentages typed as
+  // decimals); the most-recent rows are the canonical truth.
+  const latestByCategory = new Map<"equity" | "fixed_income", Term>();
+  for (const t of allTerms) {
+    const cur = latestByCategory.get(t.fundCategory);
+    if (!cur || t.effectiveFrom > cur.effectiveFrom) {
+      latestByCategory.set(t.fundCategory, t);
+    }
+  }
+  const terms: Term[] = Array.from(latestByCategory.values());
+  console.log("Active terms (latest per category):");
+  for (const t of terms) {
+    console.log(
+      `  ${t.fundCategory.padEnd(13)} upfront=${(t.upfrontPct * 100).toFixed(2)}%  y1=${(t.trailY1PctPa * 100).toFixed(2)}%  y2+=${(t.trailY2PlusPctPa * 100).toFixed(2)}%  clawback=${t.clawbackMonths}mo@${(t.clawbackPct * 100).toFixed(0)}%  effFrom=${t.effectiveFrom.toISOString().slice(0, 10)}`,
+    );
+  }
 
   // 2. Pull every executed transaction for the agent's investor cohort.
   // Pre-cohort means we miss transactions BEFORE the link, but those
@@ -262,13 +270,17 @@ async function main() {
     unitsSold: number;
     initialUpfront: number; // per-spec (engine) upfront
     perInflowUpfront: number; // practical (every-BUY) upfront
+    trailTotal: number; // sum of quarterly trail commissions through today
     txCount: number;
+    // Ordered tx history for unitsAt() during trail computation
+    buys: Array<{ date: Date; units: number }>;
+    sells: Array<{ date: Date; units: number }>;
   };
   const buckets = new Map<string, Bucket>();
 
   for (const t of txns) {
     const category = categoryForFund(t.fundCode);
-    const term = pickActiveTerm(terms, category, t.date);
+    const term = termFor(terms, category);
     const rate = term?.upfrontPct ?? 0;
     const isBuy = t.direction === "BUY";
     const commission = isBuy ? round2(t.amount * rate) : 0;
@@ -290,7 +302,10 @@ async function main() {
         unitsSold: 0,
         initialUpfront: 0,
         perInflowUpfront: 0,
+        trailTotal: 0,
         txCount: 0,
+        buys: [],
+        sells: [],
       };
       buckets.set(key, b);
     }
@@ -299,9 +314,11 @@ async function main() {
       b.inflowTotal += t.amount;
       b.unitsBought += t.units;
       b.perInflowUpfront += commission;
+      b.buys.push({ date: t.date, units: t.units });
     } else {
       b.outflowTotal += t.amount;
       b.unitsSold += t.units;
+      b.sells.push({ date: t.date, units: t.units });
     }
 
     // Mark per-spec initial-only upfront on the first BUY at-or-after sourcedOn
@@ -335,6 +352,145 @@ async function main() {
     });
   }
 
+  // ─── Trail commission (quarterly) ─────────────────────────────────
+  // Pull all NAV snapshots for the relevant funds since the earliest
+  // sourcing date. Compute per-bucket quarterly trail:
+  //   weekly avg held value = mean(units_at_each_nav × nav_value)
+  //   rate = trailY1 if quarter midpoint < sourcedOn + 12mo else Y2+
+  //   trail = weekly avg × rate ÷ 4
+  // Units at any NAV date = sum(BUYs up to that date) − sum(SELLs up
+  // to that date) — naturally accounts for SIP installments expanding
+  // the unit base.
+  const earliestSourced = Array.from(buckets.values()).reduce<Date | null>(
+    (acc, b) => (acc === null || b.sourcedOn < acc ? b.sourcedOn : acc),
+    null,
+  );
+
+  type NavRow = { fundCode: FundCode; date: Date; nav: number };
+  let navRows: NavRow[] = [];
+  if (earliestSourced) {
+    const raw = await prisma.$queryRawUnsafe<
+      Array<{ fund_code: string; date: Date; nav: any }>
+    >(
+      `SELECT f.code AS fund_code, n.date, n.nav
+       FROM public.nav_records n
+       JOIN public.funds f ON f.id = n."fundId"
+       WHERE n.date >= $1
+       ORDER BY n.date ASC`,
+      earliestSourced,
+    );
+    navRows = raw.map((r) => ({
+      fundCode: r.fund_code as FundCode,
+      date: r.date,
+      nav: Number(r.nav),
+    }));
+  }
+  const navsByFund = new Map<FundCode, NavRow[]>();
+  for (const n of navRows) {
+    const arr = navsByFund.get(n.fundCode) ?? [];
+    arr.push(n);
+    navsByFund.set(n.fundCode, arr);
+  }
+  console.log(`NAV records pulled: ${navRows.length} since ${earliestSourced?.toISOString().slice(0, 10) ?? "—"}`);
+
+  // Build calendar quarters from earliest sourcing through today.
+  type Q = { start: Date; end: Date; label: string };
+  function calendarQuarters(from: Date, to: Date): Q[] {
+    const out: Q[] = [];
+    const start = new Date(Date.UTC(from.getUTCFullYear(), Math.floor(from.getUTCMonth() / 3) * 3, 1));
+    let cur = start;
+    while (cur <= to) {
+      const next = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + 3, 1));
+      const end = new Date(next.getTime() - 86400_000);
+      out.push({
+        start: cur,
+        end: end > to ? to : end,
+        label: `${cur.toISOString().slice(0, 7)} Q (${cur.toISOString().slice(0, 10)} → ${(end > to ? to : end).toISOString().slice(0, 10)})`,
+      });
+      cur = next;
+    }
+    return out;
+  }
+
+  const trailSheet = wb.addWorksheet("Trail commissions");
+  trailSheet.columns = [
+    { header: "Investor", key: "inv", width: 10 },
+    { header: "Fund", key: "fund", width: 8 },
+    { header: "Quarter", key: "qLabel", width: 36 },
+    { header: "Sourced on", key: "sourced", width: 12 },
+    { header: "Tier", key: "tier", width: 6 },
+    { header: "Rate p.a.", key: "rate", width: 12, style: { numFmt: "0.0000%" } },
+    { header: "Quarterly rate", key: "qrate", width: 14, style: { numFmt: "0.0000%" } },
+    { header: "# NAV pts", key: "npts", width: 10, style: { numFmt: "#,##0" } },
+    { header: "Avg units held", key: "avgu", width: 14, style: { numFmt: "#,##0.00" } },
+    { header: "Avg NAV", key: "avgnav", width: 12, style: { numFmt: "#,##0.0000" } },
+    { header: "Avg held value (BDT)", key: "avgv", width: 22, style: { numFmt: "#,##0.00" } },
+    { header: "Trail commission (BDT)", key: "trail", width: 24, style: { numFmt: "#,##0.00" } },
+    { header: "Notes", key: "notes", width: 40 },
+  ];
+  trailSheet.getRow(1).font = { bold: true };
+  trailSheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  let totTrail = 0;
+  if (earliestSourced) {
+    const quarters = calendarQuarters(earliestSourced, asOf);
+    for (const b of Array.from(buckets.values()).sort(
+      (a, b) => a.investorCode.localeCompare(b.investorCode) || a.fundCode.localeCompare(b.fundCode),
+    )) {
+      const term = termFor(terms, b.category as "equity" | "fixed_income");
+      if (!term) continue;
+      const buysSorted = [...b.buys].sort((x, y) => +x.date - +y.date);
+      const sellsSorted = [...b.sells].sort((x, y) => +x.date - +y.date);
+      const unitsAt = (d: Date): number => {
+        let u = 0;
+        for (const x of buysSorted) if (x.date <= d) u += x.units;
+        for (const x of sellsSorted) if (x.date <= d) u -= x.units;
+        return Math.max(0, u);
+      };
+      const navs = navsByFund.get(b.fundCode) ?? [];
+      for (const q of quarters) {
+        if (q.end < b.sourcedOn) continue; // not sourced yet in this quarter
+        const qNavs = navs
+          .filter((n) => n.date >= (q.start > b.sourcedOn ? q.start : b.sourcedOn) && n.date <= q.end)
+          .sort((a, b) => +a.date - +b.date);
+        if (qNavs.length === 0) continue;
+        const midpoint = new Date((q.start.getTime() + q.end.getTime()) / 2);
+        const isY1 = midpoint < addMonths(b.sourcedOn, 12);
+        const ratePa = isY1 ? term.trailY1PctPa : term.trailY2PlusPctPa;
+        const rateQuarter = ratePa / 4;
+        const values = qNavs.map((n) => ({ u: unitsAt(n.date), v: n.nav, val: unitsAt(n.date) * n.nav }));
+        const avgValue = values.reduce((s, x) => s + x.val, 0) / values.length;
+        const avgUnits = values.reduce((s, x) => s + x.u, 0) / values.length;
+        const avgNav = values.reduce((s, x) => s + x.v, 0) / values.length;
+        const trail = round2(avgValue * rateQuarter);
+        if (avgValue <= 0) continue;
+        totTrail += trail;
+        b.trailTotal += trail;
+        trailSheet.addRow({
+          inv: b.investorCode,
+          fund: b.fundCode,
+          qLabel: q.label,
+          sourced: b.sourcedOn.toISOString().slice(0, 10),
+          tier: isY1 ? "Y1" : "Y2+",
+          rate: ratePa,
+          qrate: rateQuarter,
+          npts: values.length,
+          avgu: avgUnits,
+          avgnav: avgNav,
+          avgv: avgValue,
+          trail,
+          notes:
+            q.end >= asOf
+              ? `Partial quarter — cut off at today (${asOf.toISOString().slice(0, 10)})`
+              : "",
+        });
+      }
+    }
+  } else {
+    trailSheet.addRow({ notes: "No sourcings yet — no trail to compute" });
+  }
+  console.log(`Total trail (across all quarters): BDT ${totTrail.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`);
+
   // ─── Sheet 1 (Summary) ───
   const sumSheet = wb.addWorksheet("Summary");
   sumSheet.columns = [
@@ -351,6 +507,8 @@ async function main() {
     { header: "Units sold", key: "us", width: 12, style: { numFmt: "#,##0.00" } },
     { header: "Per-spec upfront (initial only)", key: "initU", width: 28, style: { numFmt: "#,##0.00" } },
     { header: "Per-inflow upfront (every BUY)", key: "everyU", width: 28, style: { numFmt: "#,##0.00" } },
+    { header: "Trail commission (BDT)", key: "trail", width: 22, style: { numFmt: "#,##0.00" } },
+    { header: "Total payable (per-inflow + trail)", key: "tot", width: 30, style: { numFmt: "#,##0.00" } },
   ];
   sumSheet.getRow(1).font = { bold: true };
   sumSheet.views = [{ state: "frozen", ySplit: 1 }];
@@ -358,7 +516,8 @@ async function main() {
   let totInflow = 0,
     totOutflow = 0,
     totInitial = 0,
-    totEvery = 0;
+    totEvery = 0,
+    totTrailSum = 0;
   const sortedBuckets = Array.from(buckets.values()).sort(
     (a, b) =>
       a.investorCode.localeCompare(b.investorCode) ||
@@ -369,6 +528,7 @@ async function main() {
     totOutflow += b.outflowTotal;
     totInitial += b.initialUpfront;
     totEvery += b.perInflowUpfront;
+    totTrailSum += b.trailTotal;
     sumSheet.addRow({
       inv: b.investorCode,
       name: b.name,
@@ -383,6 +543,8 @@ async function main() {
       us: b.unitsSold,
       initU: b.initialUpfront,
       everyU: round2(b.perInflowUpfront),
+      trail: round2(b.trailTotal),
+      tot: round2(b.perInflowUpfront + b.trailTotal),
     });
   }
   // Totals row
@@ -400,6 +562,8 @@ async function main() {
     us: "",
     initU: round2(totInitial),
     everyU: round2(totEvery),
+    trail: round2(totTrailSum),
+    tot: round2(totEvery + totTrailSum),
   });
   totRow.font = { bold: true };
   totRow.border = { top: { style: "thin" } };
@@ -409,10 +573,13 @@ async function main() {
     [`Agent: ${agent.code} — ${agent.fullName}`],
     [`Status: ${agent.status}`],
     [`As-of date: ${asOfStr}`],
-    [`Trail commission: NOT computed — public.navSnapshot table is empty in this DB. Trail requires weekly NAV snapshots per fund.`],
+    [`Rate rule: LATEST effective term per category applied to ALL transactions (older term rows treated as superseded).`],
     [`Two upfront calculations shown for verification:`],
     [`  • Per-spec upfront (initial only) — what the cron commission engine computes today: upfront × initial sourcing gross only.`],
     [`  • Per-inflow upfront (every BUY)   — practical interpretation: every BUY (including SIP installments) earns upfront × amount.`],
+    [`Trail commission: computed from public.nav_records (daily NAV snapshots per fund). Per quarter:`],
+    [`  trail = (avg of units × nav across all NAV dates in the quarter) × rate p.a. ÷ 4`],
+    [`  rate = Trail Y1 p.a. if quarter midpoint < sourced_on + 12 months, else Trail Y2+ p.a.`],
     [],
   );
 
@@ -428,6 +595,8 @@ async function main() {
   console.log(`  • Total outflow: BDT ${totOutflow.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`);
   console.log(`  • Per-spec upfront (initial-only):    BDT ${totInitial.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`);
   console.log(`  • Per-inflow upfront (every BUY):     BDT ${totEvery.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`);
+  console.log(`  • Trail commission (quarterly sum):   BDT ${totTrailSum.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`);
+  console.log(`  • Total payable (every-BUY + trail):  BDT ${(totEvery + totTrailSum).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`);
 }
 
 main()

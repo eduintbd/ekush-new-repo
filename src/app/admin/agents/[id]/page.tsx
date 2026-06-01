@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import {
   addAgentTerm,
   approveAgent,
+  deleteAgentTerm,
   linkInvestorToAgent,
   reinstateAgent,
   suspendAgent,
@@ -28,7 +29,7 @@ import {
   type PortalRedemption,
 } from "@/lib/portal-data";
 
-type Search = { ok?: string; error?: string };
+type Search = { ok?: string; error?: string; editTerm?: string };
 
 const FUND_CATEGORIES = ["equity", "fixed_income"] as const;
 
@@ -310,11 +311,97 @@ export default async function AgentDetailPage({
                   <th className="py-2 pr-4">Trail Y2+ p.a.</th>
                   <th className="py-2 pr-4">Clawback</th>
                   <th className="py-2 pr-4">Effective</th>
+                  <th className="py-2 pr-4" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {agent.terms.map((t) => {
                   const isCurrent = t.effectiveTo === null;
+                  const isEditing = sp.editTerm === t.id;
+                  if (isEditing) {
+                    return (
+                      <tr key={t.id} className="bg-amber-50 dark:bg-amber-950/30">
+                        <td colSpan={7} className="py-2">
+                          <form action={updateAgentTerm} className="flex flex-wrap items-end gap-2 text-xs">
+                            <input type="hidden" name="id" value={t.id} />
+                            <input type="hidden" name="agentId" value={agent.id} />
+                            <label className="block">
+                              <span className="block font-medium uppercase tracking-wider text-zinc-500">Category</span>
+                              <div className="mt-1 py-1.5 px-2 text-sm">{t.fundCategory}</div>
+                            </label>
+                            <label className="block">
+                              <span className="block font-medium uppercase tracking-wider text-zinc-500">Upfront</span>
+                              <input
+                                name="upfrontPct"
+                                type="number"
+                                step="0.0001"
+                                defaultValue={Number(t.upfrontPct)}
+                                className="mt-1 w-24 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="block font-medium uppercase tracking-wider text-zinc-500">Y1 p.a.</span>
+                              <input
+                                name="trailY1PctPa"
+                                type="number"
+                                step="0.0001"
+                                defaultValue={Number(t.trailY1PctPa)}
+                                className="mt-1 w-24 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="block font-medium uppercase tracking-wider text-zinc-500">Y2+ p.a.</span>
+                              <input
+                                name="trailY2PlusPctPa"
+                                type="number"
+                                step="0.0001"
+                                defaultValue={Number(t.trailY2PlusPctPa)}
+                                className="mt-1 w-24 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="block font-medium uppercase tracking-wider text-zinc-500">Clawback mo</span>
+                              <input
+                                name="clawbackMonths"
+                                type="number"
+                                step="1"
+                                defaultValue={t.clawbackMonths}
+                                className="mt-1 w-20 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="block font-medium uppercase tracking-wider text-zinc-500">Clawback %</span>
+                              <input
+                                name="clawbackPct"
+                                type="number"
+                                step="0.01"
+                                defaultValue={Number(t.clawbackPct)}
+                                className="mt-1 w-20 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                              />
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="submit"
+                                className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+                              >
+                                Save
+                              </button>
+                              <Link
+                                href={`/admin/agents/${agent.id}`}
+                                className="text-[11px] text-zinc-500 underline"
+                              >
+                                Cancel
+                              </Link>
+                            </div>
+                          </form>
+                          <p className="mt-1 px-2 text-[10px] text-zinc-500">
+                            Tip: enter values as decimals (0.002 = 0.20%) OR as whole percents (0.2 = 0.20%) — the
+                            backend treats anything &ge; 1 as a percent literal.
+                          </p>
+                        </td>
+                      </tr>
+                    );
+                  }
                   return (
                     <tr key={t.id} className={isCurrent ? "" : "text-zinc-400"}>
                       <td className="py-1.5 pr-4">
@@ -334,6 +421,30 @@ export default async function AgentDetailPage({
                       <td className="py-1.5 pr-4">
                         {t.effectiveFrom.toISOString().slice(0, 10)} →{" "}
                         {t.effectiveTo ? t.effectiveTo.toISOString().slice(0, 10) : "now"}
+                      </td>
+                      <td className="py-1.5 pr-4 text-right">
+                        <div className="flex items-center gap-3 text-[11px]">
+                          <Link
+                            href={`/admin/agents/${agent.id}?editTerm=${t.id}`}
+                            className="text-zinc-600 underline hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
+                          >
+                            edit
+                          </Link>
+                          <form
+                            action={deleteAgentTerm}
+                            className="inline"
+                            data-confirm={`Delete this ${t.fundCategory} term effective ${t.effectiveFrom.toISOString().slice(0, 10)}? Commission calculations will use whichever term remains for this category.`}
+                          >
+                            <input type="hidden" name="id" value={t.id} />
+                            <input type="hidden" name="agentId" value={agent.id} />
+                            <button
+                              type="submit"
+                              className="text-red-600 hover:underline dark:text-red-400"
+                            >
+                              delete
+                            </button>
+                          </form>
+                        </div>
                       </td>
                     </tr>
                   );

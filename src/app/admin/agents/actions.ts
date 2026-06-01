@@ -206,6 +206,23 @@ export async function updateAgentTerm(formData: FormData): Promise<void> {
 }
 
 /**
+ * Delete an AgentTerm row outright. Used to clean up data-entry errors
+ * — when a term was saved with wrong values (e.g. 20% instead of
+ * 0.20%) and superseded by a corrected row, the bad row should go so
+ * the commission engine + retroactive calculators don't pick it.
+ */
+export async function deleteAgentTerm(formData: FormData): Promise<void> {
+  const me = await requireRole(["admin", "checker"]);
+  const id = String(formData.get("id") ?? "").trim();
+  const agentId = String(formData.get("agentId") ?? "").trim();
+  if (!id || !agentId) return;
+
+  await withActor(me.id, (tx) => tx.agentTerm.delete({ where: { id } }));
+  revalidatePath(`/admin/agents/${agentId}`);
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent("Term deleted")}`);
+}
+
+/**
  * Link an existing portal investor to an X-System selling agent. Creates
  * an `xsystem.agent_investors` row that the commission engine + agent
  * portal use to identify who the agent sourced.
