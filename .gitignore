@@ -53,3 +53,6 @@ docs/*.csv
 
 
 .vercel
+
+# Generated diag/calc outputs
+/scripts/output/
