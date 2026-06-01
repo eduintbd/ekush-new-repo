@@ -45,11 +45,6 @@ export async function getTrialBalance(
     where: { id: fiscalYearId },
   });
 
-  const accounts = await prisma.chartOfAccount.findMany({
-    where: { isActive: true },
-    orderBy: { sl: "asc" },
-  });
-
   // Aggregate journal lines for the period. When `asOfDate` is provided
   // (period-to-date / same-period comparison), only include rows with
   // entryDate ≤ asOfDate. OB rows (dated day-before-FY-start) survive
@@ -70,6 +65,19 @@ export async function getTrialBalance(
       },
     ]),
   );
+
+  // Pull active accounts + any inactive ones that still have non-zero
+  // period activity. An account deactivated mid-life (e.g. "Capital Gain"
+  // after migrating to "Realised Gain/(Loss) on Investments") must still
+  // report historical balances for prior-year comparison views — else
+  // its IS / BS lines drop to zero for the FY it was inactivated in.
+  const accountsWithActivity = Array.from(aggMap.keys());
+  const accounts = await prisma.chartOfAccount.findMany({
+    where: {
+      OR: [{ isActive: true }, { name: { in: accountsWithActivity } }],
+    },
+    orderBy: { sl: "asc" },
+  });
 
   const rows: TrialBalanceRow[] = accounts.map((acc) => {
     const agg = aggMap.get(acc.name) ?? { grossDebit: 0, grossCredit: 0 };

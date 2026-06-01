@@ -142,6 +142,9 @@ export const ACCOUNT = {
   interestIncome: "Interest Income",
   capitalGain: "Capital Gain",
   capitalLoss: "Capital Loss",
+  // Combined gain/loss account used by some FYs (e.g. FY24-25 import).
+  // Gains posted as Cr, losses as Dr; the IS line below nets them.
+  capitalGainLossCombined: "Capital Gain/ loss",
   // Phase 1 (trade engine) account — every SELL voucher credits this
   // when net realised P&L is positive, debits when negative. The IS
   // builder includes it in the "Capital Gain" income line via signed
@@ -320,9 +323,15 @@ export function buildIncomeStatement(
   const realisedGainNet =
     netC(tb, ACCOUNT.realisedGainOnInvestments)
     - netD(tb, ACCOUNT.realisedGainOnInvestments);
+  // Some FYs (e.g. the imported FY24-25) use a single combined account
+  // "Capital Gain/ loss" — gains posted as Cr, losses as Dr. Net it
+  // into the same line.
+  const combinedNet =
+    grossC(tb, ACCOUNT.capitalGainLossCombined)
+    - grossD(tb, ACCOUNT.capitalGainLossCombined);
   const capitalGain =
     grossC(tb, ACCOUNT.capitalGain) - grossD(tb, ACCOUNT.capitalLoss)
-    + realisedGainNet;
+    + combinedNet + realisedGainNet;
   // Interest Income = TB-C!I34 + TB-C!I100 − TB-C!H34
   const interestIncome =
     grossC(tb, ACCOUNT.interestIncomeOfFdr) +
@@ -338,7 +347,12 @@ export function buildIncomeStatement(
     {
       label: "Capital Gain",
       amount: capitalGain,
-      sources: [ACCOUNT.capitalGain, ACCOUNT.capitalLoss, ACCOUNT.realisedGainOnInvestments],
+      sources: [
+        ACCOUNT.capitalGain,
+        ACCOUNT.capitalLoss,
+        ACCOUNT.capitalGainLossCombined,
+        ACCOUNT.realisedGainOnInvestments,
+      ],
     },
     {
       label: "Interest Income",
