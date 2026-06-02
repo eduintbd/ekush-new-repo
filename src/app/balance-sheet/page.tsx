@@ -416,9 +416,9 @@ function SubtotalRow({
   return (
     <tr className="bg-zinc-50/50 dark:bg-zinc-950/50">
       <td className="px-4 py-2 pl-8 text-sm italic text-zinc-600 dark:text-zinc-400">{label}</td>
-      <td className="px-4 py-2 text-left font-medium tabular-nums">{formatBdt(amount)}</td>
+      <td className="px-4 py-2 text-right font-medium tabular-nums">{formatBdt(amount)}</td>
       {compareAmount != null && (
-        <td className="px-4 py-2 text-left font-medium tabular-nums text-zinc-500">
+        <td className="px-4 py-2 text-right font-medium tabular-nums text-zinc-500">
           {formatBdt(compareAmount)}
         </td>
       )}
@@ -440,9 +440,9 @@ function TotalRow({
   return (
     <tr className={emphatic ? "bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900" : "bg-zinc-100 dark:bg-zinc-800"}>
       <td className="px-4 py-2.5 text-sm font-semibold">{label}</td>
-      <td className="px-4 py-2.5 text-left text-sm font-semibold tabular-nums">{formatBdt(amount)}</td>
+      <td className="px-4 py-2.5 text-right text-sm font-semibold tabular-nums">{formatBdt(amount)}</td>
       {compareAmount != null && (
-        <td className="px-4 py-2.5 text-left text-sm font-semibold tabular-nums opacity-70">
+        <td className="px-4 py-2.5 text-right text-sm font-semibold tabular-nums opacity-70">
           {formatBdt(compareAmount)}
         </td>
       )}
