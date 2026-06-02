@@ -228,8 +228,8 @@ function Report({
             <thead className="bg-zinc-50 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:bg-zinc-950">
               <tr>
                 <th className="px-4 py-2 text-left">Item</th>
-                <th className="px-4 py-2 text-right">{fyLabel}</th>
-                <th className="px-4 py-2 text-right">{compareLabel}</th>
+                <th className="px-4 py-2 text-left">{fyLabel}</th>
+                <th className="px-4 py-2 text-left">{compareLabel}</th>
               </tr>
             </thead>
           )}
@@ -314,9 +314,9 @@ function ExpandableLine({
     return (
       <tr>
         <td className="px-4 py-2 pl-8">{line.label}</td>
-        <td className="px-4 py-2 text-right tabular-nums">{fmt(line.amount)}</td>
+        <td className="px-4 py-2 text-left tabular-nums">{fmt(line.amount)}</td>
         {hasCompare && (
-          <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
+          <td className="px-4 py-2 text-left tabular-nums text-zinc-500">
             {fmt(compareAmount ?? 0)}
           </td>
         )}
@@ -352,9 +352,9 @@ function ExpandableLine({
               </span>
               {line.label}
             </span>
-            <span className="px-4 py-2 text-right tabular-nums">{fmt(line.amount)}</span>
+            <span className="px-4 py-2 text-left tabular-nums">{fmt(line.amount)}</span>
             {hasCompare && (
-              <span className="px-4 py-2 text-right tabular-nums text-zinc-500">
+              <span className="px-4 py-2 text-left tabular-nums text-zinc-500">
                 {fmt(compareAmount ?? 0)}
               </span>
             )}
@@ -408,9 +408,9 @@ function SubtotalRow({
   return (
     <tr className="bg-zinc-50/50 dark:bg-zinc-950/50">
       <td className="px-4 py-2 pl-8 text-sm italic text-zinc-600 dark:text-zinc-400">{label}</td>
-      <td className="px-4 py-2 text-right font-medium tabular-nums">{formatBdt(amount)}</td>
+      <td className="px-4 py-2 text-left font-medium tabular-nums">{formatBdt(amount)}</td>
       {compareAmount != null && (
-        <td className="px-4 py-2 text-right font-medium tabular-nums text-zinc-500">
+        <td className="px-4 py-2 text-left font-medium tabular-nums text-zinc-500">
           {formatBdt(compareAmount)}
         </td>
       )}
@@ -432,9 +432,9 @@ function TotalRow({
   return (
     <tr className={emphatic ? "bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900" : "bg-zinc-100 dark:bg-zinc-800"}>
       <td className="px-4 py-2.5 text-sm font-semibold">{label}</td>
-      <td className="px-4 py-2.5 text-right text-sm font-semibold tabular-nums">{formatBdt(amount)}</td>
+      <td className="px-4 py-2.5 text-left text-sm font-semibold tabular-nums">{formatBdt(amount)}</td>
       {compareAmount != null && (
-        <td className="px-4 py-2.5 text-right text-sm font-semibold tabular-nums opacity-70">
+        <td className="px-4 py-2.5 text-left text-sm font-semibold tabular-nums opacity-70">
           {formatBdt(compareAmount)}
         </td>
       )}

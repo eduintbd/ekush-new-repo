@@ -234,8 +234,8 @@ export default async function CashFlowStatementPage({
           {compareCfs && (
             <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-6 border-b border-zinc-200 bg-zinc-50 px-5 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
               <span />
-              <span className="text-right">{fy.label}</span>
-              <span className="text-right">{compareFy?.label}</span>
+              <span className="text-left">{fy.label}</span>
+              <span className="text-left">{compareFy?.label}</span>
             </div>
           )}
           <Activity
@@ -564,7 +564,7 @@ function Row({
         </span>
         <span
           className={[
-            "tabular-nums text-right",
+            "tabular-nums text-left",
             isNeg ? "text-red-700 dark:text-red-300" : "",
           ].join(" ")}
         >
@@ -573,7 +573,7 @@ function Row({
         {hasCompare && (
           <span
             className={[
-              "tabular-nums text-right text-zinc-500",
+              "tabular-nums text-left text-zinc-500",
               cmpIsNeg ? "text-red-700 dark:text-red-300" : "",
             ].join(" ")}
           >
