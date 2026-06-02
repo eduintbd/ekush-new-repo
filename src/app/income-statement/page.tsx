@@ -225,8 +225,8 @@ function Report({
             <thead className="bg-zinc-50 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:bg-zinc-950">
               <tr>
                 <th className="px-4 py-2 text-left">Item</th>
-                <th className="px-4 py-2 text-left">{fyLabel}</th>
-                <th className="px-4 py-2 text-left">{compareLabel}</th>
+                <th className="px-4 py-2 text-right">{fyLabel}</th>
+                <th className="px-4 py-2 text-right">{compareLabel}</th>
               </tr>
             </thead>
           )}
@@ -318,9 +318,9 @@ function ExpandableLine({
     return (
       <tr>
         <td className="px-4 py-2 pl-8">{line.label}</td>
-        <td className="px-4 py-2 text-left tabular-nums">{fmt(line.amount)}</td>
+        <td className="px-4 py-2 text-right tabular-nums">{fmt(line.amount)}</td>
         {hasCompare && (
-          <td className="px-4 py-2 text-left tabular-nums text-zinc-500">
+          <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
             {fmt(compareAmount ?? 0)}
           </td>
         )}
@@ -362,9 +362,9 @@ function ExpandableLine({
               </span>
               {line.label}
             </span>
-            <span className="px-4 py-2 text-left tabular-nums">{fmt(line.amount)}</span>
+            <span className="px-4 py-2 text-right tabular-nums">{fmt(line.amount)}</span>
             {hasCompare && (
-              <span className="px-4 py-2 text-left tabular-nums text-zinc-500">
+              <span className="px-4 py-2 text-right tabular-nums text-zinc-500">
                 {fmt(compareAmount ?? 0)}
               </span>
             )}
