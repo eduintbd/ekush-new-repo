@@ -15,6 +15,7 @@ type Search = {
   fy?: string;
   from?: string;
   to?: string;
+  on?: string;
   account?: string;
   txnType?: string;
   q?: string;
@@ -45,6 +46,8 @@ export default async function JournalsPage({
 
   const fyId = sp.fy ?? fiscalYears[0]?.id;
   const page = Math.max(1, Number(sp.page ?? "1") || 1);
+  // Single-day filter `on=YYYY-MM-DD` takes precedence over from/to.
+  const onDay = sp.on && /^\d{4}-\d{2}-\d{2}$/.test(sp.on) ? sp.on : null;
 
   const where: Prisma.JournalWhereInput = fyId
     ? {
@@ -55,14 +58,16 @@ export default async function JournalsPage({
         ...(sp.voucher
           ? { voucherNo: { contains: sp.voucher, mode: "insensitive" } }
           : {}),
-        ...(sp.from || sp.to
-          ? {
-              entryDate: {
-                ...(sp.from ? { gte: new Date(sp.from) } : {}),
-                ...(sp.to ? { lte: new Date(sp.to) } : {}),
-              },
-            }
-          : {}),
+        ...(onDay
+          ? { entryDate: { gte: new Date(`${onDay}T00:00:00Z`), lte: new Date(`${onDay}T00:00:00Z`) } }
+          : sp.from || sp.to
+            ? {
+                entryDate: {
+                  ...(sp.from ? { gte: new Date(sp.from) } : {}),
+                  ...(sp.to ? { lte: new Date(sp.to) } : {}),
+                },
+              }
+            : {}),
       }
     : {};
 
@@ -87,7 +92,7 @@ export default async function JournalsPage({
   const sumDebit = Number(sums._sum.debit ?? 0);
   const sumCredit = Number(sums._sum.credit ?? 0);
   const hasFilters = Boolean(
-    sp.account || sp.txnType || sp.q || sp.voucher || sp.from || sp.to,
+    sp.account || sp.txnType || sp.q || sp.voucher || sp.from || sp.to || onDay,
   );
 
   return (
@@ -154,11 +159,21 @@ export default async function JournalsPage({
             </select>
           </label>
           <label className="block">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">On day</span>
+            <input
+              type="date"
+              name="on"
+              defaultValue={onDay ?? ""}
+              title="Show only this day's lines (overrides From/To)"
+              className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </label>
+          <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">From</span>
             <input
               type="date"
               name="from"
-              defaultValue={sp.from}
+              defaultValue={onDay ? "" : sp.from}
               className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
@@ -167,7 +182,7 @@ export default async function JournalsPage({
             <input
               type="date"
               name="to"
-              defaultValue={sp.to}
+              defaultValue={onDay ? "" : sp.to}
               className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>

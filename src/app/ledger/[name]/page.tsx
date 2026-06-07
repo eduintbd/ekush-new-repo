@@ -12,7 +12,7 @@ import { prisma } from "@/lib/prisma";
 import { formatBdt } from "@/lib/format";
 import { PrintButton } from "@/components/print-button";
 
-type Search = { fy?: string; from?: string; to?: string; instrument?: string };
+type Search = { fy?: string; from?: string; to?: string; on?: string; instrument?: string };
 
 export const metadata = { title: "Ledger card — Staff portal" };
 
@@ -49,8 +49,13 @@ export default async function LedgerPage({
   }
 
   const fy = fiscalYears.find((y) => y.id === sp.fy) ?? fiscalYears[0];
-  const fromDate = sp.from ? new Date(sp.from) : null;
-  const toDate = sp.to ? new Date(sp.to) : null;
+  // Single-day filter `on=YYYY-MM-DD` collapses the window to one day:
+  // opening = everything before the day, period = just that day's lines.
+  const onDay = sp.on && /^\d{4}-\d{2}-\d{2}$/.test(sp.on) ? sp.on : null;
+  const fromStr = onDay ?? (sp.from || null);
+  const toStr = onDay ?? (sp.to || null);
+  const fromDate = fromStr ? new Date(`${fromStr}T00:00:00Z`) : null;
+  const toDate = toStr ? new Date(`${toStr}T00:00:00Z`) : null;
   const instrumentFilter = sp.instrument && sp.instrument.length > 0 ? sp.instrument : null;
 
   // Opening balance: sum of activity on this account BEFORE the selected
@@ -135,7 +140,7 @@ export default async function LedgerPage({
           </div>
           <div className="no-print flex items-center gap-2">
             <a
-              href={`/api/exports/csv/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}${sp.from ? `&from=${sp.from}` : ""}${sp.to ? `&to=${sp.to}` : ""}${instrumentFilter ? `&instrument=${encodeURIComponent(instrumentFilter)}` : ""}`}
+              href={`/api/exports/csv/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}${fromStr ? `&from=${fromStr}` : ""}${toStr ? `&to=${toStr}` : ""}${instrumentFilter ? `&instrument=${encodeURIComponent(instrumentFilter)}` : ""}`}
               className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               ⬇ CSV
@@ -169,11 +174,21 @@ export default async function LedgerPage({
             </select>
           </label>
           <label className="block">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">On day</span>
+            <input
+              type="date"
+              name="on"
+              defaultValue={onDay ?? ""}
+              title="Show only this day (overrides From/To)"
+              className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </label>
+          <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">From</span>
             <input
               type="date"
               name="from"
-              defaultValue={sp.from}
+              defaultValue={onDay ? "" : sp.from}
               className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
@@ -182,7 +197,7 @@ export default async function LedgerPage({
             <input
               type="date"
               name="to"
-              defaultValue={sp.to}
+              defaultValue={onDay ? "" : sp.to}
               className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
@@ -199,7 +214,7 @@ export default async function LedgerPage({
           <button className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900">
             Apply
           </button>
-          {(sp.from || sp.to) && (
+          {(sp.from || sp.to || onDay) && (
             <Link
               href={`/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}${instrumentFilter ? `&instrument=${encodeURIComponent(instrumentFilter)}` : ""}`}
               className="text-xs text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -209,7 +224,7 @@ export default async function LedgerPage({
           )}
           {instrumentFilter && (
             <Link
-              href={`/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}${sp.from ? `&from=${sp.from}` : ""}${sp.to ? `&to=${sp.to}` : ""}`}
+              href={`/ledger/${encodeURIComponent(account.name)}?fy=${fy.id}${onDay ? `&on=${onDay}` : ""}${sp.from ? `&from=${sp.from}` : ""}${sp.to ? `&to=${sp.to}` : ""}`}
               className="text-xs text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
             >
               Clear instrument

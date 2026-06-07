@@ -9,7 +9,7 @@ import { formatBdt } from "@/lib/format";
 import { PrintButton } from "@/components/print-button";
 import { DeleteVoucherForm } from "./delete-voucher-form";
 
-type Search = { fy?: string; from?: string; to?: string };
+type Search = { fy?: string; from?: string; to?: string; on?: string };
 
 export const metadata = { title: "Day Book — Staff portal" };
 
@@ -44,11 +44,18 @@ export default async function DayBookPage({
     .catch(() => false);
   const canMutate = editable && !fyClosed;
 
+  // A single `on=YYYY-MM-DD` day filter takes precedence over from/to and
+  // the month default — for "show me just this day's vouchers".
+  const onDay = sp.on && /^\d{4}-\d{2}-\d{2}$/.test(sp.on) ? sp.on : null;
+
   // Default range: the latest month containing activity. If no `from`/`to`
   // are supplied, find the most recent entry_date and use that month.
   let fromDate: Date;
   let toDate: Date;
-  if (sp.from || sp.to) {
+  if (onDay) {
+    fromDate = new Date(`${onDay}T00:00:00Z`);
+    toDate = new Date(`${onDay}T00:00:00Z`);
+  } else if (sp.from || sp.to) {
     fromDate = sp.from ? new Date(sp.from) : fy.startsOn;
     toDate = sp.to ? new Date(sp.to) : fy.endsOn;
   } else {
@@ -178,11 +185,21 @@ export default async function DayBookPage({
             </select>
           </label>
           <label className="block">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">On day</span>
+            <input
+              type="date"
+              name="on"
+              defaultValue={onDay ?? ""}
+              title="Show only this day's vouchers (overrides From/To)"
+              className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </label>
+          <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">From</span>
             <input
               type="date"
               name="from"
-              defaultValue={fromDate.toISOString().slice(0, 10)}
+              defaultValue={onDay ? "" : fromDate.toISOString().slice(0, 10)}
               className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
@@ -191,7 +208,7 @@ export default async function DayBookPage({
             <input
               type="date"
               name="to"
-              defaultValue={toDate.toISOString().slice(0, 10)}
+              defaultValue={onDay ? "" : toDate.toISOString().slice(0, 10)}
               className="mt-1 block rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
             />
           </label>
