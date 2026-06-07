@@ -18,6 +18,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { Prisma } from "@/generated/prisma";
 import { prisma, withActor } from "@/lib/prisma";
 import { requireRole, canEdit } from "@/lib/auth";
 import { allocateVoucherNo, type VoucherPrefix } from "@/lib/voucher";
@@ -30,7 +31,9 @@ const Body = z.object({
   fiscalYearId: z.string().min(1),
   instrumentCode: z.string().min(1, "pick an instrument"),
   side: z.enum(["BUY", "SELL"]),
-  brokerCode: z.string().min(1, "pick a broker"),
+  // Optional: own-fund subscriptions (EFUF/EGF/ESRF) are placed directly
+  // with the asset manager (EWML), not a broker — empty means "no broker".
+  brokerCode: z.string().optional().default(""),
   quantity: z.coerce.number().positive("quantity must be > 0"),
   rate: z.coerce.number().positive("rate must be > 0"),
   commission: z.coerce.number().min(0, "commission must be ≥ 0").default(0),
@@ -83,10 +86,18 @@ export async function createTrade(formData: FormData): Promise<void> {
   const invAcc = await prisma.chartOfAccount.findUnique({ where: { name: instrument.investmentAccount } });
   if (!invAcc) backWithError("/trades/new", `Investment account "${instrument.investmentAccount}" missing from CoA`);
 
-  // Broker must exist + be active.
-  const broker = await prisma.broker.findUnique({ where: { code: data.brokerCode } });
-  if (!broker) backWithError("/trades/new", `Unknown broker "${data.brokerCode}"`);
-  if (!broker.isActive) backWithError("/trades/new", `Broker "${data.brokerCode}" is inactive`);
+  // Broker is optional: own-fund subscriptions (EFUF/EGF/ESRF) are placed
+  // directly with the asset manager (EWML), so brokerCode is left null and
+  // the voucher narration reads "via EWML (Asset Manager)". When a broker
+  // IS picked it must exist + be active.
+  const brokerCode = data.brokerCode.trim() ? data.brokerCode.trim() : null;
+  let brokerName = "EWML (Asset Manager)";
+  if (brokerCode) {
+    const broker = await prisma.broker.findUnique({ where: { code: brokerCode } });
+    if (!broker) backWithError("/trades/new", `Unknown broker "${brokerCode}"`);
+    if (!broker.isActive) backWithError("/trades/new", `Broker "${brokerCode}" is inactive`);
+    brokerName = broker.name;
+  }
 
   const grossAmount = round2(data.quantity * data.rate);
   const commission = round2(data.commission);
@@ -134,7 +145,7 @@ export async function createTrade(formData: FormData): Promise<void> {
         fiscalYearId: data.fiscalYearId,
         instrumentCode: data.instrumentCode,
         side: data.side,
-        brokerCode: data.brokerCode,
+        brokerCode,
         quantity: data.quantity,
         rate: data.rate,
         grossAmount,
@@ -148,7 +159,7 @@ export async function createTrade(formData: FormData): Promise<void> {
       },
     });
 
-    const brokerSuffix = ` via ${broker.name}`;
+    const brokerSuffix = ` via ${brokerName}`;
     const commSuffix = commission > 0 ? ` · comm ${commission.toFixed(2)}` : "";
     const baseDescr = data.remarks ?? `${data.side} ${data.quantity} ${data.instrumentCode} @ ${data.rate}`;
     await tx.journal.createMany({
@@ -178,6 +189,226 @@ export async function createTrade(formData: FormData): Promise<void> {
   redirect(`/trades?ok=${encodeURIComponent(`Trade saved · voucher ${voucherNo}`)}`);
 }
 
+/**
+ * Edit an existing trade and re-derive every dependency in one tx. The
+ * trade is the system-of-record; its BV/SV voucher, its own cost basis,
+ * and the cost basis + SV vouchers of every *later* sell on the same
+ * instrument are all regenerated so the trade ledger, the GL, and the
+ * /portfolio view never diverge. (Editing the voucher directly — the old
+ * workaround — only touched the GL and left the trade row stale.)
+ *
+ * Backfilled rows (journalBatchId = null) stay journal-less by design:
+ * the row is updated and cost basis re-derived, but no BV/SV is posted
+ * (legacy hand-entered journals already cover that period).
+ */
+export async function updateTrade(formData: FormData): Promise<void> {
+  const profile = await requireRole(["admin", "checker", "accountant"]);
+  const id = String(formData.get("id") ?? "");
+  const editPath = id ? `/trades/${id}/edit` : TRADE_LIST_PATH;
+  if (!canEdit(profile)) backWithError(editPath, "Insufficient role");
+  if (!id) backWithError(TRADE_LIST_PATH, "Missing trade id");
+
+  const existing = await prisma.trade.findUnique({ where: { id } });
+  if (!existing) backWithError(TRADE_LIST_PATH, "Trade not found");
+
+  const parsed = Body.safeParse({
+    tradeDate: String(formData.get("tradeDate") ?? ""),
+    fiscalYearId: String(formData.get("fiscalYearId") ?? ""),
+    instrumentCode: String(formData.get("instrumentCode") ?? ""),
+    side: String(formData.get("side") ?? ""),
+    brokerCode: String(formData.get("brokerCode") ?? ""),
+    quantity: String(formData.get("quantity") ?? ""),
+    rate: String(formData.get("rate") ?? ""),
+    commission: String(formData.get("commission") ?? "0"),
+    bankAccount: String(formData.get("bankAccount") ?? ""),
+    remarks: String(formData.get("remarks") ?? "") || undefined,
+  });
+  if (!parsed.success) backWithError(editPath, parsed.error.issues[0]?.message ?? "invalid");
+  const data = parsed.data;
+
+  // FY must be open and contain the (possibly new) trade date. Also block
+  // if the trade is currently in a closed FY (can't move it out).
+  const fy = await prisma.fiscalYear.findUnique({ where: { id: data.fiscalYearId } });
+  if (!fy) backWithError(editPath, "Fiscal year not found");
+  if (fy.isClosed) backWithError(editPath, "Fiscal year is closed");
+  const tradeDate = new Date(`${data.tradeDate}T00:00:00Z`);
+  if (tradeDate < fy.startsOn || tradeDate > fy.endsOn) {
+    backWithError(editPath, "Trade date is outside the selected fiscal year");
+  }
+  if (existing.fiscalYearId !== data.fiscalYearId) {
+    const oldFy = await prisma.fiscalYear.findUnique({ where: { id: existing.fiscalYearId } });
+    if (oldFy?.isClosed) backWithError(editPath, "Original fiscal year is closed");
+  }
+
+  const instrument = await prisma.instrument.findUnique({ where: { code: data.instrumentCode } });
+  if (!instrument) backWithError(editPath, `Unknown instrument "${data.instrumentCode}"`);
+  if (!instrument.isActive) backWithError(editPath, `Instrument "${data.instrumentCode}" is inactive`);
+
+  const bank = await prisma.chartOfAccount.findUnique({ where: { name: data.bankAccount } });
+  if (!bank) backWithError(editPath, `Unknown bank account "${data.bankAccount}"`);
+  // Broker optional (see createTrade). Validate only when one is picked;
+  // empty means a direct asset-manager subscription → null brokerCode.
+  const brokerCode = data.brokerCode.trim() ? data.brokerCode.trim() : null;
+  if (brokerCode) {
+    const broker = await prisma.broker.findUnique({ where: { code: brokerCode } });
+    if (!broker) backWithError(editPath, `Unknown broker "${brokerCode}"`);
+    if (!broker.isActive) backWithError(editPath, `Broker "${brokerCode}" is inactive`);
+  }
+
+  const grossAmount = round2(data.quantity * data.rate);
+  const commission = round2(data.commission);
+  const oldInstrument = existing.instrumentCode;
+
+  try {
+    await withActor(profile.id, async (tx) => {
+      await tx.trade.update({
+        where: { id },
+        data: {
+          tradeDate,
+          fiscalYearId: data.fiscalYearId,
+          instrumentCode: data.instrumentCode,
+          side: data.side,
+          brokerCode,
+          quantity: data.quantity,
+          rate: data.rate,
+          grossAmount,
+          commission,
+          bankAccount: data.bankAccount,
+          remarks: data.remarks,
+        },
+      });
+      // Re-derive cost basis + re-post vouchers for the (new) instrument,
+      // forcing a re-post of this edited row's own voucher. If the
+      // instrument changed, the old instrument's chain must be fixed too.
+      await recomputeInstrument(tx, data.instrumentCode, profile.id, id);
+      if (oldInstrument !== data.instrumentCode) {
+        await recomputeInstrument(tx, oldInstrument, profile.id);
+      }
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith("NEGATIVE_HOLDING:")) {
+      backWithError(editPath, `Edit rejected — it would drive ${msg.slice("NEGATIVE_HOLDING:".length)} into a negative holding. Fix the dependent sell(s) first.`);
+    }
+    console.error("[updateTrade] failed:", err);
+    backWithError(editPath, `Update failed: ${msg.slice(0, 160)}`);
+  }
+
+  revalidatePath("/trades");
+  revalidatePath("/journals");
+  revalidatePath("/day-book");
+  revalidatePath("/trial-balance");
+  revalidatePath("/portfolio");
+  redirect(`/trades?ok=${encodeURIComponent(`Trade updated · ${data.side} ${data.instrumentCode}`)}`);
+}
+
+/**
+ * Replay a single instrument's trade stream and bring every derived
+ * artifact back in line with the trade rows: each SELL's costBasis /
+ * realisedPnl, and each trade-backed voucher (re-posted to match).
+ *
+ * Re-post policy (minimise churn):
+ *   - BUY vouchers depend only on the row itself (gross+commission), so
+ *     only the explicitly-edited buy (`forceTradeId`) is re-posted.
+ *   - SELL vouchers depend on prior history, so any sell whose cost basis
+ *     drifted — plus the edited sell — is re-posted.
+ *   - Backfilled rows (journalBatchId = null) are never given a voucher.
+ *
+ * Throws `NEGATIVE_HOLDING:<code> on <date>` to roll the whole tx back if
+ * any sell would exceed the running holding.
+ */
+async function recomputeInstrument(
+  tx: Prisma.TransactionClient,
+  instrumentCode: string,
+  profileId: string,
+  forceTradeId?: string,
+): Promise<void> {
+  const inst = await tx.instrument.findUnique({ where: { code: instrumentCode } });
+  if (!inst) throw new Error(`Instrument ${instrumentCode} not in master`);
+
+  const trades = await tx.trade.findMany({
+    where: { instrumentCode },
+    orderBy: [{ tradeDate: "asc" }, { createdAt: "asc" }],
+  });
+  const batchIds = trades.map((t) => t.journalBatchId).filter((b): b is string => Boolean(b));
+  const heads = batchIds.length
+    ? await tx.journal.findMany({
+        where: { batchId: { in: batchIds } },
+        select: { batchId: true, voucherNo: true, description: true, createdBy: true },
+      })
+    : [];
+  const headByBatch = new Map<string, { voucherNo: string | null; description: string | null; createdBy: string | null }>();
+  for (const h of heads) if (h.batchId && !headByBatch.has(h.batchId)) headByBatch.set(h.batchId, h);
+
+  let qty = 0;
+  let totalCost = 0;
+  for (const t of trades) {
+    const q = Number(t.quantity);
+    const rate = Number(t.rate);
+    const gross = Number(t.grossAmount);
+    const comm = Number(t.commission ?? 0);
+    let costBasis: number | null = null;
+    let realisedPnl: number | null = null;
+
+    if (t.side === "BUY") {
+      qty += q;
+      totalCost += q * rate + comm;
+    } else {
+      if (q - qty > 0.0001) {
+        throw new Error(`NEGATIVE_HOLDING:${instrumentCode} on ${t.tradeDate.toISOString().slice(0, 10)}`);
+      }
+      const avg = qty > 0 ? totalCost / qty : 0;
+      costBasis = round2(avg * q);
+      realisedPnl = round2(gross - comm - avg * q);
+      qty -= q;
+      totalCost = avg * qty;
+      const drift =
+        Math.abs(Number(t.costBasis ?? 0) - costBasis) > 0.005 ||
+        Math.abs(Number(t.realisedPnl ?? 0) - realisedPnl) > 0.005;
+      if (drift) {
+        await tx.trade.update({ where: { id: t.id }, data: { costBasis, realisedPnl } });
+      }
+    }
+
+    const mustRepost = t.journalBatchId && (t.id === forceTradeId || (t.side === "SELL" && needsRepost(t, costBasis, realisedPnl)));
+    if (t.journalBatchId && mustRepost) {
+      const head = headByBatch.get(t.journalBatchId);
+      await tx.journal.deleteMany({ where: { batchId: t.journalBatchId } });
+      await tx.journal.createMany({
+        data: buildJournalLines({
+          side: t.side,
+          entryDate: t.tradeDate,
+          fiscalYearId: t.fiscalYearId,
+          instrumentCode: t.instrumentCode,
+          investmentAccount: inst.investmentAccount,
+          bankAccount: t.bankAccount,
+          grossAmount: gross,
+          commission: comm,
+          costBasis,
+          realisedPnl,
+          voucherNo: head?.voucherNo ?? "",
+          batchId: t.journalBatchId,
+          description: head?.description ?? `${t.side} ${q} ${instrumentCode}`,
+          createdBy: head?.createdBy ?? profileId,
+        }),
+      });
+    }
+  }
+}
+
+/** A sell voucher needs re-posting when its recomputed cost basis /
+ *  realised P&L no longer match the row that was just (or will be) saved. */
+function needsRepost(
+  t: { costBasis: Prisma.Decimal | null; realisedPnl: Prisma.Decimal | null },
+  costBasis: number | null,
+  realisedPnl: number | null,
+): boolean {
+  return (
+    Math.abs(Number(t.costBasis ?? 0) - (costBasis ?? 0)) > 0.005 ||
+    Math.abs(Number(t.realisedPnl ?? 0) - (realisedPnl ?? 0)) > 0.005
+  );
+}
+
 export async function deleteTrade(formData: FormData): Promise<void> {
   const profile = await requireRole(["admin", "checker", "accountant"]);
   if (!canEdit(profile)) redirect(`${TRADE_LIST_PATH}?error=Insufficient+role`);
@@ -191,35 +422,33 @@ export async function deleteTrade(formData: FormData): Promise<void> {
   const fy = await prisma.fiscalYear.findUnique({ where: { id: trade.fiscalYearId } });
   if (fy?.isClosed) redirect(`${TRADE_LIST_PATH}?error=Fiscal+year+is+closed`);
 
-  // Block delete if any *later* trade on the same instrument exists —
-  // those later sells were computed against this trade's contribution to
-  // the running cost basis, so removing it would silently invalidate them.
-  const later = await prisma.trade.count({
-    where: {
-      instrumentCode: trade.instrumentCode,
-      OR: [
-        { tradeDate: { gt: trade.tradeDate } },
-        { tradeDate: trade.tradeDate, createdAt: { gt: trade.createdAt } },
-      ],
-    },
-  });
-  if (later > 0) {
-    redirect(
-      `${TRADE_LIST_PATH}?error=${encodeURIComponent(`Cannot delete — ${later} later trade(s) on ${trade.instrumentCode} depend on this row's cost basis. Delete those first.`)}`,
-    );
-  }
-
-  await withActor(profile.id, async (tx) => {
-    if (trade.journalBatchId) {
-      await tx.journal.deleteMany({ where: { batchId: trade.journalBatchId } });
+  // Delete the row + its voucher, then re-derive the rest of the
+  // instrument's chain so later sells' cost basis + SV vouchers stay
+  // correct. Rolls back (and reports) if removing this row would drive a
+  // later sell negative.
+  try {
+    await withActor(profile.id, async (tx) => {
+      if (trade.journalBatchId) {
+        await tx.journal.deleteMany({ where: { batchId: trade.journalBatchId } });
+      }
+      await tx.trade.delete({ where: { id } });
+      await recomputeInstrument(tx, trade.instrumentCode, profile.id);
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith("NEGATIVE_HOLDING:")) {
+      redirect(
+        `${TRADE_LIST_PATH}?error=${encodeURIComponent(`Cannot delete — it would drive ${msg.slice("NEGATIVE_HOLDING:".length)} into a negative holding. Delete the dependent sell(s) first.`)}`,
+      );
     }
-    await tx.trade.delete({ where: { id } });
-  });
+    throw err;
+  }
 
   revalidatePath("/trades");
   revalidatePath("/journals");
   revalidatePath("/day-book");
   revalidatePath("/trial-balance");
+  revalidatePath("/portfolio");
   redirect(`${TRADE_LIST_PATH}?ok=${encodeURIComponent(`Trade deleted (voucher ${trade.journalBatchId ? "removed" : "n/a"})`)}`);
 }
 

@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { prisma, withActor } from "@/lib/prisma";
 import { requireRole, canEdit } from "@/lib/auth";
-import { allocateVoucherNo } from "@/lib/voucher";
+import { allocateVoucherNo, derivedVoucherKind } from "@/lib/voucher";
 
 const UPDATE_REDIRECT = "/day-book";
 
@@ -153,6 +153,27 @@ export async function updateJournalBatch(formData: FormData): Promise<void> {
 
   const batchId = String(formData.get("batchId") ?? "");
   if (!batchId) redirect("/day-book?err=missing_batch");
+
+  // Refuse line-level edits of derived vouchers (BV/SV from a Trade, FV
+  // from a revaluation). They must be corrected at their source so the
+  // GL and the source record stay in lockstep — editing the lines here
+  // would silently desync the Trade ledger / portfolio from the books.
+  const head = await prisma.journal.findFirst({
+    where: { batchId },
+    select: { txnType: true, voucherNo: true },
+  });
+  const derived = derivedVoucherKind(head?.voucherNo, head?.txnType);
+  if (derived === "trade") {
+    const trade = await prisma.trade.findFirst({ where: { journalBatchId: batchId }, select: { id: true } });
+    redirect(
+      trade
+        ? `/trades/${trade.id}/edit?error=${encodeURIComponent("Edit the trade — its voucher re-posts automatically.")}`
+        : `/journals/voucher/${batchId}?error=${encodeURIComponent("This is a trade voucher; edit it from /trades.")}`,
+    );
+  }
+  if (derived === "fva") {
+    redirect(`/portfolio?error=${encodeURIComponent("Edit fair-value vouchers via Portfolio → Revalue to market.")}`);
+  }
 
   const accounts = formData.getAll("account").map(String);
   const debits = formData.getAll("debit").map(String);

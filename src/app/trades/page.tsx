@@ -103,12 +103,20 @@ export default async function TradesPage({
             </p>
           </div>
           {editable && (
-            <Link
-              href="/trades/new"
-              className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
-            >
-              + New trade
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/trades/reconcile"
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+              >
+                Reconcile ledger
+              </Link>
+              <Link
+                href="/trades/new"
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
+              >
+                + New trade
+              </Link>
+            </div>
           )}
         </div>
 
@@ -259,9 +267,17 @@ export default async function TradesPage({
                     <Td className="text-xs text-zinc-500">{t.bankAccount}</Td>
                     {editable && (
                       <Td>
-                        {latestByInstrument.get(t.instrumentCode) === t.id && (
-                          <DeleteTradeForm tradeId={t.id} label={`${t.side} ${t.instrumentCode}`} />
-                        )}
+                        <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                          <Link
+                            href={`/trades/${t.id}/edit`}
+                            className="rounded border border-zinc-300 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          >
+                            Edit
+                          </Link>
+                          {latestByInstrument.get(t.instrumentCode) === t.id && (
+                            <DeleteTradeForm tradeId={t.id} label={`${t.side} ${t.instrumentCode}`} />
+                          )}
+                        </div>
                       </Td>
                     )}
                   </tr>

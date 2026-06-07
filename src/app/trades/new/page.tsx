@@ -12,8 +12,19 @@ import { redirect } from "next/navigation";
 import { requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { createTrade } from "@/app/trades/actions";
+import { TradeForm } from "@/app/trades/trade-form";
 
-type Search = { error?: string; defaultSide?: "BUY" | "SELL" };
+type Search = {
+  error?: string;
+  defaultSide?: "BUY" | "SELL";
+  // Prefill (used by the reconciliation report's "add missing trade" links).
+  tradeDate?: string;
+  instrumentCode?: string;
+  side?: "BUY" | "SELL";
+  quantity?: string;
+  rate?: string;
+  commission?: string;
+};
 
 export const metadata = { title: "New trade — Staff portal" };
 
@@ -80,190 +91,33 @@ export default async function NewTradePage({
           </div>
         )}
 
-        <form action={createTrade} className="mt-8 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Trade date" name="tradeDate" type="date" required defaultValue={today} />
-            <SelectField label="Fiscal year" name="fiscalYearId" required defaultValue={fiscalYears[0].id}>
-              {fiscalYears.map((y) => (
-                <option key={y.id} value={y.id}>
-                  {y.label}
-                </option>
-              ))}
-            </SelectField>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <SelectField label="Side" name="side" required defaultValue={sp.defaultSide ?? "BUY"}>
-              <option value="BUY">BUY</option>
-              <option value="SELL">SELL</option>
-            </SelectField>
-            <SelectField label="Broker" name="brokerCode" required defaultValue={brokers[0]?.code}>
-              {brokers.map((b) => (
-                <option key={b.code} value={b.code}>
-                  {b.name}
-                </option>
-              ))}
-            </SelectField>
-            <SelectField label="Instrument" name="instrumentCode" required>
-              <option value="">— pick —</option>
-              {instruments.map((i) => (
-                <option key={i.code} value={i.code}>
-                  {i.code} · {i.name}
-                </option>
-              ))}
-            </SelectField>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3">
-            <SelectField label="Settlement account" name="bankAccount" required>
-              <option value="">— pick —</option>
-              <optgroup label="Banks">
-                {banks
-                  .filter((b) => b.accountType !== "mobile_money")
-                  .map((b) => (
-                    <option key={b.id} value={b.accountName}>
-                      {b.accountName}
-                    </option>
-                  ))}
-              </optgroup>
-              <optgroup label="Brokers (BO + Margin)">
-                {brokers.flatMap((b) => {
-                  const bo = (
-                    <option key={`${b.code}-bo`} value={b.brokerBoAccount}>
-                      {b.name} — BO{b.accountNumber ? ` (${b.accountNumber})` : ""}
-                    </option>
-                  );
-                  return b.marginLoanAccount
-                    ? [
-                        bo,
-                        <option key={`${b.code}-margin`} value={b.marginLoanAccount}>
-                          {b.name} — Margin Loan
-                        </option>,
-                      ]
-                    : [bo];
-                })}
-              </optgroup>
-              <optgroup label="Mobile money">
-                {banks
-                  .filter((b) => b.accountType === "mobile_money")
-                  .map((b) => (
-                    <option key={b.id} value={b.accountName}>
-                      {b.accountName}
-                    </option>
-                  ))}
-              </optgroup>
-            </SelectField>
-          </div>
-
-          <div className="grid grid-cols-4 gap-3">
-            <Field label="Quantity" name="quantity" type="number" step="0.0001" min="0" required />
-            <Field label="Rate (BDT)" name="rate" type="number" step="0.000001" min="0" required />
-            <div>
-              <Field
-                label="Commission (BDT)"
-                name="commission"
-                type="number"
-                step="0.01"
-                min="0"
-                defaultValue="0"
-              />
-              <p className="mt-1 text-[10px] text-zinc-500">
-                Added to BUY cost · netted from SELL proceeds.
-              </p>
-            </div>
-            <div>
-              <label className="block">
-                <span className="text-xs font-medium uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-                  Gross
-                </span>
-                <input
-                  disabled
-                  placeholder="qty × rate"
-                  className="mt-1 block w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950"
-                />
-              </label>
-              <p className="mt-1 text-[10px] text-zinc-500">Calculated server-side.</p>
-            </div>
-          </div>
-
-          <Field label="Remarks (optional)" name="remarks" placeholder="P Buy / IPO / Right share / …" />
-
-          <button
-            type="submit"
-            className="mt-2 w-full rounded-md bg-zinc-900 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            Save trade
-          </button>
-        </form>
+        <TradeForm
+          action={createTrade}
+          fiscalYears={fiscalYears.map((y) => ({ id: y.id, label: y.label }))}
+          instruments={instruments.map((i) => ({ code: i.code, name: i.name }))}
+          banks={banks.map((b) => ({ id: b.id, accountName: b.accountName, accountType: b.accountType }))}
+          brokers={brokers.map((b) => ({
+            code: b.code,
+            name: b.name,
+            brokerBoAccount: b.brokerBoAccount,
+            marginLoanAccount: b.marginLoanAccount,
+            accountNumber: b.accountNumber,
+          }))}
+          initial={{
+            tradeDate: sp.tradeDate ?? today,
+            fiscalYearId: fiscalYears[0].id,
+            side: sp.side ?? sp.defaultSide ?? "BUY",
+            brokerCode: brokers[0]?.code ?? "",
+            instrumentCode: sp.instrumentCode ?? "",
+            bankAccount: "",
+            quantity: sp.quantity ?? "",
+            rate: sp.rate ?? "",
+            commission: sp.commission ?? "0",
+            remarks: "",
+          }}
+          submitLabel="Save trade"
+        />
       </div>
     </main>
-  );
-}
-
-function Field({
-  label,
-  name,
-  type = "text",
-  required = false,
-  defaultValue,
-  placeholder,
-  step,
-  min,
-}: {
-  label: string;
-  name: string;
-  type?: string;
-  required?: boolean;
-  defaultValue?: string;
-  placeholder?: string;
-  step?: string;
-  min?: string;
-}) {
-  return (
-    <label className="block">
-      <span className="text-xs font-medium uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-        {label}
-      </span>
-      <input
-        name={name}
-        type={type}
-        required={required}
-        defaultValue={defaultValue}
-        placeholder={placeholder}
-        step={step}
-        min={min}
-        className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-      />
-    </label>
-  );
-}
-
-function SelectField({
-  label,
-  name,
-  required = false,
-  defaultValue,
-  children,
-}: {
-  label: string;
-  name: string;
-  required?: boolean;
-  defaultValue?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="text-xs font-medium uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-        {label}
-      </span>
-      <select
-        name={name}
-        required={required}
-        defaultValue={defaultValue}
-        className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-      >
-        {children}
-      </select>
-    </label>
   );
 }

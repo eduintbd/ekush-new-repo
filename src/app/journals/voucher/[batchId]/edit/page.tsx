@@ -9,6 +9,7 @@ import { requireRole, canEdit } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { updateJournalBatch } from "@/app/journals/actions";
 import { JournalLines } from "@/app/journals/new/lines";
+import { derivedVoucherKind } from "@/lib/voucher";
 
 type Search = { err?: string; msg?: string };
 
@@ -43,6 +44,47 @@ export default async function EditJournalPage({
           <p className="mt-10 text-sm text-red-700 dark:text-red-300">
             This voucher cannot be edited — the fiscal year is closed.
           </p>
+        </div>
+      </main>
+    );
+  }
+
+  // Derived vouchers (BV/SV from a Trade, FV from a revaluation) are not
+  // line-editable here — they're projections of an upstream record. Show
+  // a read-only notice with a deep link to the source editor instead.
+  const derived = derivedVoucherKind(head.voucherNo, head.txnType);
+  if (derived) {
+    const trade =
+      derived === "trade"
+        ? await prisma.trade.findFirst({ where: { journalBatchId: batchId }, select: { id: true } })
+        : null;
+    const sourceHref =
+      derived === "trade" ? (trade ? `/trades/${trade.id}/edit` : "/trades") : "/portfolio";
+    const sourceLabel = derived === "trade" ? "Edit the trade" : "Portfolio → Revalue to market";
+    const why =
+      derived === "trade"
+        ? "This voucher is auto-posted from a trade. Edit the trade and its voucher re-posts automatically — keeping the trade ledger, the GL, and the portfolio in lockstep."
+        : "This voucher is posted by the fair-value revaluation. Re-run Revalue to market for its date to change it.";
+    return (
+      <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
+        <div className="mx-auto max-w-3xl">
+          <div className="text-xs uppercase tracking-widest text-zinc-500">
+            <Link href="/day-book" className="hover:text-zinc-700 dark:hover:text-zinc-300">← Day book</Link>
+            <span className="mx-1.5 text-zinc-400">/</span>
+            <Link href={`/journals/voucher/${batchId}`} className="hover:text-zinc-700 dark:hover:text-zinc-300">
+              {head.voucherNo ?? "voucher"}
+            </Link>
+          </div>
+          <h1 className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
+            Voucher <span className="font-mono">{head.voucherNo ?? "—"}</span> isn&apos;t edited here
+          </h1>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{why}</p>
+          <Link
+            href={sourceHref}
+            className="mt-6 inline-block rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            {sourceLabel} →
+          </Link>
         </div>
       </main>
     );

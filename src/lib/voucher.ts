@@ -23,6 +23,28 @@ export function shortFyLabel(label: string): string {
 }
 
 /**
+ * Classify a voucher as *derived* (projected from an upstream
+ * system-of-record) vs *manual*. Derived vouchers must NOT be edited
+ * line-by-line — that only patches the GL and leaves the source (and the
+ * views that read it) stale. They are edited at their source, which
+ * re-posts the voucher:
+ *   - 'trade' → BV/SV, backed by a Trade row      → /trades/<id>/edit
+ *   - 'fva'   → FV, posted by /portfolio "Revalue" → /portfolio
+ * Everything else (manual JV, opening-balance OB, tax) returns null and
+ * stays directly editable.
+ */
+export function derivedVoucherKind(
+  voucherNo: string | null | undefined,
+  txnType: string | null | undefined,
+): "trade" | "fva" | null {
+  const prefix = (voucherNo?.split("/")[0] ?? "").toUpperCase();
+  const tt = (txnType ?? "").toUpperCase();
+  if (prefix === "BV" || prefix === "SV" || tt === "BV" || tt === "SV") return "trade";
+  if (prefix === "FV" || tt === "FV") return "fva";
+  return null;
+}
+
+/**
  * Allocate the next sequential voucher number for (fiscalYear, prefix).
  * Must be called inside an active transaction (`tx`) so the MAX read and
  * the subsequent INSERT happen under the same snapshot.
