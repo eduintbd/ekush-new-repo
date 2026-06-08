@@ -35,6 +35,33 @@ export function calendarQuarter(d: Date): { start: Date; end: Date; label: strin
   return { start, end, label: `Q${q + 1} ${y}` };
 }
 
+/** Calendar month window [start, end) containing `d`. */
+export function calendarMonth(d: Date): { start: Date; end: Date; label: string } {
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth();
+  const start = new Date(Date.UTC(y, m, 1));
+  const end = new Date(Date.UTC(y, m + 1, 1));
+  return { start, end, label: start.toISOString().slice(0, 7) };
+}
+
+/** The just-completed calendar month relative to `d`. For the monthly-trail
+ * run, which fires on the 1st of the new month and processes the month
+ * that just ended. `end` is exclusive (1st of current month); `endInclusive`
+ * is the last day of the completed month. */
+export function lastCompletedMonth(d: Date): {
+  start: Date;
+  end: Date;
+  endInclusive: Date;
+  label: string;
+} {
+  const current = calendarMonth(d);
+  const end = current.start; // start of current = end of prior (exclusive)
+  const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 1, 1));
+  const endInclusive = new Date(end);
+  endInclusive.setUTCDate(endInclusive.getUTCDate() - 1);
+  return { start, end, endInclusive, label: start.toISOString().slice(0, 7) };
+}
+
 /** The just-completed calendar quarter relative to `d`. Useful for the
  * quarterly-trail run, which fires on the 1st of the new quarter and
  * processes the quarter that just ended. */

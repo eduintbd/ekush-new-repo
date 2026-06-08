@@ -278,11 +278,11 @@ function buildSummarySheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
       `  • Per-inflow upfront (every BUY) — practical interpretation: every BUY (including SIP installments) earns upfront × amount.`,
     ],
     [
-      `Trail commission: computed from public.nav_records (daily NAV snapshots per fund). Per quarter:`,
+      `Trail commission: computed from public.nav_records (daily NAV snapshots per fund). Per period (monthly or quarterly, per the term's Trail frequency):`,
     ],
-    [`  trail = (avg of units × nav across all NAV dates in quarter) × rate p.a. ÷ 4`],
+    [`  trail = (avg of units × nav across all NAV dates in period) × rate p.a. ÷ periods_per_year (12 monthly, 4 quarterly)`],
     [
-      `  rate = Trail Y1 p.a. if quarter midpoint < sourced_on + 12 months, else Trail Y2+ p.a.`,
+      `  rate = Trail Y1 p.a. if period midpoint < sourced_on + 12 months, else Trail Y2+ p.a.`,
     ],
     [],
   );

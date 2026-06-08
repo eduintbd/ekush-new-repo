@@ -717,7 +717,7 @@ model AgentTerm {
   upfrontPct       Decimal      @map("upfront_pct") @db.Decimal(6, 4) // 0.0020 = 0.20%
   trailY1PctPa     Decimal      @map("trail_y1_pct_pa") @db.Decimal(6, 4)
   trailY2PlusPctPa Decimal      @map("trail_y2plus_pct_pa") @db.Decimal(6, 4)
-  trailFrequency   String       @default("quarterly") @map("trail_frequency")
+  trailFrequency   String       @default("monthly") @map("trail_frequency") // 'monthly' | 'quarterly'
   clawbackMonths   Int          @default(6) @map("clawback_months")
   clawbackPct      Decimal      @default(1.0000) @map("clawback_pct") @db.Decimal(5, 4)
   effectiveFrom    DateTime     @map("effective_from") @db.Date

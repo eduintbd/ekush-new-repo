@@ -9,12 +9,15 @@
 
 import type { PrismaClient } from "@/generated/prisma";
 import { categoryForFund, type FundCode } from "@/lib/ekush-web/types";
+import { periodsPerYear, type TrailFrequency } from "@/lib/commission-engine";
 
 export type Term = {
   fundCategory: "equity" | "fixed_income";
   upfrontPct: number;
   trailY1PctPa: number;
   trailY2PlusPctPa: number;
+  /** Cadence trail is paid on for this term (admin-set; default monthly). */
+  trailFrequency: TrailFrequency;
   clawbackMonths: number;
   clawbackPct: number;
   effectiveFrom: Date;
@@ -67,12 +70,17 @@ export type TrailRow = {
   investorCode: string;
   fundCode: FundCode;
   agentInvestorId: string;
+  /** Period bounds (a month or a quarter, per the term's cadence). Field
+   *  names kept as quarter* for backward-compat with the page/Excel. */
   quarterStart: Date;
   quarterEnd: Date;
   qLabel: string;
+  /** Cadence this row was computed on. */
+  freq: TrailFrequency;
   sourcedOn: Date;
   tier: "Y1" | "Y2+";
   ratePa: number;
+  /** Per-period rate (ratePa ÷ periodsPerYear). Name kept for compat. */
   rateQuarter: number;
   navPoints: number;
   avgUnits: number;
@@ -116,20 +124,28 @@ function termFor(terms: Term[], category: "equity" | "fixed_income"): Term | nul
   return terms.find((t) => t.fundCategory === category) ?? null;
 }
 
-function calendarQuarters(from: Date, to: Date): Array<{ start: Date; end: Date; label: string }> {
+/** Calendar periods (months or quarters) spanning [from, to], clamped at
+ *  `to`. The step is 1 month for monthly, 3 for quarterly. */
+function periodsFor(
+  from: Date,
+  to: Date,
+  freq: TrailFrequency,
+): Array<{ start: Date; end: Date; label: string }> {
   const out: Array<{ start: Date; end: Date; label: string }> = [];
-  const start = new Date(
-    Date.UTC(from.getUTCFullYear(), Math.floor(from.getUTCMonth() / 3) * 3, 1),
-  );
-  let cur = start;
+  const step = freq === "monthly" ? 1 : 3;
+  const startMonth = freq === "monthly"
+    ? from.getUTCMonth()
+    : Math.floor(from.getUTCMonth() / 3) * 3;
+  let cur = new Date(Date.UTC(from.getUTCFullYear(), startMonth, 1));
   while (cur <= to) {
-    const next = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + 3, 1));
+    const next = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + step, 1));
     const end = new Date(next.getTime() - 86400_000);
     const cap = end > to ? to : end;
+    const tag = freq === "monthly" ? "M" : "Q";
     out.push({
       start: cur,
       end: cap,
-      label: `${cur.toISOString().slice(0, 7)} Q (${cur.toISOString().slice(0, 10)} → ${cap.toISOString().slice(0, 10)})`,
+      label: `${cur.toISOString().slice(0, 7)} ${tag} (${cur.toISOString().slice(0, 10)} → ${cap.toISOString().slice(0, 10)})`,
     });
     cur = next;
   }
@@ -152,6 +168,7 @@ export async function computeAgentCommissionPreview(
     upfrontPct: Number(t.upfrontPct),
     trailY1PctPa: Number(t.trailY1PctPa),
     trailY2PlusPctPa: Number(t.trailY2PlusPctPa),
+    trailFrequency: (t.trailFrequency === "monthly" ? "monthly" : "quarterly") as TrailFrequency,
     clawbackMonths: t.clawbackMonths,
     clawbackPct: Number(t.clawbackPct),
     effectiveFrom: t.effectiveFrom,
@@ -353,11 +370,19 @@ export async function computeAgentCommissionPreview(
 
   const trailRowsAll: TrailRow[] = [];
   if (earliestSourced) {
-    const quarters = calendarQuarters(earliestSourced, asOf);
+    // Generate both cadences once; each bucket uses the one its term is set
+    // to (monthly preferred). periodsPerYear gives the rate divisor.
+    const periodsByFreq: Record<TrailFrequency, Array<{ start: Date; end: Date; label: string }>> = {
+      monthly: periodsFor(earliestSourced, asOf, "monthly"),
+      quarterly: periodsFor(earliestSourced, asOf, "quarterly"),
+    };
     for (const b of buckets.values()) {
       if (b.isDirectSubscription) continue;
       const term = termFor(termsActive, b.category);
       if (!term) continue;
+      const freq = term.trailFrequency;
+      const divisor = periodsPerYear(freq);
+      const periods = periodsByFreq[freq];
       const buysSorted = [...b.buys].sort((x, y) => +x.date - +y.date);
       const sellsSorted = [...b.sells].sort((x, y) => +x.date - +y.date);
       const unitsAt = (d: Date): number => {
@@ -367,7 +392,7 @@ export async function computeAgentCommissionPreview(
         return Math.max(0, u);
       };
       const navs = navsByFund.get(b.fundCode) ?? [];
-      for (const q of quarters) {
+      for (const q of periods) {
         if (q.end < b.sourcedOn) continue;
         const windowStart = q.start > b.sourcedOn ? q.start : b.sourcedOn;
         const qNavs = navs
@@ -377,7 +402,7 @@ export async function computeAgentCommissionPreview(
         const midpoint = new Date((q.start.getTime() + q.end.getTime()) / 2);
         const isY1 = midpoint < addMonths(b.sourcedOn, 12);
         const ratePa = isY1 ? term.trailY1PctPa : term.trailY2PlusPctPa;
-        const rateQuarter = ratePa / 4;
+        const rateQuarter = ratePa / divisor;
         const values = qNavs.map((n) => ({
           u: unitsAt(n.date),
           v: n.nav,
@@ -396,6 +421,7 @@ export async function computeAgentCommissionPreview(
           quarterStart: q.start,
           quarterEnd: q.end,
           qLabel: q.label,
+          freq,
           sourcedOn: b.sourcedOn,
           tier: isY1 ? "Y1" : "Y2+",
           ratePa,

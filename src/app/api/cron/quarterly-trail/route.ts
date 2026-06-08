@@ -1,7 +1,8 @@
 // GET / POST /api/cron/quarterly-trail
-// Computes a CommissionRun row for every (agent, agent_investor) combo
-// for the requested quarter. Idempotent: the (agent_investor_id, type,
-// period_start, period_end) unique constraint blocks duplicates.
+// Computes a `trail` CommissionRun row for every (agent, agent_investor)
+// whose term cadence is **quarterly**, for the requested quarter. Terms set
+// to monthly are paid by /api/cron/monthly-trail instead. Idempotent via the
+// (agent_investor_id, type, period_start, period_end) unique constraint.
 //
 // Auth: `Authorization: Bearer $CRON_SECRET` (Vercel Cron) or
 // `x-cron-secret: $CRON_SECRET` (manual / external scheduler).
@@ -9,30 +10,20 @@
 // Quarter selection:
 //   - GET with no params → just-completed calendar quarter (intended use
 //     when Vercel Cron fires on the 1st of Apr/Jul/Oct/Jan).
-//   - POST with `{ quarterStart, quarterEnd }` body or GET with the
-//     same as query params → run for the explicit window.
+//   - POST `{ quarterStart, quarterEnd }` body or GET query params → explicit.
 //
-// Schedule: 02:00 UTC on the 1st of each quarter via vercel.json.
+// Schedule: 03:00 UTC on the 1st of each quarter via vercel.json.
 
 import { NextResponse, type NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
-import {
-  computeQuarterlyTrail,
-  type AgentTermSnapshot,
-  type WeeklyNav,
-} from "@/lib/commission-engine";
-import { fetchInvestorsForAgent } from "@/lib/ekush-web/client";
-import type { FundCode } from "@/lib/ekush-web/types";
+import { runTrail } from "@/lib/run-trail";
 import { authoriseCron, lastCompletedQuarter, todayUtc } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-async function resolveQuarter(req: NextRequest): Promise<
-  | { qStart: Date; qEnd: Date; quarterStart: string; quarterEnd: string }
-  | { error: string }
-> {
-  // POST with JSON body
+async function resolveQuarter(
+  req: NextRequest,
+): Promise<{ qStart: Date; qEnd: Date; quarterStart: string; quarterEnd: string }> {
   if (req.method === "POST") {
     const body = (await req.json().catch(() => ({}))) as {
       quarterStart?: string;
@@ -47,7 +38,6 @@ async function resolveQuarter(req: NextRequest): Promise<
       };
     }
   }
-  // GET — try query params first; else auto-derive last completed quarter.
   const url = new URL(req.url);
   const qs = url.searchParams.get("quarterStart");
   const qe = url.searchParams.get("quarterEnd");
@@ -62,9 +52,9 @@ async function resolveQuarter(req: NextRequest): Promise<
   const q = lastCompletedQuarter(todayUtc());
   return {
     qStart: q.start,
-    qEnd: q.end,
+    qEnd: q.endInclusive,
     quarterStart: q.start.toISOString().slice(0, 10),
-    quarterEnd: q.end.toISOString().slice(0, 10),
+    quarterEnd: q.endInclusive.toISOString().slice(0, 10),
   };
 }
 
@@ -72,80 +62,9 @@ async function handle(req: NextRequest) {
   if (!authoriseCron(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const { qStart, qEnd, quarterStart, quarterEnd } = await resolveQuarter(req);
 
-  const resolved = await resolveQuarter(req);
-  if ("error" in resolved) {
-    return NextResponse.json({ error: resolved.error }, { status: 400 });
-  }
-  const { qStart, qEnd, quarterStart, quarterEnd } = resolved;
-
-  const agents = await prisma.sellingAgent.findMany({
-    where: { status: "approved" },
-    include: { terms: true, investors: true },
-  });
-
-  const navSnaps = await prisma.navSnapshot.findMany({
-    where: { snapshotDate: { gte: qStart, lte: qEnd } },
-  });
-  const navByFund = new Map<FundCode, WeeklyNav[]>();
-  for (const n of navSnaps) {
-    const fc = n.fundCode as FundCode;
-    if (!navByFund.has(fc)) navByFund.set(fc, []);
-    navByFund.get(fc)!.push({ date: n.snapshotDate, unitNav: Number(n.unitNav) });
-  }
-
-  let created = 0;
-  let skipped = 0;
-  for (const agent of agents) {
-    const termSnaps: AgentTermSnapshot[] = agent.terms.map((t) => ({
-      fundCategory: t.fundCategory,
-      upfrontPct: Number(t.upfrontPct),
-      trailY1PctPa: Number(t.trailY1PctPa),
-      trailY2PlusPctPa: Number(t.trailY2PlusPctPa),
-      clawbackMonths: t.clawbackMonths,
-      clawbackPct: Number(t.clawbackPct),
-      effectiveFrom: t.effectiveFrom,
-      effectiveTo: t.effectiveTo,
-    }));
-
-    const investors = await fetchInvestorsForAgent(agent.code);
-    for (const inv of investors) {
-      const ai = agent.investors.find(
-        (x) =>
-          x.investorCode === inv.investor_code &&
-          x.fundCode === inv.fund_code &&
-          x.sourcedOn.toISOString().slice(0, 10) === inv.sourced_on,
-      );
-      if (!ai) {
-        skipped++;
-        continue;
-      }
-      const result = computeQuarterlyTrail(inv, termSnaps, navByFund, qStart, qEnd);
-      if (!result) {
-        skipped++;
-        continue;
-      }
-      try {
-        await prisma.commissionRun.create({
-          data: {
-            agentId: agent.id,
-            agentInvestorId: ai.id,
-            type: "trail",
-            periodStart: result.periodStart,
-            periodEnd: result.periodEnd,
-            baseAmount: result.baseAmount,
-            rateApplied: result.rateApplied,
-            amount: result.amount,
-            notes: result.notes,
-          },
-        });
-        created++;
-      } catch {
-        // unique constraint hit — already ran for this period
-        skipped++;
-      }
-    }
-  }
+  const result = await runTrail(qStart, qEnd, "quarterly");
 
   console.log(
     JSON.stringify({
@@ -153,16 +72,14 @@ async function handle(req: NextRequest) {
       type: "quarterly-trail",
       quarterStart,
       quarterEnd,
-      created,
-      skipped,
-      agents: agents.length,
+      ...result,
       at: new Date().toISOString(),
     }),
   );
 
   return NextResponse.json({
-    created,
-    skipped,
+    created: result.created,
+    skipped: result.skipped,
     quarter: { quarterStart, quarterEnd },
   });
 }

@@ -5,11 +5,21 @@
 
 import { categoryForFund, type EkushWebInvestor, type FundCode } from "@/lib/ekush-web/types";
 
+export type TrailFrequency = "monthly" | "quarterly";
+
+/** Trail periods in a year for a given cadence — the annualised rate is
+ *  divided by this to get the per-period rate. */
+export function periodsPerYear(f: TrailFrequency): number {
+  return f === "monthly" ? 12 : 4;
+}
+
 export type AgentTermSnapshot = {
   fundCategory: "equity" | "fixed_income";
   upfrontPct: number;
   trailY1PctPa: number;
   trailY2PlusPctPa: number;
+  /** Cadence trail is paid on for this term. Admin-set; default monthly. */
+  trailFrequency: TrailFrequency;
   clawbackMonths: number;
   clawbackPct: number;
   effectiveFrom: Date;
@@ -79,9 +89,12 @@ export function computeUpfront(
   };
 }
 
-// ─── 8.2 Quarterly trail ─────────────────────────────────────────
-// Weekly average held value × annualised rate ÷ 4. Y1 vs Y2+ chosen
-// by quarter midpoint relative to sourced_on + 12 months.
+// ─── 8.2 Trail (monthly or quarterly) ────────────────────────────
+// Weekly average held value × annualised rate ÷ periodsPerYear. Y1 vs
+// Y2+ chosen by period midpoint relative to sourced_on + 12 months. The
+// cadence is the term's `trailFrequency` — a run for one frequency skips
+// terms set to the other, so the monthly and quarterly crons never both
+// pay the same investor.
 
 export type WeeklyNav = {
   /** Date of the snapshot (typically each Thursday). */
@@ -90,27 +103,30 @@ export type WeeklyNav = {
   unitNav: number;
 };
 
-export function computeQuarterlyTrail(
+export function computeTrail(
   inv: EkushWebInvestor,
   terms: AgentTermSnapshot[],
   navByFund: Map<FundCode, WeeklyNav[]>,
-  quarterStart: Date,
-  quarterEnd: Date,
+  periodStart: Date,
+  periodEnd: Date,
+  frequency: TrailFrequency,
 ): ComputedCommission | null {
   if (inv.is_direct_subscription) return null;
   const sourcedOn = parseDate(inv.sourced_on);
-  if (sourcedOn > quarterEnd) return null;
+  if (sourcedOn > periodEnd) return null;
 
-  const quarterMid = new Date((quarterStart.getTime() + quarterEnd.getTime()) / 2);
-  const term = pickTerm(terms, categoryForFund(inv.fund_code), quarterMid);
+  const periodMid = new Date((periodStart.getTime() + periodEnd.getTime()) / 2);
+  const term = pickTerm(terms, categoryForFund(inv.fund_code), periodMid);
   if (!term) return null;
+  // Pay only on this term's configured cadence.
+  if (term.trailFrequency !== frequency) return null;
 
   const ratePa =
-    quarterMid < addMonths(sourcedOn, 12) ? term.trailY1PctPa : term.trailY2PlusPctPa;
-  const rateQuarter = ratePa / 4;
+    periodMid < addMonths(sourcedOn, 12) ? term.trailY1PctPa : term.trailY2PlusPctPa;
+  const ratePeriod = ratePa / periodsPerYear(frequency);
 
   const navs = (navByFund.get(inv.fund_code) ?? [])
-    .filter((n) => isWithin(n.date, quarterStart, quarterEnd))
+    .filter((n) => isWithin(n.date, periodStart, periodEnd))
     .sort((a, b) => +a.date - +b.date);
   if (navs.length === 0) return null;
 
@@ -134,13 +150,24 @@ export function computeQuarterlyTrail(
 
   return {
     type: "trail",
-    periodStart: quarterStart,
-    periodEnd: quarterEnd,
+    periodStart,
+    periodEnd,
     baseAmount: round2(weeklyAvgValue),
-    rateApplied: rateQuarter,
-    amount: round2(weeklyAvgValue * rateQuarter),
-    notes: `${navs.length} weekly NAV snapshots, ${ratePa === term.trailY1PctPa ? "Y1" : "Y2+"} tier`,
+    rateApplied: ratePeriod,
+    amount: round2(weeklyAvgValue * ratePeriod),
+    notes: `${navs.length} weekly NAV snapshots, ${ratePa === term.trailY1PctPa ? "Y1" : "Y2+"} tier, ${frequency}`,
   };
+}
+
+/** Back-compat wrapper: quarterly cadence. */
+export function computeQuarterlyTrail(
+  inv: EkushWebInvestor,
+  terms: AgentTermSnapshot[],
+  navByFund: Map<FundCode, WeeklyNav[]>,
+  quarterStart: Date,
+  quarterEnd: Date,
+): ComputedCommission | null {
+  return computeTrail(inv, terms, navByFund, quarterStart, quarterEnd, "quarterly");
 }
 
 // ─── 8.3 Clawback on early redemption ────────────────────────────

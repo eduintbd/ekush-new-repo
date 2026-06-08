@@ -200,7 +200,7 @@ export default async function AgentDetailPage({
                         effective {t.effectiveFrom.toISOString().slice(0, 10)} → now
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
+                    <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-6">
                       <PctInput
                         name="upfrontPct"
                         label="Upfront %"
@@ -216,6 +216,19 @@ export default async function AgentDetailPage({
                         label="Trail Y2+ p.a. %"
                         defaultValue={(Number(t.trailY2PlusPctPa) * 100).toFixed(4)}
                       />
+                      <label className="block">
+                        <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                          Trail frequency
+                        </span>
+                        <select
+                          name="trailFrequency"
+                          defaultValue={t.trailFrequency === "quarterly" ? "quarterly" : "monthly"}
+                          className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                        >
+                          <option value="monthly">Monthly</option>
+                          <option value="quarterly">Quarterly</option>
+                        </select>
+                      </label>
                       <label className="block">
                         <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
                           Clawback months
@@ -270,6 +283,19 @@ export default async function AgentDetailPage({
               <PctInput name="upfrontPct" label="Upfront %" defaultValue="0.20" required />
               <PctInput name="trailY1PctPa" label="Trail Y1 %" defaultValue="0.40" required />
               <PctInput name="trailY2PlusPctPa" label="Trail Y2+ %" defaultValue="0.35" required />
+              <label className="block">
+                <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                  Trail frequency
+                </span>
+                <select
+                  name="trailFrequency"
+                  defaultValue="monthly"
+                  className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                >
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                </select>
+              </label>
               <label className="block">
                 <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
                   Clawback months
@@ -387,6 +413,17 @@ export default async function AgentDetailPage({
                                 className="mt-1 w-20 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
                               />
                             </label>
+                            <label className="block">
+                              <span className="block font-medium uppercase tracking-wider text-zinc-500">Frequency</span>
+                              <select
+                                name="trailFrequency"
+                                defaultValue={t.trailFrequency === "quarterly" ? "quarterly" : "monthly"}
+                                className="mt-1 w-28 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                              >
+                                <option value="monthly">Monthly</option>
+                                <option value="quarterly">Quarterly</option>
+                              </select>
+                            </label>
                             <div className="flex items-center gap-2">
                               <button
                                 type="submit"
@@ -425,6 +462,9 @@ export default async function AgentDetailPage({
                       <td className="py-1.5 pr-4 tabular-nums">{(Number(t.trailY2PlusPctPa) * 100).toFixed(2)}%</td>
                       <td className="py-1.5 pr-4">
                         {t.clawbackMonths}mo @ {(Number(t.clawbackPct) * 100).toFixed(0)}%
+                        <span className="ml-2 rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-medium uppercase text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+                          {t.trailFrequency === "quarterly" ? "quarterly trail" : "monthly trail"}
+                        </span>
                       </td>
                       <td className="py-1.5 pr-4">
                         {t.effectiveFrom.toISOString().slice(0, 10)} →{" "}
@@ -756,23 +796,26 @@ function MethodologyPanel() {
         />
 
         <Method
-          title="② Trail commission — paid quarterly on weekly average holding value"
+          title="② Trail commission — paid monthly or quarterly on weekly average holding value"
           formula={
             "weekly_value(week) = units_outstanding_at_week × unit_nav_at_week\n" +
-            "avg = mean(weekly_value over the quarter)\n" +
-            "amount = avg × (rate_pa ÷ 4)"
+            "avg = mean(weekly_value over the period)\n" +
+            "amount = avg × (rate_pa ÷ periods_per_year)   // 12 monthly, 4 quarterly"
           }
           example={
-            "Investor sourced 2025-08-12. Quarter under review: 2026-01-01 → 2026-03-31. Quarter midpoint 2026-02-15 is " +
-            "< sourced_on + 12 months (2026-08-12), so Trail Y1 p.a. rate applies. With weekly NAVs each Thursday × " +
-            "outstanding units, avg ≈ BDT 1.2M. Trail Y1 0.40% p.a. → 0.40% ÷ 4 = 0.10% quarterly. Trail = 1,200,000 × 0.0010 = BDT 1,200."
+            "Cadence is set per term (Trail frequency — monthly is the default). Investor sourced 2025-08-12, " +
+            "monthly term: period 2026-02-01 → 2026-02-28. Period midpoint < sourced_on + 12 months (2026-08-12), so Trail Y1 applies. " +
+            "With weekly NAVs each Thursday × outstanding units, avg ≈ BDT 1.2M. Trail Y1 0.40% p.a. → 0.40% ÷ 12 = 0.0333% monthly. " +
+            "Trail = 1,200,000 × 0.000333 ≈ BDT 400 (≈ BDT 1,200 over the quarter, same as the quarterly cadence)."
           }
           notes={[
-            "Rate tier switches at exactly `sourced_on + 12 months`. Quarters straddling the boundary use Y1 if the midpoint is before, Y2+ if after.",
+            "Cadence per term via Trail frequency (monthly default / quarterly). The two crons never double-pay: each pays only the terms set to its cadence.",
+            "Rate tier switches at exactly `sourced_on + 12 months`. Periods straddling the boundary use Y1 if the midpoint is before, Y2+ if after.",
             "Redeemed units stop earning trail from the redemption date (clause 6.3) — `units_at_week` re-computes per week.",
-            "Quarter = strict 3-calendar-month window. Bangladesh FY (Jul–Jun) implies quarters Jul-Sep, Oct-Dec, Jan-Mar, Apr-Jun.",
-            "Cron `/api/cron/quarterly-trail` runs at 03:00 UTC on the 1st of Jan/Apr/Jul/Oct, computing the just-completed quarter.",
-            "If no weekly NAV snapshots exist for the fund in the quarter, the run is skipped (cannot compute average).",
+            "Monthly = strict calendar month; quarterly = strict 3-calendar-month window (Jul-Sep, Oct-Dec, Jan-Mar, Apr-Jun).",
+            "Cron `/api/cron/monthly-trail` runs 03:00 UTC on the 1st of every month; `/api/cron/quarterly-trail` on the 1st of Jan/Apr/Jul/Oct — each computes the just-completed period.",
+            "If no weekly NAV snapshots exist for the fund in the period, the run is skipped (cannot compute average).",
+            "When switching a term's cadence, change it at a period boundary — a mid-quarter switch can pay both the quarter and its months.",
           ]}
         />
 

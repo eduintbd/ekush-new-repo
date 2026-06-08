@@ -24,6 +24,11 @@ function parsePct(raw: string): number | null {
   return v >= 1 ? v / 100 : v;
 }
 
+/** Trail cadence from the form; monthly is the default/preferred. */
+function parseFrequency(raw: string): "monthly" | "quarterly" {
+  return raw === "quarterly" ? "quarterly" : "monthly";
+}
+
 const DEFAULT_TERM_EQUITY = {
   upfrontPct: 0.002, // 0.20%
   trailY1PctPa: 0.004, // 0.40%
@@ -48,6 +53,7 @@ export async function approveAgent(id: string): Promise<void> {
         agentId: id,
         fundCategory: "equity",
         ...DEFAULT_TERM_EQUITY,
+        trailFrequency: "monthly",
         effectiveFrom: today,
         createdBy: me.id,
       },
@@ -57,6 +63,7 @@ export async function approveAgent(id: string): Promise<void> {
         agentId: id,
         fundCategory: "fixed_income",
         ...DEFAULT_TERM_FIXED_INCOME,
+        trailFrequency: "monthly",
         effectiveFrom: today,
         createdBy: me.id,
       },
@@ -100,6 +107,7 @@ export async function addAgentTerm(formData: FormData): Promise<void> {
   const trailY2 = parsePct(String(formData.get("trailY2PlusPctPa") ?? ""));
   const clawbackMonths = Number(formData.get("clawbackMonths") ?? "6") || 6;
   const clawbackPct = parsePct(String(formData.get("clawbackPct") ?? "1"));
+  const trailFrequency = parseFrequency(String(formData.get("trailFrequency") ?? "monthly"));
   const effectiveFromRaw = String(formData.get("effectiveFrom") ?? "").trim();
 
   if (!agentId) redirect(`/admin/agents?error=Missing+agent`);
@@ -145,6 +153,7 @@ export async function addAgentTerm(formData: FormData): Promise<void> {
           upfrontPct: upfront,
           trailY1PctPa: trailY1,
           trailY2PlusPctPa: trailY2,
+          trailFrequency,
           clawbackMonths,
           clawbackPct,
         },
@@ -157,6 +166,7 @@ export async function addAgentTerm(formData: FormData): Promise<void> {
           upfrontPct: upfront,
           trailY1PctPa: trailY1,
           trailY2PlusPctPa: trailY2,
+          trailFrequency,
           clawbackMonths,
           clawbackPct,
           effectiveFrom,
@@ -185,6 +195,7 @@ export async function updateAgentTerm(formData: FormData): Promise<void> {
   const trailY2 = parsePct(String(formData.get("trailY2PlusPctPa") ?? ""));
   const clawbackMonths = Number(formData.get("clawbackMonths") ?? "6") || 6;
   const clawbackPct = parsePct(String(formData.get("clawbackPct") ?? "1"));
+  const trailFrequency = parseFrequency(String(formData.get("trailFrequency") ?? "monthly"));
 
   if (upfront == null || trailY1 == null || trailY2 == null || clawbackPct == null) {
     redirect(`/admin/agents/${agentId}?error=All+percentages+must+be+numbers`);
@@ -197,6 +208,7 @@ export async function updateAgentTerm(formData: FormData): Promise<void> {
         upfrontPct: upfront,
         trailY1PctPa: trailY1,
         trailY2PlusPctPa: trailY2,
+        trailFrequency,
         clawbackMonths,
         clawbackPct,
       },
