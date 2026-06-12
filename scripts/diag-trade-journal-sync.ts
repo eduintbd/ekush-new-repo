@@ -31,10 +31,17 @@ async function main() {
 
   console.log(`Trade-backed vouchers to check: ${trades.length}\n`);
 
+  // Exact investment-account per instrument — matching on the substring
+  // "Investment" wrongly catches "Realised Gain/(Loss) on Investments" and
+  // double-counts the SELL investment leg.
+  const instruments = await prisma.instrument.findMany({ select: { code: true, investmentAccount: true } });
+  const invAccByCode = new Map(instruments.map((i) => [i.code, i.investmentAccount]));
+
   let problems = 0;
   for (const t of trades) {
     const lines = await prisma.journal.findMany({ where: { batchId: t.journalBatchId! } });
     const issues: string[] = [];
+    const invAcc = invAccByCode.get(t.instrumentCode);
 
     if (lines.length === 0) {
       issues.push("NO journal lines (voucher missing)");
@@ -47,12 +54,12 @@ async function main() {
       const comm = Number(t.commission ?? 0);
       if (t.side === "BUY") {
         const expected = r2(gross + comm);
-        const invDr = lines.filter((l) => l.accountName.includes("Investment")).reduce((s, l) => s + Number(l.debit), 0);
+        const invDr = lines.filter((l) => l.accountName === invAcc).reduce((s, l) => s + Number(l.debit), 0);
         if (Math.abs(invDr - expected) > 0.01)
           issues.push(`investment Dr ${invDr.toFixed(2)} != trade-implied ${expected.toFixed(2)} (rate ${Number(t.rate)}, comm ${comm})`);
       } else {
         const expected = r2(Number(t.costBasis ?? 0));
-        const invCr = lines.filter((l) => l.accountName.includes("Investment")).reduce((s, l) => s + Number(l.credit), 0);
+        const invCr = lines.filter((l) => l.accountName === invAcc).reduce((s, l) => s + Number(l.credit), 0);
         if (Math.abs(invCr - expected) > 0.01)
           issues.push(`investment Cr ${invCr.toFixed(2)} != trade costBasis ${expected.toFixed(2)}`);
       }
