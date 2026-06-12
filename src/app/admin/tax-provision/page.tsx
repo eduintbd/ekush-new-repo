@@ -97,6 +97,9 @@ export default async function TaxProvisionPage({
   let result: TaxProvisionResult | null = null;
   let computeError: string | null = null;
   let history: ProvisionHistoryRow[] = [];
+  // The provision can only be posted after the FVTPL "Revalue to market"
+  // journal, and is dated on that revaluation's date.
+  let revalDate: string | null = null;
   if (fy) {
     try {
       result = await computeTaxProvision(fy.id, {
@@ -108,6 +111,10 @@ export default async function TaxProvisionPage({
     } catch (err) {
       computeError = err instanceof Error ? err.message : String(err);
     }
+    const fva = await prisma.fairValueAdjustment
+      .findFirst({ where: { fiscalYearId: fy.id, reversedAt: null }, orderBy: { asOfDate: "desc" } })
+      .catch(() => null);
+    revalDate = fva ? fva.asOfDate.toISOString().slice(0, 10) : null;
   }
 
   return (
@@ -492,6 +499,7 @@ export default async function TaxProvisionPage({
                   mgmtFeeAtSource={mgmtFeeAtSourceAmount}
                   materialityPctInput={materialityPctInput}
                   carryForward={carryForward}
+                  revalDate={revalDate}
                 />
                 <span className="text-[11px] text-zinc-500">
                   To lock this period,{" "}
@@ -636,12 +644,14 @@ function PostForm({
   mgmtFeeAtSource,
   materialityPctInput,
   carryForward,
+  revalDate,
 }: {
   fy: { id: string; label: string; endsOn: Date; isClosed: boolean };
   result: TaxProvisionResult;
   mgmtFeeAtSource: number;
   materialityPctInput: number;
   carryForward: boolean;
+  revalDate: string | null;
 }) {
   const cv = result.reconciliation.varianceCurrent;
   const dv = result.reconciliation.varianceDeferred;
@@ -651,7 +661,7 @@ function PostForm({
   if (Math.abs(dv) >= 0.005) parts.push(`deferred ${dv >= 0 ? "+" : "−"}৳${Math.abs(dv).toFixed(2)}`);
   const confirmMsg = noTopupNeeded
     ? `No top-up needed for ${fy.label} — books already reconcile within ৳0.01. Submit anyway?`
-    : `Post top-up journal for ${fy.label}: ${parts.join(", ")}. This writes a new TX-prefixed voucher dated ${fy.endsOn.toISOString().slice(0, 10)} — it does NOT modify existing journals. Continue?`;
+    : `Post top-up journal for ${fy.label}: ${parts.join(", ")}. This writes a new TX-prefixed voucher dated ${revalDate} (the revaluation date) — it does NOT modify existing journals. Continue?`;
 
   if (fy.isClosed) {
     return (
@@ -663,6 +673,28 @@ function PostForm({
       >
         Post to Ledger (FY closed)
       </button>
+    );
+  }
+
+  if (!revalDate) {
+    return (
+      <div className="flex flex-col gap-1">
+        <button
+          type="button"
+          disabled
+          className="cursor-not-allowed rounded-md border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-500"
+          title="Post the FVTPL revaluation first"
+        >
+          Revalue to market first
+        </button>
+        <span className="text-[11px] text-zinc-500">
+          The provision must follow the FVTPL revaluation.{" "}
+          <Link href="/portfolio" className="underline-offset-2 hover:underline">
+            Portfolio → Revalue to market
+          </Link>
+          , then post here (dated the revaluation date).
+        </span>
+      </div>
     );
   }
 

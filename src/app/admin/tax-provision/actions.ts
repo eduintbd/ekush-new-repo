@@ -189,6 +189,21 @@ export async function postTaxProvision(formData: FormData): Promise<void> {
     );
   }
 
+  // Precondition: the FVTPL "Revalue to market" journal must already be
+  // posted — the deferred-tax leg is computed off the unrealised fair-value
+  // change it books. The provision voucher is dated the revaluation's date
+  // (the latest active FairValueAdjustment.asOfDate).
+  const fva = await prisma.fairValueAdjustment.findFirst({
+    where: { fiscalYearId: fy.id, reversedAt: null },
+    orderBy: { asOfDate: "desc" },
+  });
+  if (!fva) {
+    back(
+      `fy=${fy.id}`,
+      "Post the FVTPL revaluation (Portfolio → Revalue to market) before the tax provision.",
+    );
+  }
+
   // Recompute the canonical numbers — never trust form-submitted
   // tax amounts (would let an admin bypass rate/period validation by
   // editing hidden inputs).
@@ -261,15 +276,13 @@ export async function postTaxProvision(formData: FormData): Promise<void> {
   let voucherNo = "";
   let provisionId = "";
 
-  // Date the entry on the posting day so the Day Book reads
-  // chronologically (no future-dated rows for an interim posting),
-  // clamped to the FY range. A year-end-closing post (after FY end)
-  // clamps back to fy.endsOn so it still lands inside this FY. The
-  // statements aggregate by fiscalYearId, so the FY allocation is
-  // unaffected either way.
+  // Date the provision voucher on the revaluation's date (the active FVA's
+  // asOfDate), clamped to the FY range as a defensive no-op (revalueToMarket
+  // already validates asOfDate inside the FY). The statements aggregate by
+  // fiscalYearId, so the FY allocation is unaffected either way.
   const clampToFy = (d: Date) =>
     d < fy.startsOn ? fy.startsOn : d > fy.endsOn ? fy.endsOn : d;
-  const postDate = clampToFy(new Date());
+  const postDate = clampToFy(fva.asOfDate);
 
   await withActor(profile.id, async (tx) => {
     voucherNo = await allocateVoucherNo(tx, fy.id, fy.label, "TX");
