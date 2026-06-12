@@ -699,6 +699,7 @@ model SellingAgent {
   accruals          CommissionAccrual[]
   journals          Journal[]
   upfrontWatermarks AgentUpfrontWatermark[]
+  upfrontSuspensions AgentUpfrontSuspension[]
 
   @@map("selling_agents")
   @@schema("xsystem")
@@ -785,6 +786,28 @@ model AgentUpfrontWatermark {
 
   @@unique([agentId, fundCode])
   @@map("agent_upfront_watermarks")
+  @@schema("xsystem")
+}
+
+// Accountant-controlled upfront entitlement log (per agent). Each row is a
+// 'suspend' or 'reinstate' event effective from a date. Entitlement as-of a
+// date = the latest event with effective_from ≤ date; suspended if that
+// event is 'suspend'. While suspended the monthly upfront run pays nothing
+// (forfeit, no catch-up); at re-instatement the accountant sets the
+// watermark manually so no back-dated upfront accrues.
+model AgentUpfrontSuspension {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId       String   @map("agent_id") @db.Uuid
+  action        String // 'suspend' | 'reinstate'
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  note          String?
+  createdBy     String?  @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, effectiveFrom])
+  @@map("agent_upfront_suspensions")
   @@schema("xsystem")
 }
 

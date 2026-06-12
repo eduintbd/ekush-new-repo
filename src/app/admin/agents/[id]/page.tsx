@@ -14,6 +14,9 @@ import {
   postAgentCommissions,
   postAgentUpfront,
   reinstateAgent,
+  reinstateAgentUpfront,
+  setAgentWatermark,
+  suspendAgentUpfront,
   suspendAgent,
   unlinkInvestor,
   updateAgentTerm,
@@ -917,8 +920,54 @@ function CommissionPreviewPanel({
     );
   }
   const partialCount = preview.trailRows.filter((r) => r.partial).length;
+  const today = preview.asOf.toISOString().slice(0, 10);
   return (
     <Section title={`Calculate as of today — ${preview.asOf.toISOString().slice(0, 10)}`}>
+      {/* Upfront entitlement (accountant-controlled) */}
+      <div className={`mb-4 rounded-md border p-3 text-xs ${preview.upfrontEntitled ? "border-zinc-200 dark:border-zinc-800" : "border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30"}`}>
+        <div>
+          <span className="font-semibold uppercase tracking-wider text-zinc-500">Upfront entitlement: </span>
+          {preview.upfrontEntitled ? (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium uppercase text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">entitled</span>
+          ) : (
+            <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-medium uppercase text-amber-900 dark:bg-amber-900 dark:text-amber-100">
+              suspended since {preview.upfrontSuspendedFrom}
+            </span>
+          )}
+          <span className="ml-2 text-[11px] text-zinc-500">
+            While suspended the monthly run pays no upfront (forfeit — no catch-up). At re-instatement, set each fund&apos;s watermark below so no back-dated upfront accrues.
+          </span>
+        </div>
+        <div className="mt-2 flex flex-wrap items-end gap-x-5 gap-y-2">
+          <form
+            action={suspendAgentUpfront}
+            className="flex flex-wrap items-end gap-2"
+            data-confirm="Suspend this agent's upfront from the chosen date? No upfront will be paid while suspended."
+          >
+            <input type="hidden" name="agentId" value={agentId} />
+            <label className="block">
+              <span className="block text-[10px] uppercase tracking-wider text-zinc-500">Suspend from</span>
+              <input type="date" name="effectiveFrom" required defaultValue={today} className="mt-1 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
+            </label>
+            <input name="note" placeholder="reason (optional)" className="rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
+            <button className="rounded-md bg-amber-700 px-3 py-1 font-medium text-white hover:bg-amber-800">Suspend upfront</button>
+          </form>
+          <form
+            action={reinstateAgentUpfront}
+            className="flex flex-wrap items-end gap-2"
+            data-confirm="Re-instate upfront from the chosen date? Remember to set each fund's watermark so no back-dated upfront accrues."
+          >
+            <input type="hidden" name="agentId" value={agentId} />
+            <label className="block">
+              <span className="block text-[10px] uppercase tracking-wider text-zinc-500">Re-instate from</span>
+              <input type="date" name="effectiveFrom" required defaultValue={today} className="mt-1 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
+            </label>
+            <input name="note" placeholder="reason (optional)" className="rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
+            <button className="rounded-md bg-zinc-900 px-3 py-1 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900">Re-instate upfront</button>
+          </form>
+        </div>
+      </div>
+
       {/* Totals strip */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Stat label="Total inflow" value={formatBdt(preview.totals.inflow)} muted />
@@ -958,6 +1007,7 @@ function CommissionPreviewPanel({
                 <th className="py-1.5 pr-3 text-right">Upfront %</th>
                 <th className="py-1.5 pr-3 text-right">Pending new money</th>
                 <th className="py-1.5 pr-3 text-right">Pending upfront</th>
+                <th className="py-1.5 pr-3 text-right">Set watermark</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -967,8 +1017,29 @@ function CommissionPreviewPanel({
                   <td className="py-1.5 pr-3 text-right tabular-nums">{formatBdt(w.currentNetPrincipal)}</td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">{formatBdt(Math.max(w.storedWatermark, w.peak))}</td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">{(w.upfrontPct * 100).toFixed(4)}%</td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">{w.pendingIncrement > 0 ? formatBdt(w.pendingIncrement) : "—"}</td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums font-medium">{w.pendingUpfront > 0 ? formatBdt(w.pendingUpfront) : "—"}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{!preview.upfrontEntitled ? <span className="text-amber-700 dark:text-amber-300">forfeit</span> : w.pendingIncrement > 0 ? formatBdt(w.pendingIncrement) : "—"}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums font-medium">{preview.upfrontEntitled && w.pendingUpfront > 0 ? formatBdt(w.pendingUpfront) : "—"}</td>
+                  <td className="py-1.5 pr-3 pr-3">
+                    <form
+                      action={setAgentWatermark}
+                      className="flex items-center justify-end gap-1"
+                      data-confirm={`Set ${w.fundCode} watermark to the entered value? Future upfront pays only on new money above it.`}
+                    >
+                      <input type="hidden" name="agentId" value={agentId} />
+                      <input type="hidden" name="fundCode" value={w.fundCode} />
+                      <input
+                        name="watermark"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        defaultValue={Math.max(w.storedWatermark, w.peak).toFixed(2)}
+                        className="w-28 rounded border border-zinc-300 px-1 py-0.5 text-right tabular-nums dark:border-zinc-700 dark:bg-zinc-900"
+                      />
+                      <button className="rounded border border-zinc-300 px-2 py-0.5 text-[10px] font-medium uppercase hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">
+                        Set
+                      </button>
+                    </form>
+                  </td>
                 </tr>
               ))}
             </tbody>

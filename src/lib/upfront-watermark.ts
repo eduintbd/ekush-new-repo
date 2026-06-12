@@ -36,6 +36,27 @@ export type WatermarkResult = {
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
+export type SuspensionEvent = { action: string; effectiveFrom: Date; createdAt?: Date };
+
+/** Is upfront entitled for the agent as of `asOf`? Entitlement = the latest
+ *  event with effectiveFrom ≤ asOf is NOT a 'suspend' (no events = entitled).
+ *  Supports repeated suspend/reinstate cycles. */
+export function isUpfrontEntitled(events: SuspensionEvent[], asOf: Date): boolean {
+  let latest: SuspensionEvent | null = null;
+  for (const e of events) {
+    if (e.effectiveFrom > asOf) continue;
+    if (
+      !latest ||
+      e.effectiveFrom > latest.effectiveFrom ||
+      (e.effectiveFrom.getTime() === latest.effectiveFrom.getTime() &&
+        (e.createdAt?.getTime() ?? 0) >= (latest.createdAt?.getTime() ?? 0))
+    ) {
+      latest = e;
+    }
+  }
+  return !latest || latest.action !== "suspend";
+}
+
 /** Pure: replay net principal, track the running peak, pay on any new high
  *  above the stored watermark. `txns` should already be limited to the
  *  evaluation window end; order doesn't matter (sorted here). */

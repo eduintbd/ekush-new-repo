@@ -390,6 +390,72 @@ function round2BD(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** Suspend an agent's upfront entitlement from a date. While suspended the
+ *  monthly run pays no upfront (forfeit, no catch-up). */
+export async function suspendAgentUpfront(formData: FormData): Promise<void> {
+  const me = await requireRole(["admin", "checker", "accountant"]);
+  const agentId = String(formData.get("agentId") ?? "").trim();
+  const fromRaw = String(formData.get("effectiveFrom") ?? "").trim();
+  const note = String(formData.get("note") ?? "").trim() || null;
+  if (!agentId) redirect("/admin/agents?error=Missing+agent");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromRaw)) {
+    redirect(`/admin/agents/${agentId}?error=Suspend+date+required+(YYYY-MM-DD)`);
+  }
+  await withActor(me.id, (tx) =>
+    tx.agentUpfrontSuspension.create({
+      data: { agentId, action: "suspend", effectiveFrom: new Date(`${fromRaw}T00:00:00.000Z`), note, createdBy: me.id },
+    }),
+  );
+  revalidatePath(`/admin/agents/${agentId}`);
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(`Upfront suspended from ${fromRaw}`)}`);
+}
+
+/** Re-instate an agent's upfront entitlement from a date. The accountant
+ *  should also set each fund's watermark (setAgentWatermark) so no back-dated
+ *  upfront accrues on money that arrived during suspension. */
+export async function reinstateAgentUpfront(formData: FormData): Promise<void> {
+  const me = await requireRole(["admin", "checker", "accountant"]);
+  const agentId = String(formData.get("agentId") ?? "").trim();
+  const fromRaw = String(formData.get("effectiveFrom") ?? "").trim();
+  const note = String(formData.get("note") ?? "").trim() || null;
+  if (!agentId) redirect("/admin/agents?error=Missing+agent");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromRaw)) {
+    redirect(`/admin/agents/${agentId}?error=Re-instate+date+required+(YYYY-MM-DD)`);
+  }
+  await withActor(me.id, (tx) =>
+    tx.agentUpfrontSuspension.create({
+      data: { agentId, action: "reinstate", effectiveFrom: new Date(`${fromRaw}T00:00:00.000Z`), note, createdBy: me.id },
+    }),
+  );
+  revalidatePath(`/admin/agents/${agentId}`);
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(`Upfront re-instated from ${fromRaw} — review the watermark below`)}`);
+}
+
+/** Manually set a (agent, fund) upfront watermark. Used at re-instatement to
+ *  baseline the high-water-mark so future upfront pays only on new money
+ *  above this value. */
+export async function setAgentWatermark(formData: FormData): Promise<void> {
+  const me = await requireRole(["admin", "checker", "accountant"]);
+  const agentId = String(formData.get("agentId") ?? "").trim();
+  const fundCode = String(formData.get("fundCode") ?? "").trim();
+  const valueRaw = String(formData.get("watermark") ?? "").trim();
+  const value = Number(valueRaw);
+  if (!agentId || !fundCode) redirect(`/admin/agents/${agentId}?error=Missing+agent+or+fund`);
+  if (!Number.isFinite(value) || value < 0) {
+    redirect(`/admin/agents/${agentId}?error=Watermark+must+be+a+non-negative+number`);
+  }
+  const today = new Date();
+  await withActor(me.id, (tx) =>
+    tx.agentUpfrontWatermark.upsert({
+      where: { agentId_fundCode: { agentId, fundCode } },
+      create: { agentId, fundCode, watermark: round2BD(value), throughDate: today },
+      update: { watermark: round2BD(value), throughDate: today },
+    }),
+  );
+  revalidatePath(`/admin/agents/${agentId}`);
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(`${fundCode} watermark set to ${round2BD(value)}`)}`);
+}
+
 export async function createAgent(formData: FormData): Promise<void> {
   await requireRole(["admin", "checker"]);
   const code = String(formData.get("code") ?? "").trim();

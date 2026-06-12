@@ -10,7 +10,7 @@
 import type { PrismaClient } from "@/generated/prisma";
 import { categoryForFund, type FundCode } from "@/lib/ekush-web/types";
 import { periodsPerYear, type TrailFrequency } from "@/lib/commission-engine";
-import { computeWatermarkUpfront } from "@/lib/upfront-watermark";
+import { computeWatermarkUpfront, isUpfrontEntitled } from "@/lib/upfront-watermark";
 
 export type UpfrontWatermarkView = {
   fundCode: string;
@@ -118,6 +118,10 @@ export type PreviewResult = {
   trailRows: TrailRow[];
   /** Per-fund high-water-mark upfront state (the live upfront model). */
   upfrontWatermarks: UpfrontWatermarkView[];
+  /** Accountant-controlled upfront entitlement (false = suspended). */
+  upfrontEntitled: boolean;
+  /** Date the active suspension took effect, if suspended. */
+  upfrontSuspendedFrom: string | null;
   totals: {
     inflow: number;
     outflow: number;
@@ -181,9 +185,17 @@ export async function computeAgentCommissionPreview(
 ): Promise<PreviewResult> {
   const agent = await prisma.sellingAgent.findUnique({
     where: { id: agentId },
-    include: { terms: true, investors: { orderBy: { sourcedOn: "asc" } } },
+    include: { terms: true, investors: { orderBy: { sourcedOn: "asc" } }, upfrontSuspensions: true },
   });
   if (!agent) throw new Error(`Agent ${agentId} not found`);
+
+  const upfrontEntitled = isUpfrontEntitled(agent.upfrontSuspensions, asOf);
+  const activeSuspension = upfrontEntitled
+    ? null
+    : [...agent.upfrontSuspensions]
+        .filter((e) => e.effectiveFrom <= asOf && e.action === "suspend")
+        .sort((a, b) => +b.effectiveFrom - +a.effectiveFrom)[0] ?? null;
+  const upfrontSuspendedFrom = activeSuspension ? activeSuspension.effectiveFrom.toISOString().slice(0, 10) : null;
 
   const termsAll: Term[] = agent.terms.map((t) => ({
     fundCategory: t.fundCategory as "equity" | "fixed_income",
@@ -222,6 +234,8 @@ export async function computeAgentCommissionPreview(
       buckets: [],
       trailRows: [],
       upfrontWatermarks: [],
+      upfrontEntitled,
+      upfrontSuspendedFrom,
       totals: {
         inflow: 0,
         outflow: 0,
@@ -516,6 +530,10 @@ export async function computeAgentCommissionPreview(
   });
   const postedUpfront = Number(postedAgg._sum.amount ?? 0);
 
+  // Suspended agents earn no upfront — the pending increment is forfeited
+  // (the watermark stays put; accountant resets it at re-instatement).
+  const effPendingUpfront = upfrontEntitled ? pendingUpfront : 0;
+
   return {
     agentCode: agent.code,
     agentName: agent.fullName,
@@ -527,15 +545,17 @@ export async function computeAgentCommissionPreview(
     buckets: bucketsSorted,
     trailRows: trailRowsAll,
     upfrontWatermarks,
+    upfrontEntitled,
+    upfrontSuspendedFrom,
     totals: {
       inflow: round2(totals.inflow),
       outflow: round2(totals.outflow),
       initialUpfront: round2(totals.initialUpfront),
       perInflowUpfront: round2(totals.perInflowUpfront),
-      pendingUpfront: round2(pendingUpfront),
+      pendingUpfront: round2(effPendingUpfront),
       postedUpfront: round2(postedUpfront),
       trail: round2(totals.trail),
-      totalPayable: round2(pendingUpfront + totals.trail),
+      totalPayable: round2(effPendingUpfront + totals.trail),
     },
   };
 }

@@ -9,12 +9,14 @@
 
 import { prisma } from "@/lib/prisma";
 import { categoryForFund } from "@/lib/ekush-web/types";
-import { fetchAgentFundTxns, computeWatermarkUpfront } from "@/lib/upfront-watermark";
+import { fetchAgentFundTxns, computeWatermarkUpfront, isUpfrontEntitled } from "@/lib/upfront-watermark";
 
 export type UpfrontRunResult = {
   created: number;
   evaluated: number;
   agents: number;
+  /** Agents skipped because upfront was suspended for the period. */
+  suspended: number;
   totalUpfront: number;
   period: { start: string; end: string; through: string };
 };
@@ -43,14 +45,23 @@ export async function runUpfront(
 ): Promise<UpfrontRunResult> {
   const agents = await prisma.sellingAgent.findMany({
     where: { status: "approved", ...(opts.agentId ? { id: opts.agentId } : {}) },
-    include: { terms: true },
+    include: { terms: true, upfrontSuspensions: true },
   });
 
   let created = 0;
   let evaluated = 0;
+  let suspended = 0;
   let totalUpfront = 0;
 
   for (const agent of agents) {
+    // Accountant-controlled entitlement: while suspended (as of period end)
+    // the agent earns no upfront — and the watermark is left untouched
+    // (forfeit, no catch-up; the accountant sets the watermark manually at
+    // re-instatement).
+    if (!isUpfrontEntitled(agent.upfrontSuspensions, periodEnd)) {
+      suspended++;
+      continue;
+    }
     const terms: TermLite[] = agent.terms.map((t) => ({
       fundCategory: t.fundCategory,
       upfrontPct: Number(t.upfrontPct),
@@ -102,6 +113,7 @@ export async function runUpfront(
     created,
     evaluated,
     agents: agents.length,
+    suspended,
     totalUpfront: Math.round(totalUpfront * 100) / 100,
     period: {
       start: periodStart.toISOString().slice(0, 10),
