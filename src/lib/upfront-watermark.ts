@@ -95,11 +95,15 @@ export async function fetchAgentFundTxns(
   if (invIds.length === 0 || fundIds.length === 0) return out;
 
   // Earliest sourced_on per (investorCode, fundCode) — gates pre-sourcing txns.
+  // Direct subscriptions earn no agent commission (clause 6.5), so a pair only
+  // counts toward the watermark if it has at least one non-direct link.
   const sourcedByPair = new Map<string, Date>();
+  const eligiblePairs = new Set<string>();
   for (const l of agent.investors) {
     const key = `${l.investorCode}|${l.fundCode}`;
     const cur = sourcedByPair.get(key);
     if (!cur || l.sourcedOn < cur) sourcedByPair.set(key, l.sourcedOn);
+    if (!l.isDirectSubscription) eligiblePairs.add(key);
   }
 
   const rows = await prisma.$queryRawUnsafe<
@@ -119,8 +123,10 @@ export async function fetchAgentFundTxns(
     const invCode = codeByInvId.get(t.investorId);
     const fundCode = codeByFundId.get(t.fundId);
     if (!invCode || !fundCode) continue;
-    const sourcedOn = sourcedByPair.get(`${invCode}|${fundCode}`);
-    if (!sourcedOn || t.date < sourcedOn) continue; // not linked / pre-sourcing
+    const pairKey = `${invCode}|${fundCode}`;
+    if (!eligiblePairs.has(pairKey)) continue; // not linked / direct subscription (no commission)
+    const sourcedOn = sourcedByPair.get(pairKey);
+    if (!sourcedOn || t.date < sourcedOn) continue; // pre-sourcing
     const dir = t.direction === "BUY" ? "BUY" : "SELL";
     const arr = out.get(fundCode) ?? [];
     arr.push({ date: t.date, direction: dir, amount: Number(t.amount ?? 0) });
