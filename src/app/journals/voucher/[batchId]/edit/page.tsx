@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { updateJournalBatch } from "@/app/journals/actions";
 import { JournalLines } from "@/app/journals/new/lines";
 import { derivedVoucherKind } from "@/lib/voucher";
+import { TradeEditor } from "@/app/trades/trade-editor";
 
 type Search = { err?: string; msg?: string };
 
@@ -49,22 +50,50 @@ export default async function EditJournalPage({
     );
   }
 
-  // Derived vouchers (BV/SV from a Trade, FV from a revaluation) are not
-  // line-editable here — they're projections of an upstream record. Show
-  // a read-only notice with a deep link to the source editor instead.
+  // Derived vouchers are projections of an upstream record, so their raw
+  // debit/credit lines aren't edited here.
+  //   • BV/SV (from a Trade) → embed the TRADE editor: saving re-posts this
+  //     voucher AND recomputes the portfolio (live replay of Trade) in one tx.
+  //   • FV (from a revaluation) → read-only notice + link to Portfolio.
   const derived = derivedVoucherKind(head.voucherNo, head.txnType);
-  if (derived) {
-    const trade =
-      derived === "trade"
-        ? await prisma.trade.findFirst({ where: { journalBatchId: batchId }, select: { id: true } })
-        : null;
-    const sourceHref =
-      derived === "trade" ? (trade ? `/trades/${trade.id}/edit` : "/trades") : "/portfolio";
-    const sourceLabel = derived === "trade" ? "Edit the trade" : "Portfolio → Revalue to market";
-    const why =
-      derived === "trade"
-        ? "This voucher is auto-posted from a trade. Edit the trade and its voucher re-posts automatically — keeping the trade ledger, the GL, and the portfolio in lockstep."
-        : "This voucher is posted by the fair-value revaluation. Re-run Revalue to market for its date to change it.";
+  if (derived === "trade") {
+    const trade = await prisma.trade.findFirst({ where: { journalBatchId: batchId } });
+    return (
+      <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
+        <div className="mx-auto max-w-2xl">
+          <div className="text-xs uppercase tracking-widest text-zinc-500">
+            <Link href="/day-book" className="hover:text-zinc-700 dark:hover:text-zinc-300">← Day book</Link>
+            <span className="mx-1.5 text-zinc-400">/</span>
+            <Link href={`/journals/voucher/${batchId}`} className="hover:text-zinc-700 dark:hover:text-zinc-300">
+              {head.voucherNo ?? "voucher"}
+            </Link>
+            <span className="mx-1.5 text-zinc-400">/</span>
+            <span className="text-zinc-700 dark:text-zinc-300">edit</span>
+          </div>
+          <h1 className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
+            Edit voucher <span className="font-mono">{head.voucherNo ?? "—"}</span>
+          </h1>
+          {trade ? (
+            <>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                This is a trade voucher — edit the trade below. Saving re-posts this voucher
+                <strong> and updates the portfolio</strong> (and re-computes the cost basis +
+                sell vouchers of every later trade on <span className="font-mono">{trade.instrumentCode}</span>), all together.
+              </p>
+              {sp.err && <ErrorBanner err={sp.err} msg={sp.msg} />}
+              <TradeEditor trade={trade} returnTo="/day-book" submitLabel="Save — updates portfolio + voucher" />
+            </>
+          ) : (
+            <p className="mt-2 text-sm text-red-700 dark:text-red-300">
+              Couldn&apos;t find the trade behind this voucher. Open it from{" "}
+              <Link href="/trades" className="underline">Trades</Link>.
+            </p>
+          )}
+        </div>
+      </main>
+    );
+  }
+  if (derived === "fva") {
     return (
       <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
         <div className="mx-auto max-w-3xl">
@@ -78,12 +107,14 @@ export default async function EditJournalPage({
           <h1 className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
             Voucher <span className="font-mono">{head.voucherNo ?? "—"}</span> isn&apos;t edited here
           </h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{why}</p>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            This voucher is posted by the fair-value revaluation. Re-run Revalue to market for its date to change it.
+          </p>
           <Link
-            href={sourceHref}
+            href="/portfolio"
             className="mt-6 inline-block rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
           >
-            {sourceLabel} →
+            Portfolio → Revalue to market →
           </Link>
         </div>
       </main>

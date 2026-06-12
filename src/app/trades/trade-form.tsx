@@ -36,6 +36,7 @@ export function TradeForm({
   initial,
   submitLabel,
   hiddenId,
+  returnTo,
 }: {
   action: (formData: FormData) => Promise<void>;
   fiscalYears: { id: string; label: string }[];
@@ -45,6 +46,7 @@ export function TradeForm({
   initial: TradeFormInitial;
   submitLabel: string;
   hiddenId?: string;
+  returnTo?: string;
 }) {
   // When editing, the row's settlement account may be a legacy value not
   // present in the banks/brokers option lists (e.g. an opening-balance or
@@ -59,6 +61,7 @@ export function TradeForm({
   return (
     <form action={action} className="mt-8 space-y-4">
       {hiddenId && <input type="hidden" name="id" value={hiddenId} />}
+      {returnTo && <input type="hidden" name="returnTo" value={returnTo} />}
       <div className="grid grid-cols-2 gap-3">
         <Field label="Trade date" name="tradeDate" type="date" required defaultValue={initial.tradeDate} />
         <SelectField label="Fiscal year" name="fiscalYearId" required defaultValue={initial.fiscalYearId}>

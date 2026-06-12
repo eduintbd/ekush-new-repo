@@ -204,6 +204,10 @@ export async function createTrade(formData: FormData): Promise<void> {
 export async function updateTrade(formData: FormData): Promise<void> {
   const profile = await requireRole(["admin", "checker", "accountant"]);
   const id = String(formData.get("id") ?? "");
+  // Optional internal return path (e.g. the day book, when edited from a
+  // voucher). Whitelist to a leading "/<known section>" to avoid open redirect.
+  const returnToRaw = String(formData.get("returnTo") ?? "");
+  const returnTo = /^\/(day-book|journals|trades|trial-balance|portfolio)\b/.test(returnToRaw) ? returnToRaw : "";
   const editPath = id ? `/trades/${id}/edit` : TRADE_LIST_PATH;
   if (!canEdit(profile)) backWithError(editPath, "Insufficient role");
   if (!id) backWithError(TRADE_LIST_PATH, "Missing trade id");
@@ -299,7 +303,8 @@ export async function updateTrade(formData: FormData): Promise<void> {
   revalidatePath("/day-book");
   revalidatePath("/trial-balance");
   revalidatePath("/portfolio");
-  redirect(`/trades?ok=${encodeURIComponent(`Trade updated · ${data.side} ${data.instrumentCode}`)}`);
+  const okMsg = encodeURIComponent(`Trade updated · ${data.side} ${data.instrumentCode}`);
+  redirect(returnTo ? `${returnTo}?ok=${okMsg}` : `/trades?ok=${okMsg}`);
 }
 
 /**

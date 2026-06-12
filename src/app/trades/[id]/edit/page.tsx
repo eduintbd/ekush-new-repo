@@ -8,14 +8,11 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { updateTrade } from "@/app/trades/actions";
-import { TradeForm } from "@/app/trades/trade-form";
+import { TradeEditor } from "@/app/trades/trade-editor";
 
 type Search = { error?: string };
 
 export const metadata = { title: "Edit trade — Staff portal" };
-
-const numStr = (v: { toString(): string }) => String(Number(v.toString()));
 
 export default async function EditTradePage({
   params,
@@ -37,13 +34,6 @@ export default async function EditTradePage({
   if (trade.fiscalYear.isClosed) {
     redirect("/trades?error=Trade+is+in+a+closed+fiscal+year");
   }
-
-  const [fiscalYears, instruments, banks, brokers] = await Promise.all([
-    prisma.fiscalYear.findMany({ where: { isClosed: false }, orderBy: { startsOn: "desc" } }).catch(() => []),
-    prisma.instrument.findMany({ where: { isActive: true }, orderBy: { code: "asc" } }).catch(() => []),
-    prisma.bankAccount.findMany({ where: { isActive: true }, orderBy: { accountName: "asc" } }).catch(() => []),
-    prisma.broker.findMany({ where: { isActive: true }, orderBy: { name: "asc" } }).catch(() => []),
-  ]);
 
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
@@ -77,33 +67,7 @@ export default async function EditTradePage({
           </div>
         )}
 
-        <TradeForm
-          action={updateTrade}
-          hiddenId={trade.id}
-          fiscalYears={fiscalYears.map((y) => ({ id: y.id, label: y.label }))}
-          instruments={instruments.map((i) => ({ code: i.code, name: i.name }))}
-          banks={banks.map((b) => ({ id: b.id, accountName: b.accountName, accountType: b.accountType }))}
-          brokers={brokers.map((b) => ({
-            code: b.code,
-            name: b.name,
-            brokerBoAccount: b.brokerBoAccount,
-            marginLoanAccount: b.marginLoanAccount,
-            accountNumber: b.accountNumber,
-          }))}
-          initial={{
-            tradeDate: trade.tradeDate.toISOString().slice(0, 10),
-            fiscalYearId: trade.fiscalYearId,
-            side: trade.side as "BUY" | "SELL",
-            brokerCode: trade.brokerCode ?? "",
-            instrumentCode: trade.instrumentCode,
-            bankAccount: trade.bankAccount,
-            quantity: numStr(trade.quantity),
-            rate: numStr(trade.rate),
-            commission: numStr(trade.commission),
-            remarks: trade.remarks ?? "",
-          }}
-          submitLabel="Save changes"
-        />
+        <TradeEditor trade={trade} submitLabel="Save changes" />
       </div>
     </main>
   );
