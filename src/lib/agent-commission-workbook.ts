@@ -261,6 +261,24 @@ function buildSummarySheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
   totRow.font = { bold: true };
   totRow.border = { top: { style: "thin" } };
 
+  // Watermark upfront summary (the live upfront model) — per agent, per fund.
+  if (p.upfrontWatermarks.length > 0) {
+    s.addRow({});
+    const wmHead = s.addRow({ inv: "UPFRONT WATERMARK (per fund)" });
+    wmHead.font = { bold: true };
+    s.addRow({ inv: "Fund", inflow: "Net principal now", net: "Watermark (peak)", initU: "Upfront %", everyU: "Pending new money", tot: "Pending upfront" });
+    for (const w of p.upfrontWatermarks) {
+      s.addRow({
+        inv: w.fundCode,
+        inflow: Math.round(w.currentNetPrincipal * 100) / 100,
+        net: Math.round(Math.max(w.storedWatermark, w.peak) * 100) / 100,
+        initU: `${(w.upfrontPct * 100).toFixed(4)}%`,
+        everyU: Math.round(w.pendingIncrement * 100) / 100,
+        tot: Math.round(w.pendingUpfront * 100) / 100,
+      });
+    }
+  }
+
   s.spliceRows(
     1,
     0,
@@ -270,12 +288,12 @@ function buildSummarySheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
     [
       `Rate rule: LATEST effective term per category applied to ALL transactions (older term rows treated as superseded).`,
     ],
-    [`Two upfront calculations shown for verification:`],
+    [`Upfront commission: per-agent, per-fund HIGH-WATER-MARK (see the Upfront Watermark block below).`],
     [
-      `  • Per-spec upfront (initial only) — what the cron commission engine computes today: upfront × initial sourcing gross only.`,
+      `  • watermark = running peak of net invested principal (Σ BUY−SELL cash) under the agent in the fund; it never falls when clients redeem.`,
     ],
     [
-      `  • Per-inflow upfront (every BUY) — practical interpretation: every BUY (including SIP installments) earns upfront × amount.`,
+      `  • upfront = max(0, new peak − stored watermark) × upfront_pct, evaluated monthly. The Initial/Per-inflow columns below are legacy per-investor references only.`,
     ],
     [
       `Trail commission: computed from public.nav_records (daily NAV snapshots per fund). Per period (monthly or quarterly, per the term's Trail frequency):`,

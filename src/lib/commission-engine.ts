@@ -69,7 +69,12 @@ function parseDate(s: string): Date {
 }
 
 // ─── 8.1 Upfront ─────────────────────────────────────────────────
+// DEPRECATED: upfront is now the per-(agent,fund) high-water-mark model in
+// src/lib/upfront-watermark.ts (+ /api/cron/monthly-upfront). This
+// per-investor-at-sourcing calc is retained for reference/history only and
+// has no live callers.
 
+/** @deprecated Superseded by the watermark upfront model (upfront-watermark.ts). */
 export function computeUpfront(
   inv: EkushWebInvestor,
   terms: AgentTermSnapshot[],
@@ -174,6 +179,8 @@ export function computeQuarterlyTrail(
 // If any units redeemed within `clawbackMonths` of sourced_on, claw back
 // `clawbackPct` of the upfront paid on the redeemed proportion.
 
+/** @deprecated N/A under the watermark upfront model — the watermark never
+ *  falls, so paid upfront is retained on redemption. No live callers. */
 export function computeClawbacks(
   inv: EkushWebInvestor,
   terms: AgentTermSnapshot[],

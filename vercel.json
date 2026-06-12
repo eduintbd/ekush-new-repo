@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/monthly-trail",
       "schedule": "0 3 1 * *"
+    },
+    {
+      "path": "/api/cron/monthly-upfront",
+      "schedule": "0 4 1 * *"
     }
   ]
 }

@@ -693,11 +693,12 @@ model SellingAgent {
   updatedAt  DateTime    @updatedAt @map("updated_at")
 
   profile        Profile?            @relation("AgentProfile", fields: [userId], references: [id], onDelete: SetNull)
-  terms          AgentTerm[]
-  investors      AgentInvestor[]
-  commissionRuns CommissionRun[]
-  accruals       CommissionAccrual[]
-  journals       Journal[]
+  terms             AgentTerm[]
+  investors         AgentInvestor[]
+  commissionRuns    CommissionRun[]
+  accruals          CommissionAccrual[]
+  journals          Journal[]
+  upfrontWatermarks AgentUpfrontWatermark[]
 
   @@map("selling_agents")
   @@schema("xsystem")
@@ -767,6 +768,26 @@ model NavSnapshot {
   @@schema("xsystem")
 }
 
+// Per-(agent, fund) high-water-mark for upfront commission. Upfront is
+// paid only on the increment of the agent's net invested principal
+// (Σ BUY−SELL cash) above `watermark`; the watermark ratchets up and never
+// falls when clients redeem. `throughDate` = last evaluated period end.
+model AgentUpfrontWatermark {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId     String   @map("agent_id") @db.Uuid
+  fundCode    String   @map("fund_code")
+  watermark   Decimal  @default(0) @db.Decimal(18, 2)
+  throughDate DateTime @map("through_date") @db.Date
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, fundCode])
+  @@map("agent_upfront_watermarks")
+  @@schema("xsystem")
+}
+
 enum CommissionType {
   upfront
   trail
@@ -788,6 +809,9 @@ model CommissionRun {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   agentId         String           @map("agent_id") @db.Uuid
   agentInvestorId String?          @map("agent_investor_id") @db.Uuid
+  /// Set on agent-level watermark upfront rows (agentInvestorId is null
+  /// there). Null on per-investor trail/clawback rows.
+  fundCode        String?          @map("fund_code")
   type            CommissionType
   periodStart     DateTime?        @map("period_start") @db.Date
   periodEnd       DateTime?        @map("period_end") @db.Date

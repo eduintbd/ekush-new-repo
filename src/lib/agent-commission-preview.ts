@@ -10,6 +10,22 @@
 import type { PrismaClient } from "@/generated/prisma";
 import { categoryForFund, type FundCode } from "@/lib/ekush-web/types";
 import { periodsPerYear, type TrailFrequency } from "@/lib/commission-engine";
+import { computeWatermarkUpfront } from "@/lib/upfront-watermark";
+
+export type UpfrontWatermarkView = {
+  fundCode: string;
+  upfrontPct: number;
+  /** Watermark already locked in (cumulative new money commissioned). */
+  storedWatermark: number;
+  /** All-time peak of net principal reached so far. */
+  peak: number;
+  /** Net principal right now (after redemptions). */
+  currentNetPrincipal: number;
+  /** New money above the stored watermark, not yet posted. */
+  pendingIncrement: number;
+  /** pendingIncrement × upfrontPct. */
+  pendingUpfront: number;
+};
 
 export type Term = {
   fundCategory: "equity" | "fixed_income";
@@ -100,11 +116,17 @@ export type PreviewResult = {
   txns: Tx[];
   buckets: Bucket[];
   trailRows: TrailRow[];
+  /** Per-fund high-water-mark upfront state (the live upfront model). */
+  upfrontWatermarks: UpfrontWatermarkView[];
   totals: {
     inflow: number;
     outflow: number;
     initialUpfront: number;
     perInflowUpfront: number;
+    /** Watermark upfront not yet posted (Σ pendingUpfront). */
+    pendingUpfront: number;
+    /** Upfront already posted to CommissionRun (watermark + legacy). */
+    postedUpfront: number;
     trail: number;
     totalPayable: number;
   };
@@ -199,11 +221,14 @@ export async function computeAgentCommissionPreview(
       txns: [],
       buckets: [],
       trailRows: [],
+      upfrontWatermarks: [],
       totals: {
         inflow: 0,
         outflow: 0,
         initialUpfront: 0,
         perInflowUpfront: 0,
+        pendingUpfront: 0,
+        postedUpfront: 0,
         trail: 0,
         totalPayable: 0,
       },
@@ -451,10 +476,45 @@ export async function computeAgentCommissionPreview(
       initialUpfront: acc.initialUpfront + b.initialUpfront,
       perInflowUpfront: acc.perInflowUpfront + b.perInflowUpfront,
       trail: acc.trail + b.trailTotal,
-      totalPayable: acc.totalPayable + b.perInflowUpfront + b.trailTotal,
     }),
-    { inflow: 0, outflow: 0, initialUpfront: 0, perInflowUpfront: 0, trail: 0, totalPayable: 0 },
+    { inflow: 0, outflow: 0, initialUpfront: 0, perInflowUpfront: 0, trail: 0 },
   );
+
+  // ── Watermark upfront (the live upfront model) ──────────────────
+  // Net invested principal (Σ BUY−SELL cash) per fund vs the stored
+  // per-(agent,fund) watermark → pending new-money increment.
+  const wmRows = await prisma.agentUpfrontWatermark.findMany({ where: { agentId } });
+  const wmByFund = new Map(wmRows.map((w) => [w.fundCode, Number(w.watermark)]));
+  const txByFund = new Map<string, { date: Date; direction: "BUY" | "SELL"; amount: number }[]>();
+  for (const t of txns) {
+    const arr = txByFund.get(t.fundCode) ?? [];
+    arr.push({ date: t.date, direction: t.direction, amount: t.amount });
+    txByFund.set(t.fundCode, arr);
+  }
+  const upfrontWatermarks: UpfrontWatermarkView[] = [];
+  let pendingUpfront = 0;
+  for (const [fundCode, ftx] of txByFund) {
+    const term = termFor(termsActive, categoryForFund(fundCode as FundCode));
+    const pct = term?.upfrontPct ?? 0;
+    const stored = wmByFund.get(fundCode) ?? 0;
+    const res = computeWatermarkUpfront(ftx, stored, pct);
+    upfrontWatermarks.push({
+      fundCode,
+      upfrontPct: pct,
+      storedWatermark: stored,
+      peak: res.peak,
+      currentNetPrincipal: res.netPrincipal,
+      pendingIncrement: res.increment,
+      pendingUpfront: res.upfront,
+    });
+    pendingUpfront += res.upfront;
+  }
+  upfrontWatermarks.sort((a, b) => a.fundCode.localeCompare(b.fundCode));
+  const postedAgg = await prisma.commissionRun.aggregate({
+    where: { agentId, type: "upfront" },
+    _sum: { amount: true },
+  });
+  const postedUpfront = Number(postedAgg._sum.amount ?? 0);
 
   return {
     agentCode: agent.code,
@@ -466,13 +526,16 @@ export async function computeAgentCommissionPreview(
     txns,
     buckets: bucketsSorted,
     trailRows: trailRowsAll,
+    upfrontWatermarks,
     totals: {
       inflow: round2(totals.inflow),
       outflow: round2(totals.outflow),
       initialUpfront: round2(totals.initialUpfront),
       perInflowUpfront: round2(totals.perInflowUpfront),
+      pendingUpfront: round2(pendingUpfront),
+      postedUpfront: round2(postedUpfront),
       trail: round2(totals.trail),
-      totalPayable: round2(totals.totalPayable),
+      totalPayable: round2(pendingUpfront + totals.trail),
     },
   };
 }

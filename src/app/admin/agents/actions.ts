@@ -6,6 +6,7 @@ import { Prisma } from "@/generated/prisma";
 import { prisma, withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
 import { computeAgentCommissionPreview } from "@/lib/agent-commission-preview";
+import { runUpfront } from "@/lib/run-upfront";
 
 const NEW_AGENT_PATH = "/admin/agents/new";
 
@@ -321,45 +322,13 @@ export async function postAgentCommissions(formData: FormData): Promise<void> {
 
   const preview = await computeAgentCommissionPreview(prisma, agentId);
   const today = new Date();
-  let createdUpfront = 0;
   let createdTrail = 0;
   let skipped = 0;
 
+  // Upfront is no longer posted here — it's the per-(agent,fund) watermark
+  // model, posted by the monthly cron or the "Post upfront now" button
+  // (postAgentUpfront). This action posts trail only.
   await withActor(me.id, async (tx) => {
-    for (const b of preview.buckets) {
-      if (b.isDirectSubscription) continue;
-      if (b.initialUpfront <= 0) continue;
-      const term = preview.termsActive.find((t) => t.fundCategory === b.category);
-      if (!term) continue;
-      const initialGross = round2BD(
-        // Reconstruct base = initialUpfront / rate so the BS-friendly
-        // base_amount lines up with the rate_applied column.
-        term.upfrontPct > 0 ? b.initialUpfront / term.upfrontPct : 0,
-      );
-      try {
-        await tx.commissionRun.create({
-          data: {
-            agentId,
-            agentInvestorId: b.agentInvestorId,
-            type: "upfront",
-            periodStart: null,
-            periodEnd: b.sourcedOn,
-            baseAmount: initialGross,
-            rateApplied: term.upfrontPct,
-            amount: b.initialUpfront,
-            notes: `Posted from /admin/agents preview on ${today.toISOString().slice(0, 10)}`,
-          },
-        });
-        createdUpfront++;
-      } catch (err) {
-        if (
-          err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === "P2002"
-        ) {
-          skipped++;
-        } else throw err;
-      }
-    }
     for (const r of preview.trailRows) {
       if (r.partial) continue; // wait for quarter close
       try {
@@ -389,7 +358,31 @@ export async function postAgentCommissions(formData: FormData): Promise<void> {
   });
 
   revalidatePath(`/admin/agents/${agentId}`);
-  const msg = `Posted ${createdUpfront} upfront + ${createdTrail} trail row(s)${skipped ? `; ${skipped} skipped as duplicates` : ""}.`;
+  const msg = `Posted ${createdTrail} trail row(s)${skipped ? `; ${skipped} skipped as duplicates` : ""}.`;
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(msg)}`);
+}
+
+/**
+ * Post the watermark upfront for one agent "as of today" — evaluates the
+ * per-(agent,fund) high-water-mark through today, posts an agent-level
+ * upfront CommissionRun on any new-money increment, and ratchets the
+ * watermark. Same engine the monthly cron uses; idempotent (re-clicking
+ * with no new money posts nothing).
+ */
+export async function postAgentUpfront(formData: FormData): Promise<void> {
+  const me = await requireRole(["admin", "checker"]);
+  const agentId = String(formData.get("agentId") ?? "").trim();
+  if (!agentId) return;
+
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const through = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const res = await runUpfront(monthStart, through, through, { agentId });
+
+  revalidatePath(`/admin/agents/${agentId}`);
+  const msg = res.created > 0
+    ? `Posted ${res.created} upfront row(s) · ${res.totalUpfront.toFixed(2)} BDT (watermark ratcheted).`
+    : `No new money above the watermark — nothing to post.`;
   redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(msg)}`);
 }
 

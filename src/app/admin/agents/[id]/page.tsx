@@ -12,6 +12,7 @@ import {
   deleteAgentTerm,
   linkInvestorToAgent,
   postAgentCommissions,
+  postAgentUpfront,
   reinstateAgent,
   suspendAgent,
   unlinkInvestor,
@@ -785,13 +786,22 @@ function MethodologyPanel() {
 
       <div className="mt-4 space-y-4 text-sm">
         <Method
-          title="① Upfront commission — paid once at investor sourcing"
-          formula="amount = initial_units × unit_price_at_sourcing × upfront_pct"
-          example="Investor subscribes 10,000 units at BDT 10.50 in EFUF (equity). Term in effect: upfront 0.20%. Upfront = 10,000 × 10.50 × 0.0020 = BDT 210.00"
+          title="① Upfront commission — per-agent high-water-mark (per fund)"
+          formula={
+            "net_principal = Σ over the agent's investors in the fund of (BUY − SELL) cash\n" +
+            "watermark = running peak of net_principal (never falls when clients redeem)\n" +
+            "upfront = max(0, new_peak − stored_watermark) × upfront_pct"
+          }
+          example={
+            "Agent BR0000, EGF, upfront 0.10%. Day1 net 330,000 (peak) → upfront 0.10% × 330,000 = 330; watermark 330,000. " +
+            "Day2 clients redeem, net 180,000 → below peak → 0. Day3 net 310,000 → still below → 0. " +
+            "Day4 new purchases lift net to 450,000 (new peak) → upfront on 450,000 − 330,000 = 120,000 × 0.10% = 120; watermark → 450,000."
+          }
           notes={[
-            "Computed at sourcing time (`sourced_on`). The agent term in effect on that date is locked in.",
+            "Per agent, per fund. The watermark ratchets up only; redemptions/NAV moves never reduce it and never earn upfront — only net-new principal above the prior peak does.",
             "Skipped if `is_direct_subscription = true` (clause 6.5 — no agent commission on direct subscriptions).",
-            "Posted as a single CommissionRun with type=upfront.",
+            "Evaluated monthly by `/api/cron/monthly-upfront` (1st of month); admin can post early with 'Post upfront now'. Posted as an agent-level CommissionRun (type=upfront, fund_code set, agent_investor_id null).",
+            "Month-end snapshot: a peak that comes and goes within the month isn't paid; a peak that persists to month-end is.",
           ]}
         />
 
@@ -913,24 +923,58 @@ function CommissionPreviewPanel({
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Stat label="Total inflow" value={formatBdt(preview.totals.inflow)} muted />
         <Stat
-          label="Upfront (per-spec)"
-          value={formatBdt(preview.totals.initialUpfront)}
+          label="Upfront posted"
+          value={formatBdt(preview.totals.postedUpfront)}
           muted
-          hint="initial sourcing only — what the engine writes"
+          hint="watermark upfront already in CommissionRun"
         />
         <Stat
-          label="Upfront (every BUY)"
-          value={formatBdt(preview.totals.perInflowUpfront)}
-          hint="practical: every BUY incl. SIP"
+          label="Upfront pending"
+          value={formatBdt(preview.totals.pendingUpfront)}
+          hint="new money above the watermark, not yet posted"
         />
-        <Stat label="Trail (quarters to date)" value={formatBdt(preview.totals.trail)} />
+        <Stat label="Trail (to date)" value={formatBdt(preview.totals.trail)} />
         <Stat
           label="Total payable"
           value={formatBdt(preview.totals.totalPayable)}
           emphasis
-          hint="per-inflow upfront + trail"
+          hint="pending watermark upfront + trail"
         />
       </div>
+
+      {/* Watermark upfront panel (the live upfront model) */}
+      {preview.upfrontWatermarks.length > 0 && (
+        <div className="mt-4 overflow-x-auto rounded-md border border-zinc-200 dark:border-zinc-800">
+          <table className="min-w-full divide-y divide-zinc-200 text-xs dark:divide-zinc-800">
+            <caption className="px-3 py-2 text-left text-[11px] text-zinc-500">
+              Upfront = high-water-mark per fund. Paid only on net invested principal (Σ BUY−SELL) rising
+              above the agent&apos;s prior peak; the peak never falls when clients redeem.
+            </caption>
+            <thead className="bg-zinc-50 text-left text-[10px] uppercase tracking-wider text-zinc-500 dark:bg-zinc-950">
+              <tr>
+                <th className="py-1.5 pr-3 pl-3">Fund</th>
+                <th className="py-1.5 pr-3 text-right">Net principal now</th>
+                <th className="py-1.5 pr-3 text-right">Watermark (peak)</th>
+                <th className="py-1.5 pr-3 text-right">Upfront %</th>
+                <th className="py-1.5 pr-3 text-right">Pending new money</th>
+                <th className="py-1.5 pr-3 text-right">Pending upfront</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {preview.upfrontWatermarks.map((w) => (
+                <tr key={w.fundCode}>
+                  <td className="py-1.5 pr-3 pl-3 font-mono">{w.fundCode}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{formatBdt(w.currentNetPrincipal)}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{formatBdt(Math.max(w.storedWatermark, w.peak))}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{(w.upfrontPct * 100).toFixed(4)}%</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{w.pendingIncrement > 0 ? formatBdt(w.pendingIncrement) : "—"}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums font-medium">{w.pendingUpfront > 0 ? formatBdt(w.pendingUpfront) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Action buttons */}
       <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -941,15 +985,28 @@ function CommissionPreviewPanel({
           Download Excel workbook
         </a>
         <form
-          action={postAgentCommissions}
-          data-confirm={`Post ${countPostable(preview)} commission row(s) to CommissionRun? Idempotent — duplicates are skipped. Partial quarters (cut off at today) are not posted; the cron will pick them up at quarter close.`}
+          action={postAgentUpfront}
+          data-confirm={`Post the watermark upfront as of today (${formatBdt(preview.totals.pendingUpfront)} pending)? Idempotent — re-clicking with no new money posts nothing.`}
         >
           <input type="hidden" name="agentId" value={agentId} />
           <button
             type="submit"
-            className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+            disabled={preview.totals.pendingUpfront <= 0}
+            className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
           >
-            Post these to CommissionRun
+            Post upfront now
+          </button>
+        </form>
+        <form
+          action={postAgentCommissions}
+          data-confirm={`Post ${countPostable(preview)} trail row(s) to CommissionRun? Idempotent — duplicates are skipped. Partial periods (cut off at today) are not posted; the cron picks them up at period close.`}
+        >
+          <input type="hidden" name="agentId" value={agentId} />
+          <button
+            type="submit"
+            className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            Post trail to CommissionRun
           </button>
         </form>
         {partialCount > 0 && (
@@ -1103,11 +1160,8 @@ function CommissionPreviewPanel({
 function countPostable(
   preview: Awaited<ReturnType<typeof computeAgentCommissionPreview>>,
 ): number {
-  const upfront = preview.buckets.filter(
-    (b) => !b.isDirectSubscription && b.initialUpfront > 0,
-  ).length;
-  const trail = preview.trailRows.filter((r) => !r.partial).length;
-  return upfront + trail;
+  // Trail only — upfront is posted via the watermark path (postAgentUpfront).
+  return preview.trailRows.filter((r) => !r.partial).length;
 }
 
 function Stat({
