@@ -6,7 +6,8 @@
 // in one click. Download Excel (POSTs findings to the export route) or
 // Print → Save as PDF (uses the app's print CSS).
 
-import { useActionState, useState } from "react";
+import { useState } from "react";
+import { useFormState, useFormStatus } from "react-dom";
 import Link from "next/link";
 import { reconcileFlow, type ReconcileState } from "./actions";
 import type { Finding, FindingCategory } from "@/lib/reconcile-ledger";
@@ -30,18 +31,33 @@ const CAT_TONE: Record<FindingCategory, string> = {
 };
 
 export function ReconcileClient({ fiscalYears, defaultFyId }: { fiscalYears: { id: string; label: string }[]; defaultFyId: string }) {
-  const [state, formAction, pending] = useActionState<ReconcileState, FormData>(reconcileFlow, { phase: "idle" });
+  // React 18.3 / react-dom: useFormState gives [state, formAction]; the
+  // per-form pending flag comes from useFormStatus inside <SubmitButton>.
+  // (React 19's useActionState rolls both into one hook — not available here.)
+  const [state, formAction] = useFormState<ReconcileState, FormData>(reconcileFlow, { phase: "idle" });
 
   return (
     <div className="mt-8 space-y-6">
-      {(state.phase === "idle" || state.phase === "error") && <UploadForm formAction={formAction} pending={pending} error={state.phase === "error" ? state.message : undefined} />}
-      {state.phase === "review" && <ReviewStep state={state} formAction={formAction} pending={pending} fiscalYears={fiscalYears} defaultFyId={defaultFyId} />}
+      {(state.phase === "idle" || state.phase === "error") && <UploadForm formAction={formAction} error={state.phase === "error" ? state.message : undefined} />}
+      {state.phase === "review" && <ReviewStep state={state} formAction={formAction} fiscalYears={fiscalYears} defaultFyId={defaultFyId} />}
       {state.phase === "report" && <ReportStep state={state} formAction={formAction} />}
     </div>
   );
 }
 
-function UploadForm({ formAction, pending, error }: { formAction: (fd: FormData) => void; pending: boolean; error?: string }) {
+// Submit button that reads the enclosing <form>'s pending state. Must be
+// rendered inside the <form> it submits — useFormStatus only sees the
+// nearest parent form. Replaces the React-19 useActionState `pending`.
+function SubmitButton({ idle, busy, className }: { idle: React.ReactNode; busy: string; className: string }) {
+  const { pending } = useFormStatus();
+  return (
+    <button disabled={pending} className={className}>
+      {pending ? busy : idle}
+    </button>
+  );
+}
+
+function UploadForm({ formAction, error }: { formAction: (fd: FormData) => void; error?: string }) {
   return (
     <form action={formAction} className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
       <input type="hidden" name="phase" value="parse" />
@@ -58,9 +74,11 @@ function UploadForm({ formAction, pending, error }: { formAction: (fd: FormData)
         accept=".pdf,.csv"
         className="mt-4 block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-zinc-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white dark:file:bg-zinc-100 dark:file:text-zinc-900"
       />
-      <button disabled={pending} className="mt-4 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900">
-        {pending ? "Parsing…" : "Parse statements"}
-      </button>
+      <SubmitButton
+        idle="Parse statements"
+        busy="Parsing…"
+        className="mt-4 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+      />
     </form>
   );
 }
@@ -68,13 +86,11 @@ function UploadForm({ formAction, pending, error }: { formAction: (fd: FormData)
 function ReviewStep({
   state,
   formAction,
-  pending,
   fiscalYears,
   defaultFyId,
 }: {
   state: Extract<ReconcileState, { phase: "review" }>;
   formAction: (fd: FormData) => void;
-  pending: boolean;
   fiscalYears: { id: string; label: string }[];
   defaultFyId: string;
 }) {
@@ -153,9 +169,11 @@ function ReviewStep({
             ))}
           </select>
         </label>
-        <button disabled={pending} className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900">
-          {pending ? "Reconciling…" : `Reconcile ${keptRows.length} trades →`}
-        </button>
+        <SubmitButton
+          idle={`Reconcile ${keptRows.length} trades →`}
+          busy="Reconciling…"
+          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+        />
       </form>
     </div>
   );
