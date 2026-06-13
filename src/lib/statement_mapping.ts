@@ -451,7 +451,11 @@ export function buildIncomeStatement(
   // the two sources of truth into one — at the cost that an unposted
   // FY shows tax = ৳0 on the IS until the admin clicks Post to Ledger.
   // That's the correct accrual semantic.
-  const currentTaxProvision = netD(tb, "Income Tax Expense");
+  // Read SIGNED (net-debit − net-credit), not net-debit-only. A tax
+  // expense that lands net-CREDIT (e.g. a tax benefit, or a provision
+  // re-post tangle) must still flow to the IS — otherwise it silently
+  // drops and the Balance Sheet goes out by exactly that amount.
+  const currentTaxProvision = netD(tb, "Income Tax Expense") - netC(tb, "Income Tax Expense");
   const taxExpense: StatementLine[] = [
     { label: "Current Tax Expense", amount: currentTaxProvision, sources: ["Income Tax Expense"] },
   ];
@@ -464,7 +468,7 @@ export function buildIncomeStatement(
   // Deferred tax — same change as current-tax above. Read from the
   // journaled "Deferred Tax Expense" account (sl 133) rather than
   // computing inline. Net Dr balance = OCI deferred-tax expense.
-  const deferredTax = netD(tb, "Deferred Tax Expense");
+  const deferredTax = netD(tb, "Deferred Tax Expense") - netC(tb, "Deferred Tax Expense");
   const oci: StatementLine[] = [
     {
       label: "Unrealised Loss on Investment in Stocks",
