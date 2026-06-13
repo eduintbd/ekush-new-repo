@@ -9,6 +9,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { formatBdt } from "@/lib/format";
 import { getStatements, type StatementOverrides } from "@/lib/statements";
+import { diagnoseStatements, type StatementDiagnostics } from "@/lib/statement-diagnostics";
 import { requireStaff } from "@/lib/auth";
 import type { BalanceSheet, StatementLine } from "@/lib/statement_mapping";
 import type { TrialBalanceRow } from "@/lib/trial-balance";
@@ -112,6 +113,13 @@ export default async function BalanceSheetPage({
     compareStatements = null;
   }
 
+  // When the BS doesn't balance, run the reconciliation so we can show WHY
+  // (no ledger-by-ledger hunt).
+  let diag: StatementDiagnostics | null = null;
+  if (statements && Math.abs(statements.balanceSheet.totalAssets - statements.balanceSheet.totalEquityAndLiabilities) >= 1) {
+    diag = await diagnoseStatements(selectedId, overrides, currentAsOf).catch(() => null);
+  }
+
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
       <div className="mx-auto max-w-4xl px-6 py-10">
@@ -142,6 +150,7 @@ export default async function BalanceSheetPage({
         {statements ? (
           <>
             <ExternalInputsBanner overrides={overrides} />
+            {diag && <ImbalancePanel diag={diag} />}
             <Report
               bs={statements.balanceSheet}
               tbRows={statements.trialBalance.rows}
@@ -569,5 +578,87 @@ function NoFiscalYears() {
         </p>
       </div>
     </main>
+  );
+}
+
+// ─── Imbalance diagnostic panel (shown only when the BS doesn't tie) ──
+function ImbalancePanel({ diag }: { diag: StatementDiagnostics }) {
+  const money = (n: number) => formatBdt(n);
+  return (
+    <div className="no-print mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="font-semibold text-amber-900 dark:text-amber-100">
+          Why it doesn&apos;t balance — out by {money(diag.bsDiff)} (Assets − Equity &amp; Liabilities)
+        </h2>
+        <span className="text-[11px] text-amber-800 dark:text-amber-200">
+          Trial balance {diag.tbBalanced ? "balances ✓" : `is OFF by ${money(diag.tbDiff)} ✗`}
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-amber-900/90 dark:text-amber-100/90">{diag.verdict}</p>
+
+      {diag.signAnomalies.length > 0 && (
+        <DiagSection title="Accounts on the wrong side of their normal balance (a net-credit expense / net-debit income is usually dropped from the statements — fix these first)">
+          {diag.signAnomalies.slice(0, 12).map((a) => (
+            <DiagRow key={a.name} href={`/ledger/${encodeURIComponent(a.name)}`} label={`${a.name} · normal ${a.normalBalance}`} amount={`net-${a.normalBalance === "DEBIT" ? "Cr" : "Dr"} ${money(a.wrongSide)}`} />
+          ))}
+        </DiagSection>
+      )}
+
+      {diag.unmappedAccounts.length > 0 && (
+        <DiagSection title="Accounts with a balance but on NO statement line (map them in statement_mapping.ts or fix the name)">
+          {diag.unmappedAccounts.map((a) => (
+            <DiagRow key={a.name} href={`/ledger/${encodeURIComponent(a.name)}`} label={a.name} amount={money(a.signed)} />
+          ))}
+        </DiagSection>
+      )}
+
+      {diag.unclassifiedAccounts.length > 0 && (
+        <DiagSection title="Accounts with a balance but no AccountGroup (classify them — Asset/Liability/Equity/Income/Expense)">
+          {diag.unclassifiedAccounts.map((a) => (
+            <DiagRow key={a.name} href={`/ledger/${encodeURIComponent(a.name)}`} label={a.name} amount={money(a.signed)} />
+          ))}
+        </DiagSection>
+      )}
+
+      {diag.unbalancedVouchers.length > 0 && (
+        <DiagSection title="Vouchers that don't individually balance (each Σdebit must equal Σcredit — they net out in the TB but should each balance)">
+          {diag.unbalancedVouchers.map((v) => (
+            <DiagRow key={v.batchId} href={`/journals/voucher/${v.batchId}`} label={v.voucherNo ?? v.batchId.slice(0, 8)} amount={`Dr ${money(v.debit)} / Cr ${money(v.credit)} · off ${money(v.diff)}`} />
+          ))}
+        </DiagSection>
+      )}
+
+      {diag.externalInputs.length > 0 && (
+        <DiagSection title="Non-journaled accountant inputs applied (no GL backing — verify)">
+          {diag.externalInputs.map((e) => (
+            <DiagRow key={e.label} label={e.label} amount={money(e.amount)} />
+          ))}
+        </DiagSection>
+      )}
+    </div>
+  );
+}
+
+function DiagSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-3">
+      <p className="text-[11px] font-medium uppercase tracking-wider text-amber-800 dark:text-amber-300">{title}</p>
+      <div className="mt-1 divide-y divide-amber-200/60 dark:divide-amber-900/60">{children}</div>
+    </div>
+  );
+}
+
+function DiagRow({ href, label, amount }: { href?: string; label: string; amount: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-1 text-xs">
+      {href ? (
+        <Link href={href} className="font-mono text-amber-900 underline-offset-2 hover:underline dark:text-amber-100">
+          {label}
+        </Link>
+      ) : (
+        <span className="font-mono text-amber-900 dark:text-amber-100">{label}</span>
+      )}
+      <span className="shrink-0 tabular-nums text-amber-900/90 dark:text-amber-100/90">{amount}</span>
+    </div>
   );
 }
