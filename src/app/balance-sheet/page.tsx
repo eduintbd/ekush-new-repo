@@ -13,7 +13,7 @@ import { diagnoseStatements, type StatementDiagnostics } from "@/lib/statement-d
 import { requireStaff } from "@/lib/auth";
 import type { BalanceSheet, StatementLine } from "@/lib/statement_mapping";
 import type { TrialBalanceRow } from "@/lib/trial-balance";
-import { PrintButton } from "@/components/print-button";
+import { PrintButton, PrintSectionButton } from "@/components/print-button";
 
 type Search = {
   fy?: string;
@@ -123,7 +123,7 @@ export default async function BalanceSheetPage({
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
       <div className="mx-auto max-w-4xl px-6 py-10">
-        <div className="flex items-end justify-between gap-4">
+        <div className="diag-print-hide flex items-end justify-between gap-4">
           <div>
             <p className="text-xs font-medium uppercase tracking-widest text-zinc-500">
               Staff portal
@@ -149,25 +149,38 @@ export default async function BalanceSheetPage({
 
         {statements ? (
           <>
-            <ExternalInputsBanner overrides={overrides} />
-            {diag && <ImbalancePanel diag={diag} />}
-            <Report
-              bs={statements.balanceSheet}
-              tbRows={statements.trialBalance.rows}
-              fyLabel={
-                currentAsOf
-                  ? `${statements.fiscalYear.label} (as at ${currentAsOf.toISOString().slice(0, 10)})`
-                  : statements.fiscalYear.label
-              }
-              compareBs={compareStatements?.balanceSheet ?? null}
-              compareLabel={
-                compareStatements
-                  ? compareAsOf
-                    ? `${compareStatements.fiscalYear.label} (as at ${compareAsOf.toISOString().slice(0, 10)})`
-                    : compareStatements.fiscalYear.label
-                  : null
-              }
-            />
+            <div className="diag-print-hide">
+              <ExternalInputsBanner overrides={overrides} />
+            </div>
+            {diag && (
+              <ImbalancePanel
+                diag={diag}
+                fyLabel={
+                  currentAsOf
+                    ? `${statements.fiscalYear.label} · as at ${currentAsOf.toISOString().slice(0, 10)}`
+                    : `${statements.fiscalYear.label} · as at fiscal year end`
+                }
+              />
+            )}
+            <div className="diag-print-hide">
+              <Report
+                bs={statements.balanceSheet}
+                tbRows={statements.trialBalance.rows}
+                fyLabel={
+                  currentAsOf
+                    ? `${statements.fiscalYear.label} (as at ${currentAsOf.toISOString().slice(0, 10)})`
+                    : statements.fiscalYear.label
+                }
+                compareBs={compareStatements?.balanceSheet ?? null}
+                compareLabel={
+                  compareStatements
+                    ? compareAsOf
+                      ? `${compareStatements.fiscalYear.label} (as at ${compareAsOf.toISOString().slice(0, 10)})`
+                      : compareStatements.fiscalYear.label
+                    : null
+                }
+              />
+            </div>
           </>
         ) : (
           <p className="mt-10 text-sm text-zinc-500">
@@ -175,7 +188,7 @@ export default async function BalanceSheetPage({
           </p>
         )}
 
-        <div className="mt-8">
+        <div className="diag-print-hide mt-8">
           <Link href="/dashboard" className="text-sm text-zinc-600 underline dark:text-zinc-400">
             ← Back to dashboard
           </Link>
@@ -582,18 +595,26 @@ function NoFiscalYears() {
 }
 
 // ─── Imbalance diagnostic panel (shown only when the BS doesn't tie) ──
-function ImbalancePanel({ diag }: { diag: StatementDiagnostics }) {
+function ImbalancePanel({ diag, fyLabel }: { diag: StatementDiagnostics; fyLabel?: string }) {
   const money = (n: number) => formatBdt(n);
   return (
-    <div className="no-print mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
+    <div id="diag-panel" className="no-print mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="font-semibold text-amber-900 dark:text-amber-100">
           Why it doesn&apos;t balance — out by {money(diag.bsDiff)} (Assets − Equity &amp; Liabilities)
         </h2>
-        <span className="text-[11px] text-amber-800 dark:text-amber-200">
-          Trial balance {diag.tbBalanced ? "balances ✓" : `is OFF by ${money(diag.tbDiff)} ✗`}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-amber-800 dark:text-amber-200">
+            Trial balance {diag.tbBalanced ? "balances ✓" : `is OFF by ${money(diag.tbDiff)} ✗`}
+          </span>
+          <PrintSectionButton />
+        </div>
       </div>
+      {fyLabel && (
+        <p className="mt-0.5 text-[11px] font-medium uppercase tracking-wide text-amber-800 dark:text-amber-300">
+          Balance Sheet · {fyLabel}
+        </p>
+      )}
       <p className="mt-1 text-xs text-amber-900/90 dark:text-amber-100/90">{diag.verdict}</p>
 
       {diag.signAnomalies.length > 0 && (

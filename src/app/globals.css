@@ -76,6 +76,16 @@ body {
   .print-only {
     display: block !important;
   }
+  /* Dedicated mode: print ONLY the imbalance diagnostic panel.
+   * The "Print this section" button adds body.diag-print, which hides the
+   * rest of the page (.diag-print-hide) and un-hides the panel (it normally
+   * carries .no-print so it stays out of the formal BS PDF). */
+  body.diag-print .diag-print-hide {
+    display: none !important;
+  }
+  body.diag-print #diag-panel {
+    display: block !important;
+  }
   @page {
     margin: 14mm 12mm;
     size: A4;
