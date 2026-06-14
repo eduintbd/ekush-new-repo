@@ -597,6 +597,8 @@ function NoFiscalYears() {
 // ─── Imbalance diagnostic panel (shown only when the BS doesn't tie) ──
 function ImbalancePanel({ diag, fyLabel }: { diag: StatementDiagnostics; fyLabel?: string }) {
   const money = (n: number) => formatBdt(n);
+  const droppedAnoms = diag.signAnomalies.filter((a) => a.dropped);
+  const harmlessAnoms = diag.signAnomalies.filter((a) => !a.dropped);
   return (
     <div id="diag-panel" className="no-print mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -617,12 +619,25 @@ function ImbalancePanel({ diag, fyLabel }: { diag: StatementDiagnostics; fyLabel
       )}
       <p className="mt-1 text-xs text-amber-900/90 dark:text-amber-100/90">{diag.verdict}</p>
 
-      {diag.signAnomalies.length > 0 && (
-        <DiagSection title="Accounts on the wrong side of their normal balance (a net-credit expense / net-debit income is usually dropped from the statements — fix these first)">
-          {diag.signAnomalies.slice(0, 12).map((a) => (
+      {droppedAnoms.length > 0 && (
+        <DiagSection title="Causing the imbalance — dropped from the statements (these sum to the gap; correct the posting or map the account)">
+          {droppedAnoms.map((a) => (
             <DiagRow key={a.name} href={`/ledger/${encodeURIComponent(a.name)}`} label={`${a.name} · normal ${a.normalBalance}`} amount={`net-${a.normalBalance === "DEBIT" ? "Cr" : "Dr"} ${money(a.wrongSide)}`} />
           ))}
         </DiagSection>
+      )}
+
+      {harmlessAnoms.length > 0 && (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-[11px] font-medium uppercase tracking-wider text-amber-800/70 dark:text-amber-300/70">
+            {harmlessAnoms.length} wrong-side account(s) read correctly — ChartOfAccount normalBalance flag is mislabelled (harmless, no BS effect)
+          </summary>
+          <div className="mt-1 divide-y divide-amber-200/60 dark:divide-amber-900/60">
+            {harmlessAnoms.map((a) => (
+              <DiagRow key={a.name} href={`/ledger/${encodeURIComponent(a.name)}`} label={`${a.name} · normal ${a.normalBalance}`} amount={`net-${a.normalBalance === "DEBIT" ? "Cr" : "Dr"} ${money(a.wrongSide)}`} />
+            ))}
+          </div>
+        </details>
       )}
 
       {diag.unmappedAccounts.length > 0 && (

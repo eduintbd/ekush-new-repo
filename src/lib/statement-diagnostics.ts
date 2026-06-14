@@ -18,6 +18,7 @@ import {
   buildBalanceSheet,
   type AccountAggregate,
   type TrialBalance,
+  type ExternalInputs,
 } from "@/lib/statement_mapping";
 
 class RecordingTrialBalance extends Map<string, AccountAggregate> {
@@ -71,7 +72,11 @@ export type StatementDiagnostics = {
    *  reads these via netD()/netC() — which drops the opposite side — so the
    *  `wrongSide` amount silently vanishes from the IS/BS. Prime cause of a
    *  mapping-side imbalance. */
-  signAnomalies: { name: string; normalBalance: string; netDebit: number; netCredit: number; wrongSide: number }[];
+  /** `dropped` = the account's wrong-side balance is NOT reflected in the
+   *  statements (the mapping reads only the opposite side), so it's part of
+   *  the bsDiff. `dropped:false` = read correctly; only the COA normalBalance
+   *  flag is mislabelled (harmless noise). */
+  signAnomalies: { name: string; normalBalance: string; netDebit: number; netCredit: number; wrongSide: number; dropped: boolean }[];
   natureView: NatureView;
   unbalancedVouchers: UnbalancedVoucher[];
   /** Non-journaled accountant inputs currently applied (audit visibility). */
@@ -111,7 +116,37 @@ export async function diagnoseStatements(
   const bsDiff = stmts.balanceSheet.totalAssets - stmts.balanceSheet.totalEquityAndLiabilities;
 
   // Sign anomalies: an account on the opposite side of its normal balance.
-  // The mapping's netD()/netC() drops that side, so the value vanishes.
+  // Not all of these matter — the statement mapping reads many such accounts
+  // correctly (e.g. income/payables via netC, broker BO accounts that flip to
+  // a margin-loan credit). Only the ones the mapping reads ONE-SIDED on the
+  // side they're NOT sitting on are actually DROPPED, and those are the gap.
+  //
+  // Decide it implementation-proof, no hard-coded list: the IS→BS build is
+  // pure once the TB is in hand (statements.ts two-pass). Rebuild bsDiff with
+  // each account removed; if bsDiff doesn't move, that account's current
+  // balance wasn't being reflected → it's dropped.
+  const baseExternal: ExternalInputs = {
+    ...stmts.external,
+    currentPeriodNetProfit: 0,
+    currentPeriodTaxExpense: 0,
+  };
+  const bsDiffFor = (tb: TrialBalance): number => {
+    const is = buildIncomeStatement(tb, baseExternal);
+    const ext: ExternalInputs = {
+      ...baseExternal,
+      currentPeriodNetProfit: is.profitForPeriod,
+      currentPeriodTaxExpense: is.taxExpense.reduce((s, l) => s + l.amount, 0),
+    };
+    const bs = buildBalanceSheet(tb, ext);
+    return bs.totalAssets - bs.totalEquityAndLiabilities;
+  };
+  const baselineDiff = bsDiffFor(stmts.tbMap);
+  const isDropped = (name: string): boolean => {
+    const tb2: TrialBalance = new Map(stmts.tbMap);
+    tb2.delete(name);
+    return Math.abs(bsDiffFor(tb2) - baselineDiff) < TOL;
+  };
+
   const signAnomalies = stmts.trialBalance.rows
     .filter((r) =>
       (r.normalBalance === "DEBIT" && r.netCredit > TOL) ||
@@ -123,8 +158,10 @@ export async function diagnoseStatements(
       netDebit: r.netDebit,
       netCredit: r.netCredit,
       wrongSide: r.normalBalance === "DEBIT" ? r.netCredit : r.netDebit,
+      dropped: isDropped(r.accountName),
     }))
-    .sort((a, b) => b.wrongSide - a.wrongSide);
+    // Dropped (real culprits) first, then by size.
+    .sort((a, b) => Number(b.dropped) - Number(a.dropped) || b.wrongSide - a.wrongSide);
 
   // Nature-based reconciliation (uses AccountGroup.nature, independent of the
   // statement builder's hard-coded map).
@@ -197,10 +234,15 @@ export async function diagnoseStatements(
     if (unmappedAccounts.length) {
       parts.push(`${unmappedAccounts.length} account(s) appear on NO statement line (signed ${unmappedTotalSigned.toFixed(2)}) — map them in statement_mapping.ts or fix the name.`);
     }
-    if (signAnomalies.length) {
+    const dropped = signAnomalies.filter((a) => a.dropped);
+    const harmless = signAnomalies.length - dropped.length;
+    if (dropped.length) {
       parts.push(
-        `${signAnomalies.length} account(s) sit OPPOSITE their normal balance (e.g. ${signAnomalies.slice(0, 3).map((a) => `${a.name} net-${a.normalBalance === "DEBIT" ? "Cr" : "Dr"} ${a.wrongSide.toFixed(0)}`).join("; ")}). A net-credit expense (or net-debit income) usually means a posting error and is often DROPPED by the statements — investigate these first.`,
+        `${dropped.length} account(s) are DROPPED from the statements and make up this gap — each sits opposite its normal balance and the mapping reads only the other side, so the balance vanishes: ${dropped.slice(0, 5).map((a) => `${a.name} net-${a.normalBalance === "DEBIT" ? "Cr" : "Dr"} ${a.wrongSide.toFixed(0)}`).join("; ")}. Fix the posting (or map the account).`,
       );
+    }
+    if (harmless > 0) {
+      parts.push(`(${harmless} other wrong-side account(s) are read correctly — only their ChartOfAccount normalBalance flag is mislabelled; harmless.)`);
     }
     if (unclassifiedAccounts.length) {
       parts.push(`${unclassifiedAccounts.length} account(s) have a balance but no AccountGroup — classify them.`);

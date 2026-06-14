@@ -26,12 +26,20 @@ async function main() {
   console.log(`Nature-based: Assets ${fmt(n.assets)} | Liab ${fmt(n.liabilities)} | Equity ${fmt(n.equity)} | Profit ${fmt(n.profit)} | residual ${fmt(n.residual)}`);
   console.log(`\nVerdict: ${d.verdict}\n`);
 
-  if (d.signAnomalies.length) {
-    console.log(`Accounts on the WRONG side of their normal balance (mapping drops the opposite side):`);
+  const droppedAnoms = d.signAnomalies.filter((a) => a.dropped);
+  const harmlessAnoms = d.signAnomalies.filter((a) => !a.dropped);
+  if (droppedAnoms.length) {
+    console.log(`Accounts DROPPED from the statements (wrong side + mapping reads only the other side — these ARE the gap):`);
     console.log(`  ${"account".padEnd(44)} ${"normal".padStart(7)} ${"net Dr".padStart(15)} ${"net Cr".padStart(15)} ${"wrong-side".padStart(15)}`);
-    for (const a of d.signAnomalies)
+    for (const a of droppedAnoms)
       console.log(`  ${a.name.padEnd(44)} ${a.normalBalance.padStart(7)} ${fmt(a.netDebit).padStart(15)} ${fmt(a.netCredit).padStart(15)} ${fmt(a.wrongSide).padStart(15)}`);
-    console.log(`  wrong-side total: ${fmt(d.signAnomalies.reduce((s, a) => s + a.wrongSide, 0))}\n`);
+    console.log("");
+  }
+  if (harmlessAnoms.length) {
+    console.log(`Wrong-side accounts READ CORRECTLY (only the COA normalBalance flag is mislabelled — harmless):`);
+    for (const a of harmlessAnoms)
+      console.log(`  ${a.name.padEnd(44)} ${a.normalBalance.padStart(7)} net-${a.normalBalance === "DEBIT" ? "Cr" : "Dr"} ${fmt(a.wrongSide)}`);
+    console.log("");
   }
 
   if (d.unclassifiedAccounts.length) {
