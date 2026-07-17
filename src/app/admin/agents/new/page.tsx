@@ -29,8 +29,9 @@ export default async function NewAgentPage({
           Invite selling agent
         </h1>
         <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          Creates a pending agent record. Approve it from the detail page to
-          seed default terms (Equity 0.20%/0.40%/0.35%; Fixed Income
+          Creates a pending agent record. Approving it from the detail page
+          emails the agent a one-time set-password link, creates their login,
+          and seeds default terms (Equity 0.20%/0.40%/0.35%; Fixed Income
           0.20%/0.20%/0.15%).
         </p>
 

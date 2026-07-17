@@ -2,11 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { Prisma } from "@/generated/prisma";
+import { Prisma, UserRole } from "@/generated/prisma";
 import { prisma, withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
 import { computeAgentCommissionPreview } from "@/lib/agent-commission-preview";
 import { runUpfront } from "@/lib/run-upfront";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import {
+  findAuthUserByEmail,
+  mintAndSendAgentInvite,
+  requestBaseUrl,
+} from "@/lib/agent-invite";
 
 const NEW_AGENT_PATH = "/admin/agents/new";
 
@@ -41,37 +47,142 @@ const DEFAULT_TERM_FIXED_INCOME = {
   trailY2PlusPctPa: 0.0015, // 0.15%
 };
 
+/**
+ * Approve a pending agent: provision their Supabase login, email a one-time
+ * set-password link (via the portal SMTP), create the selling_agent Profile,
+ * link it to the agent, and seed default commission terms.
+ *
+ * The email is the whole point of approval per ops — an agent who cannot be
+ * emailed a link cannot sign in, so provisioning runs first and a failure
+ * blocks the approval (nothing half-done). Re-running is safe: terms are only
+ * seeded once, and the invite becomes a fresh recovery link.
+ */
 export async function approveAgent(id: string): Promise<void> {
   const me = await requireRole(["admin", "checker"]);
+  const agent = await prisma.sellingAgent.findUnique({ where: { id } });
+  if (!agent) redirect("/admin/agents?error=Agent+not+found");
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    redirect(`/admin/agents/${id}?error=${encodeURIComponent("SUPABASE_SERVICE_ROLE_KEY is not configured — cannot provision a login.")}`);
+  }
+
+  // Guard: if this email is already a Supabase user with a non-agent Profile
+  // (e.g. a staff member), refuse — approving would send them a reset link and
+  // overwrite their role. Ask for a different email.
+  const existingUser = await findAuthUserByEmail(admin!, agent!.email);
+  if (existingUser) {
+    const existingProfile = await prisma.profile.findUnique({ where: { id: existingUser.id } });
+    if (existingProfile && existingProfile.role !== UserRole.selling_agent) {
+      redirect(
+        `/admin/agents/${id}?error=${encodeURIComponent(`This email already belongs to a ${existingProfile.role} account. Use a different email for the agent.`)}`,
+      );
+    }
+  }
+
+  // Provision the login + email the set-password link.
+  const invite = await mintAndSendAgentInvite(
+    { email: agent!.email, fullName: agent!.fullName, code: agent!.code },
+    await requestBaseUrl(),
+  );
+  if (!invite.ok || !invite.userId) {
+    redirect(`/admin/agents/${id}?error=${encodeURIComponent(`Approval blocked — could not provision the login: ${invite.error ?? "unknown error"}`)}`);
+  }
+
   const today = new Date();
+  const hasTerms = (await prisma.agentTerm.count({ where: { agentId: id } })) > 0;
+
   await withActor(me.id, async (tx) => {
+    // Create/refresh the agent's Profile (role gates /agent/* access) and link.
+    await tx.profile.upsert({
+      where: { id: invite.userId! },
+      create: {
+        id: invite.userId!,
+        email: agent!.email,
+        fullName: agent!.fullName,
+        role: UserRole.selling_agent,
+        isActive: true,
+      },
+      update: { role: UserRole.selling_agent, isActive: true },
+    });
     await tx.sellingAgent.update({
       where: { id },
-      data: { status: "approved", approvedAt: today, approvedBy: me.id },
+      data: { status: "approved", approvedAt: today, approvedBy: me.id, userId: invite.userId! },
     });
-    await tx.agentTerm.create({
-      data: {
-        agentId: id,
-        fundCategory: "equity",
-        ...DEFAULT_TERM_EQUITY,
-        trailFrequency: "monthly",
-        effectiveFrom: today,
-        createdBy: me.id,
-      },
-    });
-    await tx.agentTerm.create({
-      data: {
-        agentId: id,
-        fundCategory: "fixed_income",
-        ...DEFAULT_TERM_FIXED_INCOME,
-        trailFrequency: "monthly",
-        effectiveFrom: today,
-        createdBy: me.id,
-      },
-    });
+    if (!hasTerms) {
+      await tx.agentTerm.create({
+        data: {
+          agentId: id,
+          fundCategory: "equity",
+          ...DEFAULT_TERM_EQUITY,
+          trailFrequency: "monthly",
+          effectiveFrom: today,
+          createdBy: me.id,
+        },
+      });
+      await tx.agentTerm.create({
+        data: {
+          agentId: id,
+          fundCategory: "fixed_income",
+          ...DEFAULT_TERM_FIXED_INCOME,
+          trailFrequency: "monthly",
+          effectiveFrom: today,
+          createdBy: me.id,
+        },
+      });
+    }
   });
+
   revalidatePath("/admin/agents");
   revalidatePath(`/admin/agents/${id}`);
+  const emailNote = invite.emailSent
+    ? `A set-password email was sent to ${agent!.email}.`
+    : `Approved, but the email failed to send (${invite.error ?? "unknown error"}). Use "Resend invite".`;
+  redirect(`/admin/agents/${id}?ok=${encodeURIComponent(`Agent approved. ${emailNote}`)}`);
+}
+
+/**
+ * Re-send the set-password link to an agent (e.g. the first email bounced or
+ * the link expired). Works whether or not the agent already has a login —
+ * mintAndSendAgentInvite issues an invite for a new user or a recovery link
+ * for an existing one. Backfills the Profile/link if they were missing.
+ */
+export async function resendAgentInvite(id: string): Promise<void> {
+  const me = await requireRole(["admin", "checker"]);
+  const agent = await prisma.sellingAgent.findUnique({ where: { id } });
+  if (!agent) redirect("/admin/agents?error=Agent+not+found");
+
+  const invite = await mintAndSendAgentInvite(
+    { email: agent!.email, fullName: agent!.fullName, code: agent!.code },
+    await requestBaseUrl(),
+  );
+  if (!invite.ok || !invite.userId) {
+    redirect(`/admin/agents/${id}?error=${encodeURIComponent(`Could not send the link: ${invite.error ?? "unknown error"}`)}`);
+  }
+
+  // Backfill the Profile + link if approval predated this flow.
+  await withActor(me.id, async (tx) => {
+    await tx.profile.upsert({
+      where: { id: invite.userId! },
+      create: {
+        id: invite.userId!,
+        email: agent!.email,
+        fullName: agent!.fullName,
+        role: UserRole.selling_agent,
+        isActive: true,
+      },
+      update: {},
+    });
+    if (!agent!.userId) {
+      await tx.sellingAgent.update({ where: { id }, data: { userId: invite.userId! } });
+    }
+  });
+
+  revalidatePath(`/admin/agents/${id}`);
+  const note = invite.emailSent
+    ? `Set-password link re-sent to ${agent!.email}.`
+    : `Link created but the email failed (${invite.error ?? "unknown error"}).`;
+  redirect(`/admin/agents/${id}?${invite.emailSent ? "ok" : "error"}=${encodeURIComponent(note)}`);
 }
 
 export async function suspendAgent(id: string): Promise<void> {

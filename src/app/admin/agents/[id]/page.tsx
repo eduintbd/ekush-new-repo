@@ -15,6 +15,7 @@ import {
   postAgentUpfront,
   reinstateAgent,
   reinstateAgentUpfront,
+  resendAgentInvite,
   setAgentWatermark,
   suspendAgentUpfront,
   suspendAgent,
@@ -102,6 +103,7 @@ export default async function AgentDetailPage({
   const approve = approveAgent.bind(null, agent.id);
   const suspend = suspendAgent.bind(null, agent.id);
   const reinstate = reinstateAgent.bind(null, agent.id);
+  const resend = resendAgentInvite.bind(null, agent.id);
 
   // Resolve the current (open) term per category for inline edit
   const today = new Date();
@@ -140,11 +142,18 @@ export default async function AgentDetailPage({
                 </form>
               )}
               {agent.status === "approved" && (
-                <form action={suspend}>
-                  <button className="rounded-md bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-700">
-                    Suspend
-                  </button>
-                </form>
+                <>
+                  <form action={resend}>
+                    <button className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800">
+                      Resend invite
+                    </button>
+                  </form>
+                  <form action={suspend}>
+                    <button className="rounded-md bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-700">
+                      Suspend
+                    </button>
+                  </form>
+                </>
               )}
               {agent.status === "suspended" && (
                 <form action={reinstate}>
