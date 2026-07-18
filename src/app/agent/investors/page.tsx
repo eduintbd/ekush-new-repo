@@ -31,13 +31,23 @@ export default async function AgentInvestorsPage() {
   return (
     <main className="min-h-screen bg-emerald-50/30 px-6 py-10 dark:bg-emerald-950/30">
       <div className="mx-auto max-w-6xl">
-        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
-          Investors I sourced
-        </h1>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          Agent code <code className="font-mono">{agent.code}</code> ·{" "}
-          {investors.length} investor{investors.length === 1 ? "" : "s"}
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
+              Investors I sourced
+            </h1>
+            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              Agent code <code className="font-mono">{agent.code}</code> ·{" "}
+              {investors.length} investor{investors.length === 1 ? "" : "s"}
+            </p>
+          </div>
+          <Link
+            href="/agent/investors/new"
+            className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
+          >
+            + Onboard investor
+          </Link>
+        </div>
 
         {fetchError && (
           <p className="mt-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
