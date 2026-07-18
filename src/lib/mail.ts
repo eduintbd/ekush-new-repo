@@ -18,26 +18,10 @@ export interface SmtpConfig {
 }
 
 export async function getSmtpConfig(): Promise<SmtpConfig | null> {
-  // 1. Environment variables (preferred). Reliable on Vercel and independent of
-  //    whether this deployment can read the portal's public.app_settings row —
-  //    set SMTP_* on the ekush-erp project with the portal's SMTP credentials.
-  const envHost = process.env.SMTP_HOST;
-  if (envHost && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    const port = Number(process.env.SMTP_PORT ?? "465");
-    const portNum = Number.isFinite(port) ? port : 465;
-    return {
-      host: envHost,
-      port: portNum,
-      secure: (process.env.SMTP_SECURE ?? (portNum === 465 ? "true" : "false")) === "true",
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-      fromEmail: process.env.SMTP_FROM_EMAIL ?? process.env.SMTP_USER,
-      fromName: process.env.SMTP_FROM_NAME ?? "Ekush Wealth Management",
-    };
-  }
-
-  // 2. Fallback: the portal's shared config in public.app_settings (works only
-  //    when this deployment's DB actually contains that row).
+  // Single source of truth: the portal's Mail Settings page, stored in
+  // public.app_settings 'mail.smtp' on the shared database. Changing the SMTP
+  // config there automatically applies to these agent emails too — there is no
+  // separate mail configuration for this app.
   const rows = await prisma
     .$queryRawUnsafe<{ value: string }[]>(
       `SELECT value FROM public.app_settings WHERE key = 'mail.smtp' LIMIT 1`,
