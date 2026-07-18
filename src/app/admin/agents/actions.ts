@@ -137,8 +137,10 @@ export async function approveAgent(id: string): Promise<void> {
   revalidatePath(`/admin/agents/${id}`);
   const emailNote = invite.emailSent
     ? `A set-password email was sent to ${agent!.email}.`
-    : `Approved, but the email failed to send (${invite.error ?? "unknown error"}). Use "Resend invite".`;
-  redirect(`/admin/agents/${id}?ok=${encodeURIComponent(`Agent approved. ${emailNote}`)}`);
+    : `Approved, but the email did not send (${invite.error ?? "unknown error"}). Send the agent the link below.`;
+  const params = new URLSearchParams({ ok: `Agent approved. ${emailNote}` });
+  if (invite.actionUrl) params.set("link", invite.actionUrl);
+  redirect(`/admin/agents/${id}?${params.toString()}`);
 }
 
 /**
@@ -181,8 +183,11 @@ export async function resendAgentInvite(id: string): Promise<void> {
   revalidatePath(`/admin/agents/${id}`);
   const note = invite.emailSent
     ? `Set-password link re-sent to ${agent!.email}.`
-    : `Link created but the email failed (${invite.error ?? "unknown error"}).`;
-  redirect(`/admin/agents/${id}?${invite.emailSent ? "ok" : "error"}=${encodeURIComponent(note)}`);
+    : `Link created but the email did not send (${invite.error ?? "unknown error"}). Send the agent the link below.`;
+  const params = new URLSearchParams();
+  params.set(invite.emailSent ? "ok" : "error", note);
+  if (invite.actionUrl) params.set("link", invite.actionUrl);
+  redirect(`/admin/agents/${id}?${params.toString()}`);
 }
 
 /**
@@ -221,18 +226,32 @@ export async function deleteAgent(id: string): Promise<void> {
 
 export async function suspendAgent(id: string): Promise<void> {
   const me = await requireRole(["admin", "checker"]);
-  await withActor(me.id, (tx) =>
-    tx.sellingAgent.update({ where: { id }, data: { status: "suspended" } }),
-  );
+  await withActor(me.id, async (tx) => {
+    const agent = await tx.sellingAgent.update({
+      where: { id },
+      data: { status: "suspended" },
+    });
+    // Deactivate the login so the agent is immediately locked out of the
+    // portal — requireAgent()/signInAgent both reject !isActive.
+    if (agent.userId) {
+      await tx.profile.update({ where: { id: agent.userId }, data: { isActive: false } });
+    }
+  });
   revalidatePath("/admin/agents");
   revalidatePath(`/admin/agents/${id}`);
 }
 
 export async function reinstateAgent(id: string): Promise<void> {
   const me = await requireRole(["admin", "checker"]);
-  await withActor(me.id, (tx) =>
-    tx.sellingAgent.update({ where: { id }, data: { status: "approved" } }),
-  );
+  await withActor(me.id, async (tx) => {
+    const agent = await tx.sellingAgent.update({
+      where: { id },
+      data: { status: "approved" },
+    });
+    if (agent.userId) {
+      await tx.profile.update({ where: { id: agent.userId }, data: { isActive: true } });
+    }
+  });
   revalidatePath("/admin/agents");
   revalidatePath(`/admin/agents/${id}`);
 }

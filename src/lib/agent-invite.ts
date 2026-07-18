@@ -14,6 +14,9 @@ export interface AgentInviteResult {
   isNewUser?: boolean;
   emailSent?: boolean;
   error?: string;
+  /** The one-time set-password link, so the admin UI can show it as a fallback
+   *  when email delivery is unreliable. */
+  actionUrl?: string;
 }
 
 /** Absolute base URL of this deployment, from the incoming request host. */
@@ -83,6 +86,7 @@ export async function mintAndSendAgentInvite(
     fullName: agent.fullName,
     code: agent.code,
     actionUrl: actionLink,
+    loginUrl: `${baseUrl.replace(/\/$/, "")}/agent/login`,
     isReset: !isNewUser,
   });
   const sent = await sendMail({ to: agent.email, subject: mail.subject, html: mail.html, text: mail.text });
@@ -93,5 +97,6 @@ export async function mintAndSendAgentInvite(
     isNewUser,
     emailSent: sent.ok,
     error: sent.ok ? undefined : ("error" in sent ? sent.error : undefined),
+    actionUrl: actionLink,
   };
 }

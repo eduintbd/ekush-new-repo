@@ -38,7 +38,7 @@ import {
   type PortalRedemption,
 } from "@/lib/portal-data";
 
-type Search = { ok?: string; error?: string; editTerm?: string };
+type Search = { ok?: string; error?: string; editTerm?: string; link?: string };
 
 const FUND_CATEGORIES = ["equity", "fixed_income"] as const;
 
@@ -192,6 +192,22 @@ export default async function AgentDetailPage({
         {sp.error && (
           <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
             {sp.error}
+          </div>
+        )}
+        {sp.link && (
+          <div className="rounded-md border border-sky-300 bg-sky-50 px-3 py-3 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100">
+            <p className="mb-2 font-medium">
+              Set-password link — send this to the agent if they don’t receive the email.
+            </p>
+            <input
+              readOnly
+              value={sp.link}
+              className="w-full select-all rounded border border-sky-300 bg-white px-2 py-1.5 font-mono text-xs text-zinc-800 dark:border-sky-800 dark:bg-zinc-900 dark:text-zinc-200"
+            />
+            <p className="mt-1.5 text-[11px] text-sky-800/80 dark:text-sky-200/70">
+              Click the field to select, then copy. The link is one-time and expires; use
+              “Resend invite” to generate a fresh one.
+            </p>
           </div>
         )}
 

@@ -18,9 +18,31 @@ export interface SmtpConfig {
 }
 
 export async function getSmtpConfig(): Promise<SmtpConfig | null> {
-  const rows = await prisma.$queryRawUnsafe<{ value: string }[]>(
-    `SELECT value FROM public.app_settings WHERE key = 'mail.smtp' LIMIT 1`,
-  );
+  // 1. Environment variables (preferred). Reliable on Vercel and independent of
+  //    whether this deployment can read the portal's public.app_settings row —
+  //    set SMTP_* on the ekush-erp project with the portal's SMTP credentials.
+  const envHost = process.env.SMTP_HOST;
+  if (envHost && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    const port = Number(process.env.SMTP_PORT ?? "465");
+    const portNum = Number.isFinite(port) ? port : 465;
+    return {
+      host: envHost,
+      port: portNum,
+      secure: (process.env.SMTP_SECURE ?? (portNum === 465 ? "true" : "false")) === "true",
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+      fromEmail: process.env.SMTP_FROM_EMAIL ?? process.env.SMTP_USER,
+      fromName: process.env.SMTP_FROM_NAME ?? "Ekush Wealth Management",
+    };
+  }
+
+  // 2. Fallback: the portal's shared config in public.app_settings (works only
+  //    when this deployment's DB actually contains that row).
+  const rows = await prisma
+    .$queryRawUnsafe<{ value: string }[]>(
+      `SELECT value FROM public.app_settings WHERE key = 'mail.smtp' LIMIT 1`,
+    )
+    .catch(() => [] as { value: string }[]);
   const raw = rows[0]?.value;
   if (!raw) return null;
   try {
@@ -69,6 +91,7 @@ export function agentInviteEmail(opts: {
   fullName: string;
   code: string;
   actionUrl: string;
+  loginUrl?: string;
   isReset?: boolean;
 }): { subject: string; html: string; text: string } {
   const heading = opts.isReset ? "Reset your password" : `Welcome, ${opts.fullName}`;
@@ -78,6 +101,11 @@ export function agentInviteEmail(opts: {
   const subject = opts.isReset
     ? "Reset your Ekush selling-agent password"
     : "Set up your Ekush selling-agent account";
+
+  const loginLineHtml = opts.loginUrl
+    ? `<p style="margin:16px 0 0;font-size:13px;line-height:1.6">After setting your password, sign in any time at <a href="${opts.loginUrl}" style="color:${BRAND};font-weight:600">${opts.loginUrl}</a></p>`
+    : "";
+  const loginLineText = opts.loginUrl ? `\nSign in any time at: ${opts.loginUrl}` : "";
 
   const html = `<!doctype html><html><body style="margin:0;background:#f5f5f4;font-family:Segoe UI,Arial,sans-serif;color:#1c1917">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 0"><tr><td align="center">
@@ -91,11 +119,12 @@ export function agentInviteEmail(opts: {
         <p style="margin:0 0 20px;font-size:14px;line-height:1.6">${intro}</p>
         <p style="margin:0 0 8px"><a href="${opts.actionUrl}" style="display:inline-block;background:${BRAND};color:#fafaf9;text-decoration:none;padding:12px 22px;border-radius:8px;font-size:14px;font-weight:600">${opts.isReset ? "Reset password" : "Set your password"}</a></p>
         <p style="margin:16px 0 0;font-size:12px;color:#78716c">This link is valid for a limited time. If it expires, use “Forgot password” on the sign-in page.</p>
+        ${loginLineHtml}
       </td></tr>
     </table>
   </td></tr></table></body></html>`;
 
-  const text = `${heading}\n\n${opts.isReset ? "Reset your password" : `Your selling-agent account (code ${opts.code}) has been approved.`}\nSet your password: ${opts.actionUrl}\nIf the link has expired, use "Forgot password" on the sign-in page.`;
+  const text = `${heading}\n\n${opts.isReset ? "Reset your password" : `Your selling-agent account (code ${opts.code}) has been approved.`}\nSet your password: ${opts.actionUrl}\nIf the link has expired, use "Forgot password" on the sign-in page.${loginLineText}`;
 
   return { subject, html, text };
 }
