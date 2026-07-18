@@ -3,11 +3,19 @@
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { UserRole } from "@/generated/prisma";
+import { deleteAgent } from "@/app/admin/agents/actions";
 
 export const metadata = { title: "Agents — Admin" };
 
-export default async function AdminAgentsPage() {
-  await requireRole(["admin", "checker"]);
+export default async function AdminAgentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ok?: string; error?: string }>;
+}) {
+  const me = await requireRole(["admin", "checker"]);
+  const isAdmin = me.role === UserRole.admin;
+  const sp = await searchParams;
 
   const agents = await prisma.sellingAgent
     .findMany({
@@ -36,6 +44,17 @@ export default async function AdminAgentsPage() {
             + Invite agent
           </Link>
         </div>
+
+        {sp.ok && (
+          <div className="mt-4 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+            {sp.ok}
+          </div>
+        )}
+        {sp.error && (
+          <div className="mt-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+            {sp.error}
+          </div>
+        )}
 
         {agents.length === 0 ? (
           <p className="mt-10 text-sm text-zinc-500">
@@ -69,9 +88,24 @@ export default async function AdminAgentsPage() {
                     <Td align="right">{a._count.commissionRuns}</Td>
                     <Td>{a.approvedAt ? a.approvedAt.toISOString().slice(0, 10) : "—"}</Td>
                     <Td>
-                      <Link href={`/admin/agents/${a.id}`} className="text-xs underline">
-                        manage →
-                      </Link>
+                      <div className="flex items-center justify-end gap-3">
+                        <Link href={`/admin/agents/${a.id}`} className="text-xs underline">
+                          manage →
+                        </Link>
+                        {isAdmin && (
+                          <form
+                            action={deleteAgent.bind(null, a.id)}
+                            data-confirm={`Permanently delete agent ${a.code} (${a.fullName})? This removes ${a._count.commissionRuns} commission run(s) and ${a._count.investors} investor link(s), and unlinks any journals. This cannot be undone.`}
+                          >
+                            <button
+                              type="submit"
+                              className="text-xs font-medium text-red-600 hover:underline dark:text-red-400"
+                            >
+                              delete
+                            </button>
+                          </form>
+                        )}
+                      </div>
                     </Td>
                   </tr>
                 ))}

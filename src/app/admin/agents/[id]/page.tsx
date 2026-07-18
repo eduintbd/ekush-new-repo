@@ -6,9 +6,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { UserRole } from "@/generated/prisma";
 import {
   addAgentTerm,
   approveAgent,
+  deleteAgent,
   deleteAgentTerm,
   linkInvestorToAgent,
   postAgentCommissions,
@@ -47,7 +49,8 @@ export default async function AgentDetailPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<Search>;
 }) {
-  await requireRole(["admin", "checker"]);
+  const me = await requireRole(["admin", "checker"]);
+  const isAdmin = me.role === UserRole.admin;
   const { id } = await params;
   const sp = await searchParams;
 
@@ -104,6 +107,7 @@ export default async function AgentDetailPage({
   const suspend = suspendAgent.bind(null, agent.id);
   const reinstate = reinstateAgent.bind(null, agent.id);
   const resend = resendAgentInvite.bind(null, agent.id);
+  const del = deleteAgent.bind(null, agent.id);
 
   // Resolve the current (open) term per category for inline edit
   const today = new Date();
@@ -159,6 +163,16 @@ export default async function AgentDetailPage({
                 <form action={reinstate}>
                   <button className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800">
                     Reinstate
+                  </button>
+                </form>
+              )}
+              {isAdmin && (
+                <form
+                  action={del}
+                  data-confirm={`Permanently delete agent ${agent.code} (${agent.fullName})? This removes all its commission runs, investor links and terms, and unlinks any journals. This cannot be undone.`}
+                >
+                  <button className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950">
+                    Delete
                   </button>
                 </form>
               )}

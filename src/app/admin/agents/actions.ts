@@ -185,6 +185,40 @@ export async function resendAgentInvite(id: string): Promise<void> {
   redirect(`/admin/agents/${id}?${invite.emailSent ? "ok" : "error"}=${encodeURIComponent(note)}`);
 }
 
+/**
+ * Permanently delete an agent record. Admin-only. DB cascades remove the
+ * agent's terms, investor links, upfront watermarks/suspensions, commission
+ * runs and accruals; journals are preserved with their agent_id set to null
+ * (SetNull), so the general ledger is untouched. Best-effort cleanup also
+ * removes the agent's selling_agent Profile and Supabase auth user so no
+ * orphan login lingers.
+ */
+export async function deleteAgent(id: string): Promise<void> {
+  const me = await requireRole(["admin"]);
+  const agent = await prisma.sellingAgent.findUnique({ where: { id } });
+  if (!agent) redirect("/admin/agents?error=Agent+not+found");
+
+  await withActor(me.id, (tx) => tx.sellingAgent.delete({ where: { id } }));
+
+  // Login cleanup — non-fatal; the agent row is already gone. Only remove the
+  // Profile/auth user if it is a selling_agent (never touch a shared staff login).
+  if (agent!.userId) {
+    try {
+      const profile = await prisma.profile.findUnique({ where: { id: agent!.userId } });
+      if (profile && profile.role === UserRole.selling_agent) {
+        await prisma.profile.delete({ where: { id: agent!.userId } });
+        const admin = createSupabaseAdminClient();
+        if (admin) await admin.auth.admin.deleteUser(agent!.userId);
+      }
+    } catch {
+      // ignore — deletion of the agent already succeeded
+    }
+  }
+
+  revalidatePath("/admin/agents");
+  redirect(`/admin/agents?ok=${encodeURIComponent(`Agent ${agent!.code} deleted.`)}`);
+}
+
 export async function suspendAgent(id: string): Promise<void> {
   const me = await requireRole(["admin", "checker"]);
   await withActor(me.id, (tx) =>
