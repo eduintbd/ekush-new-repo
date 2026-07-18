@@ -5,6 +5,7 @@ import Link from "next/link";
 import { requireAgent } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { fetchInvestorsForAgent } from "@/lib/ekush-web/client";
+import { getAgentSourcedInvestors, type SourcedInvestor } from "@/lib/agent-sourced";
 import { formatBdt } from "@/lib/format";
 import type { EkushWebInvestor } from "@/lib/ekush-web/types";
 
@@ -27,6 +28,12 @@ export default async function AgentInvestorsPage() {
   } catch (e) {
     fetchError = e instanceof Error ? e.message : "Unknown error";
   }
+
+  // Investors this agent onboarded but who aren't yet linked for commission
+  // (they haven't invested yet, or are still pending admin approval).
+  const linkedCodes = new Set(investors.map((i) => i.investor_code));
+  const sourced = await getAgentSourcedInvestors(agent.code).catch(() => [] as SourcedInvestor[]);
+  const onboardingOnly = sourced.filter((s) => !linkedCodes.has(s.investorCode));
 
   return (
     <main className="min-h-screen bg-emerald-50/30 px-6 py-10 dark:bg-emerald-950/30">
@@ -109,6 +116,42 @@ export default async function AgentInvestorsPage() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {onboardingOnly.length > 0 && (
+          <div className="mt-8">
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wider text-zinc-500">
+              Onboarded by me ({onboardingOnly.length})
+            </h2>
+            <p className="mb-3 text-xs text-zinc-500">
+              Investors you registered. They join the list above (and start earning you
+              commission) once approved and after their first investment.
+            </p>
+            <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <table className="min-w-full divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
+                <thead className="bg-zinc-50 dark:bg-zinc-950">
+                  <tr>
+                    <Th>Name</Th>
+                    <Th>Registered</Th>
+                    <Th>Status</Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {onboardingOnly.map((s) => (
+                    <tr key={s.investorCode}>
+                      <Td>{s.name}</Td>
+                      <Td>{new Date(s.createdAt).toISOString().slice(0, 10)}</Td>
+                      <Td>
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                          {s.status === "PENDING" ? "Awaiting approval" : "Awaiting first investment"}
+                        </span>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
