@@ -27,6 +27,8 @@
     "date-fns": "^4.1.0",
     "exceljs": "^4.4.0",
     "geist": "^1.7.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "lucide-react": "^1.8.0",
     "next": "14.2.35",
     "nodemailer": "^9.0.3",
