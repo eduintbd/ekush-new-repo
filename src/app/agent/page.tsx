@@ -104,14 +104,23 @@ export default async function AgentDashboardPage() {
           </p>
         )}
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-2">
+        <div className="mt-10 grid gap-4 sm:grid-cols-3">
           <Link
             href="/agent/investors"
             className="rounded-lg border border-emerald-200 bg-white p-5 transition-colors hover:bg-emerald-50 dark:border-emerald-900 dark:bg-zinc-900 dark:hover:bg-zinc-800"
           >
             <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">My investors →</p>
             <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-              Investors I sourced. Live join with the Ekush Web feed.
+              Investors I sourced — open any to view their full profile.
+            </p>
+          </Link>
+          <Link
+            href="/agent/earnings"
+            className="rounded-lg border border-emerald-200 bg-white p-5 transition-colors hover:bg-emerald-50 dark:border-emerald-900 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+          >
+            <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">My earnings →</p>
+            <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+              Live upfront + trail breakdown, per investor.
             </p>
           </Link>
           <Link
@@ -120,7 +129,7 @@ export default async function AgentDashboardPage() {
           >
             <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Commissions →</p>
             <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-              Upfront, trail, and clawback runs.
+              Posted upfront, trail, and clawback runs.
             </p>
           </Link>
         </div>
