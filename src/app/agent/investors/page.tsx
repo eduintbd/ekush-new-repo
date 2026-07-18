@@ -1,6 +1,7 @@
 // /agent/investors — list of investors I sourced. Live join with the
 // Ekush Web feed (or the deterministic mock until the API is wired).
 
+import Link from "next/link";
 import { requireAgent } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { fetchInvestorsForAgent } from "@/lib/ekush-web/client";
@@ -61,6 +62,7 @@ export default async function AgentInvestorsPage() {
                   <Th align="right">Outstanding</Th>
                   <Th align="right">Initial gross (BDT)</Th>
                   <Th align="center">Direct?</Th>
+                  <Th />
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -83,6 +85,14 @@ export default async function AgentInvestorsPage() {
                         ) : (
                           "—"
                         )}
+                      </Td>
+                      <Td align="right">
+                        <Link
+                          href={`/agent/investors/${encodeURIComponent(inv.investor_code)}`}
+                          className="text-xs font-medium text-emerald-700 underline hover:text-emerald-800 dark:text-emerald-400"
+                        >
+                          View
+                        </Link>
                       </Td>
                     </tr>
                   );
@@ -116,7 +126,7 @@ function Th({
   children,
   align = "left",
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   align?: "left" | "center" | "right";
 }) {
   const a = align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left";
