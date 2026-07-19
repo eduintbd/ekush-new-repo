@@ -23,6 +23,12 @@ function isPublic(pathname: string): boolean {
     pathname === "/" ||
     pathname === "/login" ||
     pathname === "/agent/login" ||
+    // Pre-auth agent pages: the user is NOT signed in yet. set-password
+    // establishes the session client-side from the recovery link's URL hash,
+    // so the middleware must NOT bounce it (a server redirect would strip the
+    // hash before the client can read it).
+    pathname === "/agent/set-password" ||
+    pathname === "/agent/forgot-password" ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api/health")
   );
