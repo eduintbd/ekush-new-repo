@@ -2,20 +2,21 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { requestAgentReset } from "./actions";
+import { requestAgentReset, type ResetOutcome } from "./actions";
 
 export default function AgentForgotPasswordPage() {
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [outcome, setOutcome] = useState<ResetOutcome | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
-    await requestAgentReset(email);
+    const res = await requestAgentReset(email);
     setBusy(false);
-    setSent(true);
+    setOutcome(res);
   }
+  const sent = outcome?.status === "sent";
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-emerald-50 via-zinc-50 to-emerald-50 px-6 py-16 dark:from-emerald-950 dark:via-zinc-950 dark:to-emerald-950">
@@ -29,14 +30,25 @@ export default function AgentForgotPasswordPage() {
 
         {sent ? (
           <p className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
-            If that email belongs to an agent account, a set-password link is on its way.
-            The link is valid for a limited time — open it and choose a new password.
+            A set-password link has been emailed. It&apos;s valid for a limited time — open it
+            and choose a new password.
           </p>
         ) : (
           <form onSubmit={onSubmit} className="mt-8 space-y-4">
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
               Enter your email and we&apos;ll send you a link to set a new password.
             </p>
+            {outcome?.status === "no_agent" && (
+              <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                No selling-agent account was found with that email. Check the address, or ask an
+                admin to approve your agent record.
+              </p>
+            )}
+            {outcome?.status === "failed" && (
+              <p className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+                {outcome.error}
+              </p>
+            )}
             <label className="block">
               <span className="text-xs font-medium uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
                 Email
