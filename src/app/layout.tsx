@@ -5,6 +5,7 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 import { FlashToast } from "@/components/flash-toast";
 import { FormGuard } from "@/components/form-guard";
+import RecoveryHashRedirect from "./RecoveryHashRedirect";
 
 export const metadata: Metadata = {
   title: "Create Next App",
@@ -22,6 +23,9 @@ export default function RootLayout({
       className={`${GeistSans.variable} ${GeistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        {/* Catch a Supabase recovery/invite redirect that lands with tokens in
+            the URL hash on any page and forward it to /agent/set-password. */}
+        <RecoveryHashRedirect />
         {children}
         {/* FormGuard reads useSearchParams to detect server-action
             redirects and restore stuck "Saving…" buttons; wrap in

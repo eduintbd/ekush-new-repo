@@ -4,14 +4,12 @@
 // so users can pick where they're going. Same credentials work on either.
 
 import Link from "next/link";
-import RecoveryHashRedirect from "./RecoveryHashRedirect";
 
 const PORTAL_URL = process.env.NEXT_PUBLIC_EKUSH_PORTAL_URL ?? "https://portal.ekushwml.com";
 
 export default function Home() {
   return (
     <main className="min-h-screen bg-zinc-50 px-6 py-16 dark:bg-zinc-950">
-      <RecoveryHashRedirect />
       <div className="mx-auto w-full max-w-3xl">
         <div className="mb-10">
           <p className="text-sm font-medium uppercase tracking-widest text-zinc-500">
