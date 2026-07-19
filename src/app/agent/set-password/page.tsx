@@ -91,9 +91,15 @@ export default function AgentSetPasswordPage() {
         {stage === "invalid" && (
           <div className="mt-4 space-y-3">
             <p className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-              This link is invalid or has expired.
+              This link is invalid or has expired. Request a fresh one below.
             </p>
-            <Link href="/agent/login" className="text-sm text-zinc-700 underline dark:text-zinc-300">
+            <Link
+              href="/agent/forgot-password"
+              className="inline-block rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
+            >
+              Request a new link
+            </Link>
+            <Link href="/agent/login" className="block text-sm text-zinc-700 underline dark:text-zinc-300">
               Back to sign in
             </Link>
           </div>

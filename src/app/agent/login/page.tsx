@@ -71,6 +71,15 @@ export default async function AgentLoginPage({
           >
             Sign in
           </button>
+
+          <p className="text-center text-sm">
+            <Link
+              href="/agent/forgot-password"
+              className="text-emerald-700 underline-offset-2 hover:underline dark:text-emerald-400"
+            >
+              Forgot password?
+            </Link>
+          </p>
         </form>
       </div>
     </main>
