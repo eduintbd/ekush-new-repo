@@ -6,12 +6,18 @@ import type { NextRequest } from "next/server";
 import { getAgentScope } from "@/lib/agent-scope";
 import { getInvestorProfileByCode } from "@/lib/portal-investor";
 import {
-  getHoldingRows,
   getTransactionRows,
   getDividendRows,
   getTaxCertRows,
+  getInvestmentUpdateRows,
 } from "@/lib/portal-statements";
-import { portfolioPdf, transactionsPdf, dividendsPdf, taxCertPdf } from "@/lib/agent-pdf";
+import { transactionsPdf, dividendsPdf, taxCertPdf } from "@/lib/agent-pdf";
+import {
+  investmentUpdatePdf,
+  getPortfolioBannerDataUrl,
+  statementDateStr,
+} from "@/lib/investment-update-pdf";
+import { accountHolderName } from "@/lib/account-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,10 +57,35 @@ export async function GET(req: NextRequest) {
       label = "TaxCertificate";
       break;
     case "portfolio":
-    default:
-      pdf = portfolioPdf(inv, await getHoldingRows(investor.id, fundCode), fundCode);
-      label = "Portfolio";
+    default: {
+      // The branded one-page statement per fund — the same document the
+      // portal issues, not a generic table dump. See investment-update-pdf.ts.
+      const rows = await getInvestmentUpdateRows(investor.id, fundCode);
+      const banner = getPortfolioBannerDataUrl() ?? undefined;
+      const dateStr = statementDateStr();
+      pdf = investmentUpdatePdf(
+        inv,
+        rows.map((r) => ({
+          investorName: accountHolderName(inv),
+          investorCode: inv.investorCode,
+          fundName: r.fundName,
+          fundCode: r.fundCode,
+          totalUnits: Number(r.totalUnits),
+          avgCost: Number(r.avgCost),
+          costValue: Number(r.costValue),
+          marketValue: Number(r.marketValue),
+          realizedGain: Number(r.realizedGain),
+          dividendTotal: Number(r.dividendTotal),
+          nav: Number(r.nav),
+          entryLoad: Number(r.entryLoad),
+          exitLoad: Number(r.exitLoad),
+          dateStr,
+          bannerPngDataUrl: banner,
+        })),
+      );
+      label = "Statement";
       break;
+    }
   }
 
   const filename = `${label}-${code}${fundCode ? "-" + fundCode : ""}.pdf`;

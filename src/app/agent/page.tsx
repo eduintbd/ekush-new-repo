@@ -1,57 +1,16 @@
-// /agent — selling-agent landing (spec §6.2). Surfaces three KPI cards
-// (initial AUM under my code, accrued this quarter, last paid quarter)
-// and links to the per-investor and per-commission detail pages.
+// /agent — selling-agent landing. Links to the per-investor, earnings,
+// statements and commission pages.
+//
+// The three KPI tiles (initial AUM / accrued this quarter / last paid run)
+// were removed on request: "accrued this quarter" reads posted CommissionRun
+// rows and is structurally 0 until the first run of a quarter lands, and
+// nothing in the system ever sets status='paid', so "last paid run" could
+// only ever say "Not paid yet". Live figures live on /agent/earnings.
 
 import Link from "next/link";
 import { requireAgent } from "@/lib/auth";
 import { signOut } from "@/app/login/actions";
 import { prisma } from "@/lib/prisma";
-import { formatBdt } from "@/lib/format";
-import { calendarQuarter, todayUtc } from "@/lib/cron-auth";
-
-async function loadKpis(agentId: string) {
-  const quarter = calendarQuarter(todayUtc());
-  // Prefer the daily-accrual snapshot (cheap to read); fall back to live
-  // CommissionRun aggregation if no snapshot has run yet.
-  const [investorAum, latestAccrual, accruedThisQLive, lastPaid] = await Promise.all([
-    prisma.agentInvestor
-      .aggregate({ where: { agentId }, _sum: { initialGrossAmount: true } })
-      .catch(() => null),
-    prisma.commissionAccrual
-      .findFirst({ where: { agentId }, orderBy: [{ snapshotDate: "desc" }] })
-      .catch(() => null),
-    prisma.commissionRun
-      .aggregate({
-        where: {
-          agentId,
-          periodEnd: { gte: quarter.start, lt: quarter.end },
-          status: { in: ["accrued", "approved", "paid"] },
-        },
-        _sum: { amount: true },
-      })
-      .catch(() => null),
-    prisma.commissionRun
-      .findFirst({
-        where: { agentId, status: "paid" },
-        orderBy: [{ paidOn: "desc" }],
-        select: { paidOn: true, periodStart: true, periodEnd: true, amount: true },
-      })
-      .catch(() => null),
-  ]);
-
-  const accruedThisQuarter =
-    latestAccrual && latestAccrual.snapshotDate >= quarter.start
-      ? Number(latestAccrual.quarterToDateBdt)
-      : Number(accruedThisQLive?._sum.amount ?? 0);
-
-  return {
-    quarter,
-    initialAum: Number(investorAum?._sum.initialGrossAmount ?? 0),
-    accruedThisQuarter,
-    accrualSnapshotAt: latestAccrual?.snapshotDate ?? null,
-    lastPaid,
-  };
-}
 
 export default async function AgentDashboardPage() {
   const profile = await requireAgent();
@@ -102,15 +61,13 @@ export default async function AgentDashboardPage() {
       </header>
 
       <div className="mx-auto max-w-6xl px-6 py-10">
-        {agent ? (
-          <KpiCards agentId={agent.id} />
-        ) : (
+        {!agent && (
           <p className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
             Your profile isn&apos;t linked to a selling-agent record yet — contact admin.
           </p>
         )}
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-3">
           <Link
             href="/agent/investors"
             className="rounded-lg border border-emerald-200 bg-white p-5 transition-colors hover:bg-emerald-50 dark:border-emerald-900 dark:bg-zinc-900 dark:hover:bg-zinc-800"
@@ -153,40 +110,3 @@ export default async function AgentDashboardPage() {
   );
 }
 
-async function KpiCards({ agentId }: { agentId: string }) {
-  const k = await loadKpis(agentId);
-  const lastPaidLabel = k.lastPaid?.paidOn
-    ? `${k.lastPaid.paidOn.toISOString().slice(0, 10)}`
-    : "Not paid yet";
-  const lastPaidAmount = k.lastPaid?.amount ? formatBdt(Number(k.lastPaid.amount)) : "—";
-
-  return (
-    <div className="grid gap-4 sm:grid-cols-3">
-      <Card
-        label="Initial AUM under my code"
-        value={`BDT ${formatBdt(k.initialAum)}`}
-        sub="Sum of initial gross amounts at sourcing"
-      />
-      <Card
-        label={`Accrued ${k.quarter.label}`}
-        value={`BDT ${formatBdt(k.accruedThisQuarter)}`}
-        sub={
-          k.accrualSnapshotAt
-            ? `Snapshot ${k.accrualSnapshotAt.toISOString().slice(0, 10)}`
-            : "Commission runs landing in this calendar quarter"
-        }
-      />
-      <Card label="Last paid run" value={lastPaidLabel} sub={`BDT ${lastPaidAmount}`} />
-    </div>
-  );
-}
-
-function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-      <p className="text-xs uppercase tracking-wider text-zinc-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-50">{value}</p>
-      {sub && <p className="mt-1 text-[11px] text-zinc-500">{sub}</p>}
-    </div>
-  );
-}

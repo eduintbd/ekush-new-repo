@@ -116,3 +116,68 @@ export async function getTaxCertRows(investorId: string, fundCode?: string): Pro
     ...args,
   );
 }
+
+// ─── Investment Update (the branded portfolio statement) ─────────
+// Everything the branded one-page statement needs, per fund. Mirrors the
+// portal's /forms/investment-update query set exactly (see its page.tsx), so
+// the agent's PDF and the portal's page show the same numbers:
+//   - units / avgCost / costValue / realizedGain  → public.fund_holdings
+//   - nav                                          → latest public.nav_records
+//     row for the fund (NOT funds.currentNav, which is a stale cache — it has
+//     frozen a fund at its inception value before)
+//   - dividendTotal                                → SUM(public.dividends)
+//     (fund_holdings.grossDividend is 0 for investors whose dividends predate
+//     that column being maintained, so it cannot be used here)
+//   - entryLoad / exitLoad                         → public.funds
+
+export interface InvestmentUpdateRow {
+  fundCode: string;
+  fundName: string;
+  totalUnits: number;
+  avgCost: number;
+  costValue: number;
+  marketValue: number;
+  realizedGain: number;
+  dividendTotal: number;
+  nav: number;
+  entryLoad: number;
+  exitLoad: number;
+}
+
+export async function getInvestmentUpdateRows(
+  investorId: string,
+  fundCode?: string,
+): Promise<InvestmentUpdateRow[]> {
+  const args: unknown[] = [investorId];
+  if (fundCode) args.push(fundCode);
+  return prisma.$queryRawUnsafe<InvestmentUpdateRow[]>(
+    `SELECT f.code AS "fundCode",
+            f.name AS "fundName",
+            h."totalCurrentUnits"     AS "totalUnits",
+            h."avgCost",
+            h."totalCostValueCurrent" AS "costValue",
+            h."totalRealizedGain"     AS "realizedGain",
+            COALESCE(f."entryLoad", 0) AS "entryLoad",
+            COALESCE(f."exitLoad", 0)  AS "exitLoad",
+            COALESCE(nav.nav, f."currentNav", h.nav, 0) AS "nav",
+            COALESCE(h."totalCurrentUnits", 0) * COALESCE(nav.nav, f."currentNav", h.nav, 0) AS "marketValue",
+            COALESCE(div.total, 0) AS "dividendTotal"
+       FROM public.fund_holdings h
+       JOIN public.funds f ON f.id = h."fundId"
+       -- Latest NAV per fund. LATERAL keeps it to one indexed lookup per row.
+       LEFT JOIN LATERAL (
+         SELECT n.nav FROM public.nav_records n
+          WHERE n."fundId" = f.id
+          ORDER BY n.date DESC
+          LIMIT 1
+       ) nav ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT SUM(d."grossDividend") AS total
+           FROM public.dividends d
+          WHERE d."investorId" = h."investorId" AND d."fundId" = f.id
+       ) div ON TRUE
+      WHERE h."investorId" = $1 ${fundCode ? 'AND f.code = $2' : ""}
+      ORDER BY f.code`,
+    ...args,
+  );
+}
