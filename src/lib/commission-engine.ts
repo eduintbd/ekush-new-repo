@@ -3,7 +3,7 @@
 // The caller persists; idempotency comes from the unique constraint on
 // (agent_investor_id, type, period_start, period_end) in the schema.
 
-import { categoryForFund, type EkushWebInvestor, type FundCode } from "@/lib/ekush-web/types";
+import { categoryForFund, type EkushWebInvestor } from "@/lib/ekush-web/types";
 
 export type TrailFrequency = "monthly" | "quarterly";
 
@@ -59,9 +59,6 @@ function addMonths(d: Date, months: number): Date {
   return n;
 }
 
-function isWithin(d: Date, start: Date, end: Date): boolean {
-  return d >= start && d <= end;
-}
 
 /** ISO YYYY-MM-DD parser that returns a UTC midnight Date. */
 function parseDate(s: string): Date {
@@ -94,86 +91,22 @@ export function computeUpfront(
   };
 }
 
-// ─── 8.2 Trail (monthly or quarterly) ────────────────────────────
-// Weekly average held value × annualised rate ÷ periodsPerYear. Y1 vs
-// Y2+ chosen by period midpoint relative to sourced_on + 12 months. The
-// cadence is the term's `trailFrequency` — a run for one frequency skips
-// terms set to the other, so the monthly and quarterly crons never both
-// pay the same investor.
-
-export type WeeklyNav = {
-  /** Date of the snapshot (typically each Thursday). */
-  date: Date;
-  /** NAV per unit. */
-  unitNav: number;
-};
-
-export function computeTrail(
-  inv: EkushWebInvestor,
-  terms: AgentTermSnapshot[],
-  navByFund: Map<FundCode, WeeklyNav[]>,
-  periodStart: Date,
-  periodEnd: Date,
-  frequency: TrailFrequency,
-): ComputedCommission | null {
-  if (inv.is_direct_subscription) return null;
-  const sourcedOn = parseDate(inv.sourced_on);
-  if (sourcedOn > periodEnd) return null;
-
-  const periodMid = new Date((periodStart.getTime() + periodEnd.getTime()) / 2);
-  const term = pickTerm(terms, categoryForFund(inv.fund_code), periodMid);
-  if (!term) return null;
-  // Pay only on this term's configured cadence.
-  if (term.trailFrequency !== frequency) return null;
-
-  const ratePa =
-    periodMid < addMonths(sourcedOn, 12) ? term.trailY1PctPa : term.trailY2PlusPctPa;
-  const ratePeriod = ratePa / periodsPerYear(frequency);
-
-  const navs = (navByFund.get(inv.fund_code) ?? [])
-    .filter((n) => isWithin(n.date, periodStart, periodEnd))
-    .sort((a, b) => +a.date - +b.date);
-  if (navs.length === 0) return null;
-
-  // Units outstanding "as of week" = initial − redemptions before that week.
-  // Per clause 6.3, redeemed units stop earning trail from redemption date.
-  const redemptions = inv.redemptions
-    .map((r) => ({ date: parseDate(r.date), units: r.units }))
-    .sort((a, b) => +a.date - +b.date);
-
-  const unitsAt = (asOf: Date): number => {
-    let units = inv.initial_units;
-    for (const r of redemptions) {
-      if (r.date <= asOf) units -= r.units;
-    }
-    return Math.max(0, units);
-  };
-
-  const weeklyValues = navs.map((n) => unitsAt(n.date) * n.unitNav);
-  const weeklyAvgValue = weeklyValues.reduce((s, v) => s + v, 0) / weeklyValues.length;
-  if (weeklyAvgValue <= 0) return null;
-
-  return {
-    type: "trail",
-    periodStart,
-    periodEnd,
-    baseAmount: round2(weeklyAvgValue),
-    rateApplied: ratePeriod,
-    amount: round2(weeklyAvgValue * ratePeriod),
-    notes: `${navs.length} weekly NAV snapshots, ${ratePa === term.trailY1PctPa ? "Y1" : "Y2+"} tier, ${frequency}`,
-  };
-}
-
-/** Back-compat wrapper: quarterly cadence. */
-export function computeQuarterlyTrail(
-  inv: EkushWebInvestor,
-  terms: AgentTermSnapshot[],
-  navByFund: Map<FundCode, WeeklyNav[]>,
-  quarterStart: Date,
-  quarterEnd: Date,
-): ComputedCommission | null {
-  return computeTrail(inv, terms, navByFund, quarterStart, quarterEnd, "quarterly");
-}
+// ─── 8.2 Trail ───────────────────────────────────────────────────
+// REMOVED (2026-07-20). `computeTrail` / `computeQuarterlyTrail` /
+// `WeeklyNav` lived here and were driven by run-trail.ts off
+// `xsystem.nav_snapshots` — a table with no writer anywhere in the repo, so
+// they returned null for every investor and posted nothing, ever.
+//
+// Trail is now computed by `computeAgentCommissionPreview`
+// (src/lib/agent-commission-preview.ts) and posted by `postTrailFromPreview`
+// (src/lib/post-trail.ts), which the cron and the admin button both call. That
+// engine reads the portal's populated `public.nav_records`, and derives units
+// from actual BUY/SELL transactions rather than `initial_units − redemptions`
+// — the old basis never added later purchases, so an investor who topped up
+// earned trail on their first purchase forever.
+//
+// Anything here that survives (periodsPerYear, quartersFor, AgentTermSnapshot,
+// TrailFrequency) is still imported by the preview and by run-upfront.ts.
 
 // ─── 8.3 Clawback on early redemption ────────────────────────────
 // If any units redeemed within `clawbackMonths` of sourced_on, claw back

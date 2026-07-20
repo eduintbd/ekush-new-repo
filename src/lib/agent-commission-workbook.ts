@@ -6,23 +6,38 @@
 import ExcelJS from "exceljs";
 import type { PreviewResult, Term } from "@/lib/agent-commission-preview";
 
+/**
+ * Who the file is for. The agent variant drops internal detail: the Terms
+ * sheet's data-quality `Flag` column (which says things like "likely percent
+ * literal — should be 0.0050", i.e. our own rates may be misconfigured), and
+ * the Summary header's references to internal table names.
+ */
+export type CommissionAudience = "admin" | "agent";
+
 export async function buildAgentCommissionWorkbook(
   preview: PreviewResult,
+  opts: { audience?: CommissionAudience } = {},
 ): Promise<Buffer> {
+  const audience = opts.audience ?? "admin";
   const wb = new ExcelJS.Workbook();
   wb.creator = "X-System";
   wb.created = new Date();
 
-  buildTermsSheet(wb, preview.termsActive);
+  buildTermsSheet(wb, preview.termsActive, audience);
   buildTxSheet(wb, preview);
   buildTrailSheet(wb, preview);
-  buildSummarySheet(wb, preview);
+  buildSummarySheet(wb, preview, audience);
 
   const buffer = await wb.xlsx.writeBuffer();
   return Buffer.from(buffer);
 }
 
-function buildTermsSheet(wb: ExcelJS.Workbook, terms: Term[]): void {
+function buildTermsSheet(
+  wb: ExcelJS.Workbook,
+  terms: Term[],
+  audience: CommissionAudience,
+): void {
+  const isAdmin = audience === "admin";
   const s = wb.addWorksheet("Terms used");
   s.columns = [
     { header: "Fund category", key: "cat", width: 16 },
@@ -33,7 +48,8 @@ function buildTermsSheet(wb: ExcelJS.Workbook, terms: Term[]): void {
     { header: "Trail Y2+ % p.a.", key: "y2", width: 16 },
     { header: "Clawback months", key: "cm", width: 16 },
     { header: "Clawback %", key: "cp", width: 12 },
-    { header: "Flag", key: "flag", width: 50 },
+    // Internal data-quality warnings — admin only.
+    ...(isAdmin ? [{ header: "Flag", key: "flag", width: 50 }] : []),
   ];
   s.getRow(1).font = { bold: true };
   for (const t of [...terms].sort(
@@ -41,13 +57,15 @@ function buildTermsSheet(wb: ExcelJS.Workbook, terms: Term[]): void {
       (a.fundCategory > b.fundCategory ? 1 : -1) || +b.effectiveFrom - +a.effectiveFrom,
   )) {
     const flags: string[] = [];
-    if (t.upfrontPct >= 0.01)
-      flags.push(
-        `upfrontPct=${t.upfrontPct} (likely percent literal — should be ${(t.upfrontPct / 100).toFixed(4)})`,
-      );
-    if (t.trailY1PctPa >= 0.05) flags.push(`trailY1=${t.trailY1PctPa} (>5% p.a. — check)`);
-    if (t.trailY2PlusPctPa >= 0.05)
-      flags.push(`trailY2+=${t.trailY2PlusPctPa} (>5% p.a. — check)`);
+    if (isAdmin) {
+      if (t.upfrontPct >= 0.01)
+        flags.push(
+          `upfrontPct=${t.upfrontPct} (likely percent literal — should be ${(t.upfrontPct / 100).toFixed(4)})`,
+        );
+      if (t.trailY1PctPa >= 0.05) flags.push(`trailY1=${t.trailY1PctPa} (>5% p.a. — check)`);
+      if (t.trailY2PlusPctPa >= 0.05)
+        flags.push(`trailY2+=${t.trailY2PlusPctPa} (>5% p.a. — check)`);
+    }
     s.addRow({
       cat: t.fundCategory,
       from: t.effectiveFrom.toISOString().slice(0, 10),
@@ -57,7 +75,7 @@ function buildTermsSheet(wb: ExcelJS.Workbook, terms: Term[]): void {
       y2: t.trailY2PlusPctPa,
       cm: t.clawbackMonths,
       cp: t.clawbackPct,
-      flag: flags.join("; "),
+      ...(isAdmin ? { flag: flags.join("; ") } : {}),
     });
   }
 }
@@ -172,7 +190,11 @@ function buildTrailSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
   }
 }
 
-function buildSummarySheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
+function buildSummarySheet(
+  wb: ExcelJS.Workbook,
+  p: PreviewResult,
+  audience: CommissionAudience,
+): void {
   const s = wb.addWorksheet("Summary");
   s.columns = [
     { header: "Investor", key: "inv", width: 10 },
@@ -279,29 +301,42 @@ function buildSummarySheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
     }
   }
 
-  s.spliceRows(
-    1,
-    0,
-    [`Agent: ${p.agentCode} — ${p.agentName}`],
-    [`Status: ${p.agentStatus}`],
-    [`As-of date: ${p.asOf.toISOString().slice(0, 10)}`],
-    [
-      `Rate rule: LATEST effective term per category applied to ALL transactions (older term rows treated as superseded).`,
-    ],
-    [`Upfront commission: per-agent, per-fund HIGH-WATER-MARK (see the Upfront Watermark block below).`],
-    [
-      `  • watermark = running peak of net invested principal (Σ BUY−SELL cash) under the agent in the fund; it never falls when clients redeem.`,
-    ],
-    [
-      `  • upfront = max(0, new peak − stored watermark) × upfront_pct, evaluated monthly. The Initial/Per-inflow columns below are legacy per-investor references only.`,
-    ],
-    [
-      `Trail commission: computed from public.nav_records (daily NAV snapshots per fund). Per period (monthly or quarterly, per the term's Trail frequency):`,
-    ],
-    [`  trail = (avg of units × nav across all NAV dates in period) × rate p.a. ÷ periods_per_year (12 monthly, 4 quarterly)`],
-    [
-      `  rate = Trail Y1 p.a. if period midpoint < sourced_on + 12 months, else Trail Y2+ p.a.`,
-    ],
-    [],
-  );
+  const header: string[][] =
+    audience === "admin"
+      ? [
+          [`Agent: ${p.agentCode} — ${p.agentName}`],
+          [`Status: ${p.agentStatus}`],
+          [`As-of date: ${p.asOf.toISOString().slice(0, 10)}`],
+          [
+            `Rate rule: LATEST effective term per category applied to ALL transactions (older term rows treated as superseded).`,
+          ],
+          [`Upfront commission: per-agent, per-fund HIGH-WATER-MARK (see the Upfront Watermark block below).`],
+          [
+            `  • watermark = running peak of net invested principal (Σ BUY−SELL cash) under the agent in the fund; it never falls when clients redeem.`,
+          ],
+          [
+            `  • upfront = max(0, new peak − stored watermark) × upfront_pct, evaluated monthly. The Initial/Per-inflow columns below are legacy per-investor references only.`,
+          ],
+          [
+            `Trail commission: computed from public.nav_records (daily NAV snapshots per fund). Per period (monthly or quarterly, per the term's Trail frequency):`,
+          ],
+          [`  trail = (avg of units × nav across all NAV dates in period) × rate p.a. ÷ periods_per_year (12 monthly, 4 quarterly)`],
+          [
+            `  rate = Trail Y1 p.a. if period midpoint < sourced_on + 12 months, else Trail Y2+ p.a.`,
+          ],
+          [],
+        ]
+      : [
+          [`Agent: ${p.agentCode} — ${p.agentName}`],
+          [`As-of date: ${p.asOf.toISOString().slice(0, 10)}`],
+          [`Commission terms currently in force are applied to all periods.`],
+          [`Upfront: paid per fund on new money only — on the amount by which your invested principal rises above its previous peak.`],
+          [`  • Redemptions do not lower that peak, so money that leaves and returns does not earn upfront twice.`],
+          [`Trail: accrues each period on the average value of units held, at the rate per annum for the applicable year band, and is paid after the period closes.`],
+          [`  • Rows marked partial are still accruing and have not been posted.`],
+          [`This is an as-of-today estimate for your information, not a statement of account. The amount payable is confirmed when the office posts the run.`],
+          [],
+        ];
+
+  s.spliceRows(1, 0, ...header);
 }

@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { Prisma, UserRole } from "@/generated/prisma";
 import { prisma, withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
-import { computeAgentCommissionPreview } from "@/lib/agent-commission-preview";
+import { postTrailFromPreview } from "@/lib/post-trail";
 import { runUpfront } from "@/lib/run-upfront";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
@@ -503,63 +503,52 @@ export async function unlinkInvestor(formData: FormData): Promise<void> {
 }
 
 /**
- * Post the previewed commission lines to xsystem.commission_runs.
+ * Post the previewed trail lines to xsystem.commission_runs.
  *
- * Writes one `upfront` row per (investor, fund) bucket using the
- * per-spec initial-only amount (the engine's interpretation: upfront ×
- * initial sourcing gross). Writes one `trail` row per completed
- * quarter from the preview (skips partial quarters where periodEnd >=
- * today, since the cron will pick those up at quarter close).
+ * Thin wrapper over `postTrailFromPreview` — the SAME function the monthly
+ * cron runs, so clicking this button and letting the cron fire produce
+ * identical rows. Posts every completed period (skipping partials, which the
+ * next run picks up once they close) and is idempotent via the
+ * (agent_investor_id, type, period_start, period_end) unique index.
  *
- * Idempotency comes from the (agent_investor_id, type, period_start,
- * period_end) unique index on commission_runs — re-clicking Post will
- * fail-silently on duplicates and only insert new rows.
+ * Upfront is not posted here — that's the per-(agent,fund) watermark model,
+ * posted by the monthly cron or "Post upfront now" (postAgentUpfront).
  */
 export async function postAgentCommissions(formData: FormData): Promise<void> {
   const me = await requireRole(["admin", "checker"]);
   const agentId = String(formData.get("agentId") ?? "").trim();
   if (!agentId) return;
 
-  const preview = await computeAgentCommissionPreview(prisma, agentId);
-  const today = new Date();
-  let createdTrail = 0;
-  let skipped = 0;
-
-  // Upfront is no longer posted here — it's the per-(agent,fund) watermark
-  // model, posted by the monthly cron or the "Post upfront now" button
-  // (postAgentUpfront). This action posts trail only.
-  await withActor(me.id, async (tx) => {
-    for (const r of preview.trailRows) {
-      if (r.partial) continue; // wait for quarter close
-      try {
-        await tx.commissionRun.create({
-          data: {
-            agentId,
-            agentInvestorId: r.agentInvestorId,
-            type: "trail",
-            periodStart: r.quarterStart,
-            periodEnd: r.quarterEnd,
-            baseAmount: round2BD(r.avgValue),
-            rateApplied: r.rateQuarter,
-            amount: r.trail,
-            notes: `${r.navPoints} NAV pts · ${r.tier} tier · posted from preview ${today.toISOString().slice(0, 10)}`,
-          },
-        });
-        createdTrail++;
-      } catch (err) {
-        if (
-          err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === "P2002"
-        ) {
-          skipped++;
-        } else throw err;
-      }
-    }
-  });
+  const res = await postTrailFromPreview({ agentId, actorId: me.id });
+  const a = res.perAgent[0];
 
   revalidatePath(`/admin/agents/${agentId}`);
-  const msg = `Posted ${createdTrail} trail row(s)${skipped ? `; ${skipped} skipped as duplicates` : ""}.`;
-  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(msg)}`);
+
+  if (a?.error) {
+    redirect(
+      `/admin/agents/${agentId}?error=${encodeURIComponent(`Posting failed: ${a.error}`)}`,
+    );
+  }
+
+  // Overlaps are refused, never silently inserted — a period that overlaps an
+  // already-posted one without matching it exactly would double-pay the agent.
+  // Surface it loudly; silence here is how that ships.
+  if (res.overlapConflicts > 0) {
+    const detail = (a?.overlaps ?? [])
+      .slice(0, 3)
+      .map((o) => `${o.candidate} overlaps posted ${o.existing}`)
+      .join("; ");
+    redirect(
+      `/admin/agents/${agentId}?error=${encodeURIComponent(
+        `Posted ${res.created} row(s), but REFUSED ${res.overlapConflicts} overlapping period(s) — these would double-pay. ${detail}. Check the term's trail frequency against what is already posted.`,
+      )}`,
+    );
+  }
+
+  const bits = [`Posted ${res.created} trail row(s) (BDT ${res.createdAmount.toFixed(2)})`];
+  if (res.duplicates) bits.push(`${res.duplicates} already posted`);
+  if (res.partialSkipped) bits.push(`${res.partialSkipped} still accruing`);
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(`${bits.join("; ")}.`)}`);
 }
 
 /**

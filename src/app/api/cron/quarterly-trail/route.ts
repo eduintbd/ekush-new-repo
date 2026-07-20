@@ -1,86 +1,29 @@
-// GET / POST /api/cron/quarterly-trail
-// Computes a `trail` CommissionRun row for every (agent, agent_investor)
-// whose term cadence is **quarterly**, for the requested quarter. Terms set
-// to monthly are paid by /api/cron/monthly-trail instead. Idempotent via the
-// (agent_investor_id, type, period_start, period_end) unique constraint.
+// GET / POST /api/cron/quarterly-trail — SUPERSEDED, intentionally a no-op.
 //
-// Auth: `Authorization: Bearer $CRON_SECRET` (Vercel Cron) or
-// `x-cron-secret: $CRON_SECRET` (manual / external scheduler).
+// /api/cron/monthly-trail now posts every completed period for BOTH cadences:
+// the preview flags the in-flight period `partial`, so a quarterly-cadence
+// term is left alone until its quarter closes and then posted by the next
+// monthly fire. Keeping this route live and computing the same rows would mean
+// two jobs racing on the identical row set four times a year.
 //
-// Quarter selection:
-//   - GET with no params → just-completed calendar quarter (intended use
-//     when Vercel Cron fires on the 1st of Apr/Jul/Oct/Jan).
-//   - POST `{ quarterStart, quarterEnd }` body or GET query params → explicit.
-//
-// Schedule: 03:00 UTC on the 1st of each quarter via vercel.json.
+// The route is kept (rather than deleted) so any external scheduler still
+// pointing here gets a 200 with an explanation instead of a 404. It has been
+// removed from vercel.json.
 
 import { NextResponse, type NextRequest } from "next/server";
-import { runTrail } from "@/lib/run-trail";
-import { authoriseCron, lastCompletedQuarter, todayUtc } from "@/lib/cron-auth";
+import { authoriseCron } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-async function resolveQuarter(
-  req: NextRequest,
-): Promise<{ qStart: Date; qEnd: Date; quarterStart: string; quarterEnd: string }> {
-  if (req.method === "POST") {
-    const body = (await req.json().catch(() => ({}))) as {
-      quarterStart?: string;
-      quarterEnd?: string;
-    };
-    if (body.quarterStart && body.quarterEnd) {
-      return {
-        qStart: new Date(`${body.quarterStart}T00:00:00Z`),
-        qEnd: new Date(`${body.quarterEnd}T00:00:00Z`),
-        quarterStart: body.quarterStart,
-        quarterEnd: body.quarterEnd,
-      };
-    }
-  }
-  const url = new URL(req.url);
-  const qs = url.searchParams.get("quarterStart");
-  const qe = url.searchParams.get("quarterEnd");
-  if (qs && qe) {
-    return {
-      qStart: new Date(`${qs}T00:00:00Z`),
-      qEnd: new Date(`${qe}T00:00:00Z`),
-      quarterStart: qs,
-      quarterEnd: qe,
-    };
-  }
-  const q = lastCompletedQuarter(todayUtc());
-  return {
-    qStart: q.start,
-    qEnd: q.endInclusive,
-    quarterStart: q.start.toISOString().slice(0, 10),
-    quarterEnd: q.endInclusive.toISOString().slice(0, 10),
-  };
-}
-
-async function handle(req: NextRequest) {
+function handle(req: NextRequest) {
   if (!authoriseCron(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const { qStart, qEnd, quarterStart, quarterEnd } = await resolveQuarter(req);
-
-  const result = await runTrail(qStart, qEnd, "quarterly");
-
-  console.log(
-    JSON.stringify({
-      event: "commission.run",
-      type: "quarterly-trail",
-      quarterStart,
-      quarterEnd,
-      ...result,
-      at: new Date().toISOString(),
-    }),
-  );
-
   return NextResponse.json({
-    created: result.created,
-    skipped: result.skipped,
-    quarter: { quarterStart, quarterEnd },
+    ok: true,
+    posted: 0,
+    note: "Superseded by /api/cron/monthly-trail, which posts every completed period for both monthly and quarterly cadences. Nothing to do here.",
   });
 }
 
