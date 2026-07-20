@@ -1,11 +1,8 @@
-// / — public landing for x.ekushwml.com. Same staff use BOTH Ekush
-// Portal (investor management, portal.ekushwml.com) AND X-System (this
-// app — back-office accounting + agent commissions). Show both options
-// so users can pick where they're going. Same credentials work on either.
+// / — public landing for x.ekushwml.com (X-System: back-office accounting
+// + agent commissions). Ekush Portal is reached directly at
+// portal.ekushwml.com/staff-login, so it is not linked from here.
 
 import Link from "next/link";
-
-const PORTAL_URL = process.env.NEXT_PUBLIC_EKUSH_PORTAL_URL ?? "https://portal.ekushwml.com";
 
 export default function Home() {
   return (
@@ -19,36 +16,12 @@ export default function Home() {
             Internal systems
           </h1>
           <p className="mt-4 text-base leading-7 text-zinc-600 dark:text-zinc-400">
-            Pick the system you're signing in to. Your email + password is the same
-            on both — each subdomain holds its own session, so you'll sign in once
-            per system.
+            Sign in to X-System below. This subdomain holds its own session,
+            separate from any other Ekush system you use.
           </p>
         </div>
 
-        {/* Top-level: the two systems */}
-        <div className="grid gap-4 sm:grid-cols-2">
-          {/* Ekush Portal (external) */}
-          <a
-            href={`${PORTAL_URL}/login`}
-            className="group rounded-lg border border-zinc-200 bg-white p-6 transition-colors hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:hover:bg-zinc-800"
-          >
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-400">
-              External · portal.ekushwml.com
-            </p>
-            <p className="mt-2 text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-              Ekush Portal
-              <span className="ml-1 text-zinc-400 group-hover:text-zinc-700 dark:group-hover:text-zinc-300">
-                ↗
-              </span>
-            </p>
-            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              Investor management, fund uploads, daily NAV, KYC, content / CMS.
-            </p>
-            <p className="mt-4 text-xs text-zinc-500">
-              For portal SUPER_ADMIN / ADMIN / CHECKER / MAKER roles.
-            </p>
-          </a>
-
+        <div className="grid gap-4">
           {/* X-System (internal — this app) */}
           <Link
             href="/login"

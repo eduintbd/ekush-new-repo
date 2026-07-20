@@ -65,7 +65,15 @@ export interface KycUploadResult {
  */
 export async function uploadKycFile(
   file: File,
-  opts: { investorId: string; docType: string },
+  opts: {
+    /** Owner the file is filed under — an investor id, or an agent id when pathPrefix is "agents". */
+    investorId: string;
+    docType: string;
+    /** Storage folder. Defaults to "kyc" (investor KYC); selling-agent profile docs pass "agents". */
+    pathPrefix?: string;
+    /** Which docTypes may legitimately be a PDF. Defaults to the investor KYC set. */
+    pdfAllowedKinds?: ReadonlySet<string>;
+  },
 ): Promise<KycUploadResult> {
   const buffer = Buffer.from(await file.arrayBuffer());
   if (buffer.length === 0) throw new KycUploadError(400, "File is empty.");
@@ -89,8 +97,9 @@ export async function uploadKycFile(
     throw new KycUploadError(413, `File is too large (${(buffer.length / 1024 / 1024).toFixed(1)} MB). Max ${cap / 1024 / 1024} MB.`);
   }
 
-  if (isPdf && !PDF_ALLOWED_KYC_KINDS.has(opts.docType)) {
-    throw new KycUploadError(415, "PDF is only allowed for e-TIN, BO acknowledgement, NID scans and cheque leaf.");
+  const pdfAllowed = opts.pdfAllowedKinds ?? PDF_ALLOWED_KYC_KINDS;
+  if (isPdf && !pdfAllowed.has(opts.docType)) {
+    throw new KycUploadError(415, "PDF is not allowed for this document — upload a JPEG / PNG / WEBP image.");
   }
 
   let outBuffer: Buffer;
@@ -111,7 +120,7 @@ export async function uploadKycFile(
     storedExt = "jpg";
   }
 
-  const key = `kyc/${opts.investorId}/${randomUUID()}.${storedExt}`;
+  const key = `${opts.pathPrefix ?? "kyc"}/${opts.investorId}/${randomUUID()}.${storedExt}`;
   const admin = createSupabaseAdminClient();
   if (!admin) throw new KycUploadError(500, "Storage is not configured on this deployment.");
   const { error } = await admin.storage.from(BUCKET).upload(key, outBuffer, {

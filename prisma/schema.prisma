@@ -692,6 +692,21 @@ model SellingAgent {
   createdAt  DateTime    @default(now()) @map("created_at")
   updatedAt  DateTime    @updatedAt @map("updated_at")
 
+  // ── Profile management (agent's own KYC-ish record) ──────────────
+  // Deliberately NO BO/Demat and NO family fields: the requirement
+  // excludes both (an agent is not an investor). Everything here is
+  // nullable — an agent is created from code + name + email alone and
+  // the profile is filled in afterwards.
+  title       String? // 'Mr.' / 'Ms.' / …
+  fatherName  String?   @map("father_name")
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+  address     String?
+  nidNumber   String?   @map("nid_number")
+  tinNumber   String?   @map("tin_number")
+  designation String? // e.g. 'Relationship Manager'
+  joinedOn    DateTime? @map("joined_on") @db.Date
+  notes       String?
+
   profile        Profile?            @relation("AgentProfile", fields: [userId], references: [id], onDelete: SetNull)
   terms             AgentTerm[]
   investors         AgentInvestor[]
@@ -700,8 +715,75 @@ model SellingAgent {
   journals          Journal[]
   upfrontWatermarks AgentUpfrontWatermark[]
   upfrontSuspensions AgentUpfrontSuspension[]
+  bankAccounts      AgentBankAccount[]
+  nominees          AgentNominee[]
+  documents         AgentDocument[]
 
   @@map("selling_agents")
+  @@schema("xsystem")
+}
+
+// Where an agent's commission is paid. Commissions are cash-settled to
+// the primary account, so exactly one row per agent carries
+// isPrimary = true (enforced in the action, not the DB, since Postgres
+// partial-unique needs raw SQL — see 03_agent_profile.sql).
+model AgentBankAccount {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId       String   @map("agent_id") @db.Uuid
+  bankName      String   @map("bank_name")
+  branchName    String?  @map("branch_name")
+  accountName   String?  @map("account_name")
+  accountNumber String   @map("account_number")
+  routingNumber String?  @map("routing_number")
+  isPrimary     Boolean  @default(false) @map("is_primary")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@map("agent_bank_accounts")
+  @@schema("xsystem")
+}
+
+model AgentNominee {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId      String   @map("agent_id") @db.Uuid
+  name         String
+  relationship String?
+  nidNumber    String?  @map("nid_number")
+  dateOfBirth  DateTime? @map("date_of_birth") @db.Date
+  address      String?
+  share        Decimal  @default(100) @db.Decimal(5, 2)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@map("agent_nominees")
+  @@schema("xsystem")
+}
+
+// Metadata only — the bytes live in the private `kyc-documents` bucket
+// under `agents/<agentId>/<uuid>`. Mirrors the portal's public.documents
+// shape so the two are mentally interchangeable. `type` is one of
+// AGENT_DOC_TYPES (src/lib/agent-documents.ts), kept as a String rather
+// than an enum so adding a doc kind needs no migration.
+model AgentDocument {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId      String   @map("agent_id") @db.Uuid
+  type         String
+  fileName     String   @map("file_name")
+  filePath     String   @map("file_path") // storage key
+  mimeType     String?  @map("mime_type")
+  uploadedBy   String?  @map("uploaded_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, type])
+  @@map("agent_documents")
   @@schema("xsystem")
 }
 
