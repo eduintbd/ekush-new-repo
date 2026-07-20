@@ -30,7 +30,14 @@ function isPublic(pathname: string): boolean {
     pathname === "/agent/set-password" ||
     pathname === "/agent/forgot-password" ||
     pathname.startsWith("/_next") ||
-    pathname.startsWith("/api/health")
+    pathname.startsWith("/api/health") ||
+    // Cron routes carry no Supabase session — Vercel Cron calls them with
+    // `Authorization: Bearer $CRON_SECRET`. Without this they were redirected
+    // to /login (307) before the handler ever ran, which is why NO scheduled
+    // job had ever executed: no trail, no upfront, no investor linking. They
+    // are not unprotected — every one of them gates on authoriseCron(), which
+    // fails closed when CRON_SECRET is unset.
+    pathname.startsWith("/api/cron/")
   );
 }
 
