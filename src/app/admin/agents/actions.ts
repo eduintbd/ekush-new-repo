@@ -163,6 +163,14 @@ export async function resendAgentInvite(id: string): Promise<void> {
   }
 
   // Backfill the Profile + link if approval predated this flow.
+  //
+  // The minted userId can differ from the stored one when an admin has
+  // changed the agent's email: the invite then targets a DIFFERENT auth
+  // user. Re-point the agent at it, otherwise the agent signs in fine
+  // (signInAgent only checks the Profile) but getAgentScope() looks the
+  // agent up by userId, finds nothing, and shows an empty dashboard.
+  const staleUserId = agent!.userId && agent!.userId !== invite.userId ? agent!.userId : null;
+
   await withActor(me.id, async (tx) => {
     await tx.profile.upsert({
       where: { id: invite.userId! },
@@ -173,12 +181,40 @@ export async function resendAgentInvite(id: string): Promise<void> {
         role: UserRole.selling_agent,
         isActive: true,
       },
-      update: {},
+      // Keep the Profile's email in step with the agent record, else the
+      // two disagree after an email change.
+      update: { email: agent!.email, isActive: true },
     });
-    if (!agent!.userId) {
+
+    if (agent!.userId !== invite.userId) {
       await tx.sellingAgent.update({ where: { id }, data: { userId: invite.userId! } });
     }
+
+    // Retire the previous login's selling-agent Profile. Without this the
+    // old address keeps agent access — which matters most in exactly the
+    // case that produces a stale id: the old auth user is shared with a
+    // portal investor, who would otherwise retain a way into /agent/*.
+    // Only the xsystem Profile is removed; the portal's own account
+    // (public.users) is untouched.
+    if (staleUserId) {
+      await tx.profile.deleteMany({ where: { id: staleUserId, role: UserRole.selling_agent } });
+    }
   });
+
+  // Best-effort: drop the namespaced role claim from the retired login so
+  // middleware stops routing it to /agent. Not security-critical
+  // (requireAgent re-checks the Profile, which is now gone), so a failure
+  // here must not fail the invite.
+  if (staleUserId) {
+    try {
+      const admin = createSupabaseAdminClient();
+      if (admin) {
+        await admin.auth.admin.updateUserById(staleUserId, { user_metadata: { xsystem_role: null } });
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   revalidatePath(`/admin/agents/${id}`);
   const note = invite.emailSent

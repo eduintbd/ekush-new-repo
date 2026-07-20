@@ -47,6 +47,9 @@ export default async function AgentProfilePage({
         bankAccounts: { orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] },
         nominees: { orderBy: { createdAt: "asc" } },
         documents: { orderBy: { createdAt: "desc" } },
+        // Their actual sign-in identity, which can drift from
+        // SellingAgent.email after an email edit.
+        profile: { select: { email: true } },
       },
     })
     .catch(() => null);
@@ -134,10 +137,21 @@ export default async function AgentProfilePage({
             </div>
           </div>
 
-          <p className="mt-3 text-xs text-zinc-500">
-            Changing the email here updates the agent record only — their sign-in address is
-            managed on the detail page via the invite flow.
-          </p>
+          {agent.userId ? (
+            <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+              <strong>Changing the email does not move their login by itself.</strong> This agent
+              already signs in as <code className="font-mono">{agent.profile?.email ?? "—"}</code>.
+              After saving a new email, go back to the agent and click{" "}
+              <strong>Resend invite</strong> — that provisions the new address, re-points the
+              agent to it, and revokes agent access from the old one. Until you do, they keep
+              signing in with the old address.
+            </p>
+          ) : (
+            <p className="mt-3 text-xs text-zinc-500">
+              This agent has no login yet — the email set here is the address that will be
+              invited when they are approved.
+            </p>
+          )}
 
           <button
             type="submit"
