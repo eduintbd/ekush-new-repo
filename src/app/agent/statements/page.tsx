@@ -1,10 +1,29 @@
-// /agent/statements — download investor statements as PDF. Pick one of the
-// agent's investors, choose a statement tab, then download per fund (or all
-// funds). No on-screen detail per the requirement — just the PDF.
+// /agent/statements — the investor's statements, shown to the agent who
+// sourced them in the SAME layout the investor sees at
+// portal.ekushwml.com/statements: orange header table, per-fund rows, a
+// totals row, and a Download PDF button per section.
+//
+// Previously this page rendered no data at all — just download buttons — so
+// an agent had to download a PDF to see anything. It now fetches and displays
+// each statement, matching the portal verbatim.
+//
+// Money basis matches the portal exactly: holdings are priced off the LIVE
+// nav_records value (via getInvestmentUpdateRows), not the fund_holdings
+// snapshot, whose totalMarketValue/totalUnrealizedGain freeze at the last
+// INVESTORS.xlsx upload and go stale the moment a newer NAV lands. Unrealised
+// gain is therefore derived as marketValue − costValue, as the portal does.
 
 import Link from "next/link";
-import { getAgentScope } from "@/lib/agent-scope";
+import { getAgentScope, agentOwnsCode } from "@/lib/agent-scope";
 import { fetchInvestorsForAgent } from "@/lib/ekush-web/client";
+import { getInvestorProfileByCode } from "@/lib/portal-investor";
+import {
+  getInvestmentUpdateRows,
+  getTransactionRows,
+  getDividendRows,
+  getTaxCertRows,
+} from "@/lib/portal-statements";
+import { formatBdt } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +34,19 @@ const TABS = [
   { key: "tax", label: "Tax Certificates" },
 ] as const;
 
+type TabKey = (typeof TABS)[number]["key"];
+
+const SECTION_TITLE: Record<TabKey, string> = {
+  portfolio: "Portfolio Statements",
+  transactions: "Transaction Statements",
+  dividends: "Dividend Statements",
+  tax: "Tax Certificates",
+};
+
+function ymd(d: Date | null | undefined): string {
+  return d ? new Date(d).toISOString().slice(0, 10) : "—";
+}
+
 export default async function AgentStatementsPage({
   searchParams,
 }: {
@@ -24,7 +56,6 @@ export default async function AgentStatementsPage({
   const sp = await searchParams;
   const sourced = await fetchInvestorsForAgent(scope.agentCode).catch(() => []);
 
-  // Group the agent's investors by code, collecting the funds each holds.
   const byCode = new Map<string, { name: string; funds: Set<string> }>();
   for (const s of sourced) {
     const e = byCode.get(s.investor_code) ?? { name: s.full_name, funds: new Set<string>() };
@@ -35,27 +66,35 @@ export default async function AgentStatementsPage({
     .map(([code, v]) => ({ code, name: v.name, funds: Array.from(v.funds).sort() }))
     .sort((a, b) => a.code.localeCompare(b.code));
 
-  const selectedCode = sp.code && byCode.has(sp.code) ? sp.code : undefined;
+  // Only ever render an investor this agent actually sourced.
+  const selectedCode =
+    sp.code && byCode.has(sp.code) && agentOwnsCode(scope, sp.code) ? sp.code : undefined;
   const selected = selectedCode ? investors.find((i) => i.code === selectedCode) : undefined;
-  const tab = TABS.find((t) => t.key === sp.tab)?.key ?? "portfolio";
+  const tab: TabKey = TABS.find((t) => t.key === sp.tab)?.key ?? "portfolio";
+
+  const investor = selectedCode ? await getInvestorProfileByCode(selectedCode) : null;
+
+  const holdings = investor && tab === "portfolio" ? await getInvestmentUpdateRows(investor.id) : [];
+  const txns = investor && tab === "transactions" ? await getTransactionRows(investor.id) : [];
+  const divs = investor && tab === "dividends" ? await getDividendRows(investor.id) : [];
+  const certs = investor && tab === "tax" ? await getTaxCertRows(investor.id) : [];
 
   return (
     <main className="min-h-screen bg-emerald-50/30 px-6 py-10 dark:bg-emerald-950/30">
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="mx-auto max-w-6xl space-y-6">
         <div className="text-xs uppercase tracking-widest text-zinc-500">
           <Link href="/agent" className="hover:text-zinc-700 dark:hover:text-zinc-300">← Dashboard</Link>
         </div>
         <div>
           <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">Statements</h1>
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            Download portfolio, transaction, dividend and tax-certificate PDFs for the
-            investors you sourced.
+            The same statements your investor sees in their own account.
           </p>
         </div>
 
         <div className="grid gap-6 sm:grid-cols-[220px_1fr]">
           {/* Investor picker */}
-          <aside className="rounded-lg border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-900">
+          <aside className="h-fit rounded-lg border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
               Investor ({investors.length})
             </p>
@@ -82,10 +121,11 @@ export default async function AgentStatementsPage({
             )}
           </aside>
 
-          {/* Statement tabs + downloads */}
-          <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <section>
             {!selected ? (
-              <p className="text-sm text-zinc-500">Select an investor to see their statements.</p>
+              <div className="rounded-lg border border-zinc-200 bg-white p-4 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
+                Select an investor to see their statements.
+              </div>
             ) : (
               <>
                 <div className="mb-4 flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
@@ -95,7 +135,7 @@ export default async function AgentStatementsPage({
                       href={`/agent/statements?code=${encodeURIComponent(selectedCode!)}&tab=${t.key}`}
                       className={`px-3 py-2 text-sm ${
                         t.key === tab
-                          ? "border-b-2 border-emerald-600 font-medium text-emerald-700 dark:text-emerald-400"
+                          ? "border-b-2 border-[#F27023] font-medium text-[#F27023]"
                           : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400"
                       }`}
                     >
@@ -104,17 +144,16 @@ export default async function AgentStatementsPage({
                   ))}
                 </div>
 
-                <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-400">
-                  {selectedCode} · {selected.name} — download the{" "}
-                  {TABS.find((t) => t.key === tab)!.label.toLowerCase()} PDF:
-                </p>
-
-                <div className="flex flex-wrap gap-2">
-                  <DownloadBtn code={selectedCode!} type={tab} label="All funds" />
-                  {selected.funds.map((f) => (
-                    <DownloadBtn key={f} code={selectedCode!} type={tab} fundCode={f} label={f} />
-                  ))}
-                </div>
+                <StatementCard
+                  title={SECTION_TITLE[tab]}
+                  subtitle={`${selectedCode} · ${selected.name}`}
+                  pdfHref={`/api/agent/statements?code=${encodeURIComponent(selectedCode!)}&type=${tab}`}
+                >
+                  {tab === "portfolio" && <PortfolioTable rows={holdings} />}
+                  {tab === "transactions" && <TransactionsTable rows={txns} />}
+                  {tab === "dividends" && <DividendsTable rows={divs} />}
+                  {tab === "tax" && <TaxTable rows={certs} />}
+                </StatementCard>
               </>
             )}
           </section>
@@ -124,28 +163,331 @@ export default async function AgentStatementsPage({
   );
 }
 
-function DownloadBtn({
-  code,
-  type,
-  fundCode,
-  label,
+/** Portal-style card: white, title left, orange Download PDF right. */
+function StatementCard({
+  title,
+  subtitle,
+  pdfHref,
+  children,
 }: {
-  code: string;
-  type: string;
-  fundCode?: string;
-  label: string;
+  title: string;
+  subtitle: string;
+  pdfHref: string;
+  children: React.ReactNode;
 }) {
-  const href = `/api/agent/statements?code=${encodeURIComponent(code)}&type=${type}${
-    fundCode ? `&fundCode=${encodeURIComponent(fundCode)}` : ""
-  }`;
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+    <div className="overflow-hidden rounded-[10px] border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+        <div>
+          <p className="text-[16px] font-semibold text-zinc-900 dark:text-zinc-50">{title}</p>
+          <p className="mt-0.5 text-xs text-zinc-500">{subtitle}</p>
+        </div>
+        <a
+          href={pdfHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="rounded-[5px] bg-[#F27023] px-4 py-2 text-[13px] font-medium text-white hover:bg-[#d9631d]"
+        >
+          ↓ Download PDF
+        </a>
+      </div>
+      <div className="overflow-x-auto">{children}</div>
+    </div>
+  );
+}
+
+function Th({ children, right = false }: { children: React.ReactNode; right?: boolean }) {
+  return (
+    <th
+      className={`whitespace-nowrap px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-white ${
+        right ? "text-right" : "text-left"
+      }`}
     >
-      ↓ {label} (PDF)
-    </a>
+      {children}
+    </th>
+  );
+}
+
+function Td({
+  children,
+  right = false,
+  strong = false,
+  tone,
+}: {
+  children: React.ReactNode;
+  right?: boolean;
+  strong?: boolean;
+  tone?: "gain" | "loss";
+}) {
+  const colour =
+    tone === "gain"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : tone === "loss"
+        ? "text-red-600 dark:text-red-400"
+        : "text-zinc-700 dark:text-zinc-300";
+  return (
+    <td
+      className={`whitespace-nowrap px-5 py-3 text-sm tabular-nums ${right ? "text-right" : ""} ${
+        strong ? "font-semibold" : ""
+      } ${colour}`}
+    >
+      {children}
+    </td>
+  );
+}
+
+/** Signed money cell — green for a gain, red for a loss, as the portal shows. */
+function Money({ n }: { n: number }) {
+  return <>{formatBdt(n)}</>;
+}
+
+function EmptyRow({ cols, what }: { cols: number; what: string }) {
+  return (
+    <tr>
+      <td colSpan={cols} className="px-5 py-8 text-center text-sm text-zinc-500">
+        No {what} to show.
+      </td>
+    </tr>
+  );
+}
+
+function PortfolioTable({
+  rows,
+}: {
+  rows: Array<{
+    fundCode: string;
+    costValue: number | string;
+    marketValue: number | string;
+    realizedGain: number | string;
+  }>;
+}) {
+  const r = rows.map((x) => ({
+    fundCode: x.fundCode,
+    cost: Number(x.costValue),
+    market: Number(x.marketValue),
+    realized: Number(x.realizedGain),
+    unrealized: Number(x.marketValue) - Number(x.costValue),
+  }));
+  const t = r.reduce(
+    (a, x) => ({
+      cost: a.cost + x.cost,
+      market: a.market + x.market,
+      realized: a.realized + x.realized,
+      unrealized: a.unrealized + x.unrealized,
+    }),
+    { cost: 0, market: 0, realized: 0, unrealized: 0 },
+  );
+
+  return (
+    <table className="min-w-full">
+      <thead className="bg-[#F27023]">
+        <tr>
+          <Th>Fund</Th>
+          <Th right>Cost Value</Th>
+          <Th right>Market Value</Th>
+          <Th right>Realized Gain</Th>
+          <Th right>Unrealized Gain</Th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        {r.length === 0 ? (
+          <EmptyRow cols={5} what="holdings" />
+        ) : (
+          r.map((x) => (
+            <tr key={x.fundCode}>
+              <Td strong>{x.fundCode}</Td>
+              <Td right><Money n={x.cost} /></Td>
+              <Td right><Money n={x.market} /></Td>
+              <Td right tone={x.realized >= 0 ? "gain" : "loss"}><Money n={x.realized} /></Td>
+              <Td right tone={x.unrealized >= 0 ? "gain" : "loss"}><Money n={x.unrealized} /></Td>
+            </tr>
+          ))
+        )}
+        {r.length > 0 && (
+          <tr className="bg-zinc-50 dark:bg-zinc-950">
+            <Td strong>Total</Td>
+            <Td right strong><Money n={t.cost} /></Td>
+            <Td right strong><Money n={t.market} /></Td>
+            <Td right strong tone={t.realized >= 0 ? "gain" : "loss"}><Money n={t.realized} /></Td>
+            <Td right strong tone={t.unrealized >= 0 ? "gain" : "loss"}><Money n={t.unrealized} /></Td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function TransactionsTable({
+  rows,
+}: {
+  rows: Array<{
+    fundCode: string;
+    orderDate: Date;
+    direction: string;
+    channel: string;
+    units: number | string;
+    nav: number | string;
+    amount: number | string;
+  }>;
+}) {
+  return (
+    <table className="min-w-full">
+      <thead className="bg-[#F27023]">
+        <tr>
+          <Th>Date</Th>
+          <Th>Fund</Th>
+          <Th>Type</Th>
+          <Th>Channel</Th>
+          <Th right>Units</Th>
+          <Th right>NAV</Th>
+          <Th right>Amount</Th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        {rows.length === 0 ? (
+          <EmptyRow cols={7} what="transactions" />
+        ) : (
+          rows.map((x, i) => (
+            <tr key={i}>
+              <Td>{ymd(x.orderDate)}</Td>
+              <Td strong>{x.fundCode}</Td>
+              <Td tone={x.direction === "BUY" ? "gain" : "loss"}>{x.direction}</Td>
+              <Td>{x.channel}</Td>
+              <Td right>{Number(x.units).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</Td>
+              <Td right>{Number(x.nav).toFixed(3)}</Td>
+              <Td right strong><Money n={Number(x.amount)} /></Td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function DividendsTable({
+  rows,
+}: {
+  rows: Array<{
+    fundCode: string;
+    accountingYear: string | null;
+    paymentDate: Date | null;
+    totalUnits: number | string;
+    dividendPerUnit: number | string;
+    grossDividend: number | string;
+    taxAmount: number | string;
+    netDividend: number | string;
+  }>;
+}) {
+  const total = rows.reduce(
+    (a, x) => ({
+      gross: a.gross + Number(x.grossDividend),
+      tax: a.tax + Number(x.taxAmount),
+      net: a.net + Number(x.netDividend),
+    }),
+    { gross: 0, tax: 0, net: 0 },
+  );
+  return (
+    <table className="min-w-full">
+      <thead className="bg-[#F27023]">
+        <tr>
+          <Th>Year</Th>
+          <Th>Fund</Th>
+          <Th>Paid on</Th>
+          <Th right>Units</Th>
+          <Th right>Per Unit</Th>
+          <Th right>Gross</Th>
+          <Th right>Tax</Th>
+          <Th right>Net</Th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        {rows.length === 0 ? (
+          <EmptyRow cols={8} what="dividends" />
+        ) : (
+          rows.map((x, i) => (
+            <tr key={i}>
+              <Td>{x.accountingYear ?? "—"}</Td>
+              <Td strong>{x.fundCode}</Td>
+              <Td>{ymd(x.paymentDate)}</Td>
+              <Td right>{Number(x.totalUnits).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</Td>
+              <Td right>{Number(x.dividendPerUnit).toFixed(4)}</Td>
+              <Td right><Money n={Number(x.grossDividend)} /></Td>
+              <Td right><Money n={Number(x.taxAmount)} /></Td>
+              <Td right strong tone="gain"><Money n={Number(x.netDividend)} /></Td>
+            </tr>
+          ))
+        )}
+        {rows.length > 0 && (
+          <tr className="bg-zinc-50 dark:bg-zinc-950">
+            <Td strong>Total</Td>
+            <Td>{""}</Td>
+            <Td>{""}</Td>
+            <Td>{""}</Td>
+            <Td>{""}</Td>
+            <Td right strong><Money n={total.gross} /></Td>
+            <Td right strong><Money n={total.tax} /></Td>
+            <Td right strong tone="gain"><Money n={total.net} /></Td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function TaxTable({
+  rows,
+}: {
+  rows: Array<{
+    fundCode: string;
+    periodStart: Date | null;
+    periodEnd: Date | null;
+    endingUnits: number | string;
+    endingCostValue: number | string;
+    endingMarketValue: number | string;
+    totalRealizedGain: number | string;
+    totalGrossDividend: number | string;
+    totalTax: number | string;
+    netInvestment: number | string;
+  }>;
+}) {
+  return (
+    <table className="min-w-full">
+      <thead className="bg-[#F27023]">
+        <tr>
+          <Th>Period</Th>
+          <Th>Fund</Th>
+          <Th right>Ending Units</Th>
+          <Th right>Cost Value</Th>
+          <Th right>Market Value</Th>
+          <Th right>Realized Gain</Th>
+          <Th right>Gross Dividend</Th>
+          <Th right>Tax</Th>
+          <Th right>Net Investment</Th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        {rows.length === 0 ? (
+          <EmptyRow cols={9} what="tax certificates" />
+        ) : (
+          rows.map((x, i) => (
+            <tr key={i}>
+              <Td>
+                {ymd(x.periodStart)} → {ymd(x.periodEnd)}
+              </Td>
+              <Td strong>{x.fundCode}</Td>
+              <Td right>{Number(x.endingUnits).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</Td>
+              <Td right><Money n={Number(x.endingCostValue)} /></Td>
+              <Td right><Money n={Number(x.endingMarketValue)} /></Td>
+              <Td right tone={Number(x.totalRealizedGain) >= 0 ? "gain" : "loss"}>
+                <Money n={Number(x.totalRealizedGain)} />
+              </Td>
+              <Td right><Money n={Number(x.totalGrossDividend)} /></Td>
+              <Td right><Money n={Number(x.totalTax)} /></Td>
+              <Td right strong><Money n={Number(x.netInvestment)} /></Td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
   );
 }
