@@ -21,8 +21,9 @@ import {
   getInvestmentUpdateRows,
   getTransactionRows,
   getDividendRows,
-  getTaxCertRows,
+  getTaxCertsFull,
 } from "@/lib/portal-statements";
+import { getIncomeYear, latestIncomeYearCerts, certHasActivity } from "@/lib/tax-cert-income-year";
 import { formatBdt } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -77,7 +78,14 @@ export default async function AgentStatementsPage({
   const holdings = investor && tab === "portfolio" ? await getInvestmentUpdateRows(investor.id) : [];
   const txns = investor && tab === "transactions" ? await getTransactionRows(investor.id) : [];
   const divs = investor && tab === "dividends" ? await getDividendRows(investor.id) : [];
-  const certs = investor && tab === "tax" ? await getTaxCertRows(investor.id) : [];
+
+  // Tax certificates: the portal shows the LATEST income year only, fund by
+  // fund, dropping all-zero certs — see apps/portal/(portal)/tax-certificate.
+  // Reproduced with the portal's own helpers so the two lists always agree.
+  const allCerts = investor && tab === "tax" ? await getTaxCertsFull(investor.id) : [];
+  const certs = latestIncomeYearCerts(
+    allCerts.map((c) => ({ ...c, periodEnd: c.periodEnd ? new Date(c.periodEnd) : null })),
+  ).filter((c) => certHasActivity(c as unknown as Record<string, unknown>));
 
   return (
     <main className="min-h-screen bg-emerald-50/30 px-6 py-10 dark:bg-emerald-950/30">
@@ -147,12 +155,18 @@ export default async function AgentStatementsPage({
                 <StatementCard
                   title={SECTION_TITLE[tab]}
                   subtitle={`${selectedCode} · ${selected.name}`}
-                  pdfHref={`/api/agent/statements?code=${encodeURIComponent(selectedCode!)}&type=${tab}`}
+                  // Tax certificates download per fund from their own row, the
+                  // way the portal does — there is no "all funds" certificate.
+                  pdfHref={
+                    tab === "tax"
+                      ? undefined
+                      : `/api/agent/statements?code=${encodeURIComponent(selectedCode!)}&type=${tab}`
+                  }
                 >
                   {tab === "portfolio" && <PortfolioTable rows={holdings} />}
                   {tab === "transactions" && <TransactionsTable rows={txns} />}
                   {tab === "dividends" && <DividendsTable rows={divs} />}
-                  {tab === "tax" && <TaxTable rows={certs} />}
+                  {tab === "tax" && <TaxCertificateList rows={certs} />}
                 </StatementCard>
               </>
             )}
@@ -172,7 +186,8 @@ function StatementCard({
 }: {
   title: string;
   subtitle: string;
-  pdfHref: string;
+  /** Omitted when the section downloads per row instead. */
+  pdfHref?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -182,14 +197,16 @@ function StatementCard({
           <p className="text-[16px] font-semibold text-zinc-900 dark:text-zinc-50">{title}</p>
           <p className="mt-0.5 text-xs text-zinc-500">{subtitle}</p>
         </div>
-        <a
-          href={pdfHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="rounded-[5px] bg-[#F27023] px-4 py-2 text-[13px] font-medium text-white hover:bg-[#d9631d]"
-        >
-          ↓ Download PDF
-        </a>
+        {pdfHref && (
+          <a
+            href={pdfHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-[5px] bg-[#F27023] px-4 py-2 text-[13px] font-medium text-white hover:bg-[#d9631d]"
+          >
+            ↓ Download PDF
+          </a>
+        )}
       </div>
       <div className="overflow-x-auto">{children}</div>
     </div>
@@ -434,56 +451,44 @@ function DividendsTable({
   );
 }
 
-function TaxTable({
+/**
+ * Mirrors portal.ekushwml.com/tax-certificate: one row per fund for the latest
+ * income year, each with its own Download button. The wide period/units/cost
+ * table this replaced was a financial summary, not a tax certificate — the
+ * real document is one fund, one income year, on AMC letterhead.
+ */
+function TaxCertificateList({
   rows,
 }: {
-  rows: Array<{
-    fundCode: string;
-    periodStart: Date | null;
-    periodEnd: Date | null;
-    endingUnits: number | string;
-    endingCostValue: number | string;
-    endingMarketValue: number | string;
-    totalRealizedGain: number | string;
-    totalGrossDividend: number | string;
-    totalTax: number | string;
-    netInvestment: number | string;
-  }>;
+  rows: Array<{ id: string; fundName: string; fundCode: string; periodEnd: Date | null }>;
 }) {
   return (
     <table className="min-w-full">
       <thead className="bg-[#F27023]">
         <tr>
-          <Th>Period</Th>
           <Th>Fund</Th>
-          <Th right>Ending Units</Th>
-          <Th right>Cost Value</Th>
-          <Th right>Market Value</Th>
-          <Th right>Realized Gain</Th>
-          <Th right>Gross Dividend</Th>
-          <Th right>Tax</Th>
-          <Th right>Net Investment</Th>
+          <Th>Income Year</Th>
+          <Th right>{""}</Th>
         </tr>
       </thead>
       <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
         {rows.length === 0 ? (
-          <EmptyRow cols={9} what="tax certificates" />
+          <EmptyRow cols={3} what="tax certificates" />
         ) : (
-          rows.map((x, i) => (
-            <tr key={i}>
-              <Td>
-                {ymd(x.periodStart)} → {ymd(x.periodEnd)}
-              </Td>
-              <Td strong>{x.fundCode}</Td>
-              <Td right>{Number(x.endingUnits).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</Td>
-              <Td right><Money n={Number(x.endingCostValue)} /></Td>
-              <Td right><Money n={Number(x.endingMarketValue)} /></Td>
-              <Td right tone={Number(x.totalRealizedGain) >= 0 ? "gain" : "loss"}>
-                <Money n={Number(x.totalRealizedGain)} />
-              </Td>
-              <Td right><Money n={Number(x.totalGrossDividend)} /></Td>
-              <Td right><Money n={Number(x.totalTax)} /></Td>
-              <Td right strong><Money n={Number(x.netInvestment)} /></Td>
+          rows.map((c) => (
+            <tr key={c.id}>
+              <Td strong>{c.fundName}</Td>
+              <Td>{getIncomeYear(c.periodEnd ? new Date(c.periodEnd) : null)}</Td>
+              <td className="whitespace-nowrap px-5 py-3 text-right">
+                <a
+                  href={`/agent/tax-certificate?id=${encodeURIComponent(c.id)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block rounded-[5px] bg-[#F27023] px-4 py-2 text-[13px] font-medium text-white hover:bg-[#d9631d]"
+                >
+                  ↓ Download Tax Certificate
+                </a>
+              </td>
             </tr>
           ))
         )}

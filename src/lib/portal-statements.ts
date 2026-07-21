@@ -181,3 +181,80 @@ export async function getInvestmentUpdateRows(
     ...args,
   );
 }
+
+// ─── Tax certificates (full, for the printable certificate) ──────
+// getTaxCertRows above returns a summary for the on-screen table. This returns
+// everything `buildTaxCertificateBody` needs, mirroring the portal's print
+// page query (apps/portal/src/app/(print)/forms/tax-certificate/page.tsx):
+// the cert row joined to its fund and investor.
+
+export interface TaxCertFull {
+  id: string;
+  investorCode: string;
+  investorName: string;
+  jointApplicantName: string | null;
+  investorTitle: string | null;
+  investorType: string | null;
+  nidNumber: string | null;
+  tinNumber: string | null;
+  fundCode: string;
+  fundName: string;
+  periodStart: Date | null;
+  periodEnd: Date | null;
+  beginningCostValue: number;
+  endingCostValue: number;
+  beginningMarketValue: number;
+  endingMarketValue: number;
+  beginningUnrealizedGain: number;
+  endingUnrealizedGain: number;
+  totalRealizedGain: number;
+  totalAdditionAtCost: number;
+  totalRedemptionAtCost: number;
+  netInvestment: number;
+  totalGrossDividend: number;
+  totalTax: number;
+  totalNetDividend: number;
+  chalanNumber: string | null;
+  /** Stored as text in public.tax_certificates, not a date column. */
+  chalanDate: string | null;
+  dividendMethod: string | null;
+}
+
+const TAX_CERT_FULL_SELECT = `
+  SELECT tc.id,
+         i."investorCode", i.name AS "investorName", i."jointApplicantName",
+         i.title AS "investorTitle", i."investorType",
+         i."nidNumber", i."tinNumber",
+         f.code AS "fundCode", f.name AS "fundName",
+         tc."periodStart", tc."periodEnd",
+         tc."beginningCostValue", tc."endingCostValue",
+         tc."beginningMarketValue", tc."endingMarketValue",
+         tc."beginningUnrealizedGain", tc."endingUnrealizedGain",
+         tc."totalRealizedGain", tc."totalAdditionAtCost", tc."totalRedemptionAtCost",
+         tc."netInvestment", tc."totalGrossDividend", tc."totalTax", tc."totalNetDividend",
+         tc."chalanNumber", tc."chalanDate", tc."dividendMethod"
+    FROM public.tax_certificates tc
+    JOIN public.funds f ON f.id = tc."fundId"
+    JOIN public.investors i ON i.id = tc."investorId"`;
+
+/** Every certificate for one investor, newest period first. */
+export async function getTaxCertsFull(investorId: string): Promise<TaxCertFull[]> {
+  return prisma.$queryRawUnsafe<TaxCertFull[]>(
+    `${TAX_CERT_FULL_SELECT}
+      WHERE tc."investorId" = $1
+      ORDER BY tc."periodEnd" DESC NULLS LAST, f.code`,
+    investorId,
+  );
+}
+
+/**
+ * One certificate by id, WITH its investor code so the caller can check the
+ * requesting agent actually sourced that investor before rendering it.
+ */
+export async function getTaxCertById(certId: string): Promise<TaxCertFull | null> {
+  const rows = await prisma.$queryRawUnsafe<TaxCertFull[]>(
+    `${TAX_CERT_FULL_SELECT} WHERE tc.id = $1 LIMIT 1`,
+    certId,
+  );
+  return rows[0] ?? null;
+}
