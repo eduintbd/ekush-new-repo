@@ -187,7 +187,7 @@ function buildTrailSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
   }
 
   for (const r of p.trailRows) {
-    s.addRow({
+    const row = s.addRow({
       inv: r.investorCode,
       fund: r.fundCode,
       qLabel: r.qLabel,
@@ -199,9 +199,21 @@ function buildTrailSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
       avgu: r.avgUnits,
       avgnav: r.avgNav,
       avgv: r.avgValue,
-      trail: r.trail,
       notes: r.partial ? `Partial quarter — cut off at ${p.asOf.toISOString().slice(0, 10)}` : "",
     });
+
+    // Trail commission (column L) is a LIVE FORMULA, like the upfront column on
+    // the Transactions sheet: an agent can click it and see
+    // = Avg held value × period rate (K × G) in the formula bar.
+    //
+    // Only L is a formula. "Avg held value" (K) is deliberately left as the
+    // engine's own figure and NOT `=I*J`, because it is the average of
+    // (units × NAV) across each NAV date — which is not the same as
+    // (average units) × (average NAV) once units change mid-period. Writing
+    // K as a formula would silently disagree with what is actually paid.
+    // G = period rate, K = avg held value, L = this column.
+    const n = row.number;
+    row.getCell("trail").value = { formula: `K${n}*G${n}`, result: r.trail };
   }
 }
 
