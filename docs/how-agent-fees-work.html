@@ -1,0 +1,444 @@
+<style>
+  :root {
+    --paper:   #FBF8F3;
+    --card:    #FFFFFF;
+    --ink:     #2A2018;
+    --ink-soft:#6E6055;
+    --accent:  #E1670F;   /* Ekush orange */
+    --accent-deep:#B9500A;
+    --accent-wash:#FBE7D5;
+    --water:   #2E7DA6;   /* the "money in the glass" */
+    --water-wash:#DCECF4;
+    --money:   #1E8A5B;   /* you earn */
+    --money-wash:#DCEFE4;
+    --line:    #EBE2D6;
+    --hair:    #E3D9CB;
+    --shadow:  0 1px 2px rgba(60,40,20,.05), 0 8px 24px rgba(60,40,20,.06);
+    --radius:  16px;
+    --maxread: 40rem;
+    --font: ui-rounded, "SF Pro Rounded", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:#161210; --card:#211B15; --ink:#F4ECE1; --ink-soft:#B4A797;
+      --accent:#F98C42; --accent-deep:#FFB072; --accent-wash:#33210F;
+      --water:#5FB0D6; --water-wash:#173038; --money:#54C08A; --money-wash:#173229;
+      --line:#2C261E; --hair:#332B22;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 28px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#FBF8F3; --card:#FFFFFF; --ink:#2A2018; --ink-soft:#6E6055;
+    --accent:#E1670F; --accent-deep:#B9500A; --accent-wash:#FBE7D5;
+    --water:#2E7DA6; --water-wash:#DCECF4; --money:#1E8A5B; --money-wash:#DCEFE4;
+    --line:#EBE2D6; --hair:#E3D9CB; --shadow:0 1px 2px rgba(60,40,20,.05),0 8px 24px rgba(60,40,20,.06);
+  }
+  :root[data-theme="dark"] {
+    --paper:#161210; --card:#211B15; --ink:#F4ECE1; --ink-soft:#B4A797;
+    --accent:#F98C42; --accent-deep:#FFB072; --accent-wash:#33210F;
+    --water:#5FB0D6; --water-wash:#173038; --money:#54C08A; --money-wash:#173229;
+    --line:#2C261E; --hair:#332B22; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 28px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; }
+  .wrap {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    padding: clamp(20px, 5vw, 56px) 20px 80px;
+  }
+  .doc { max-width: 52rem; margin: 0 auto; }
+  .read { max-width: var(--maxread); }
+
+  h1, h2, h3 { font-family: var(--font); line-height: 1.15; text-wrap: balance; letter-spacing: -.01em; }
+  h1 { font-size: clamp(2rem, 5vw, 2.9rem); font-weight: 800; margin: 0; }
+  h2 { font-size: 1.5rem; font-weight: 800; margin: 2.8em 0 .2em; }
+  h3 { font-size: 1.12rem; font-weight: 700; margin: 0; }
+  p { margin: .7em 0; }
+  strong { font-weight: 700; }
+  .eyebrow {
+    font-family: var(--font-body); font-size: .74rem; font-weight: 700;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--accent);
+    margin: 0 0 .5em;
+  }
+  .lede { font-size: 1.15rem; color: var(--ink-soft); max-width: var(--maxread); }
+
+  /* ── masthead ── */
+  .mast {
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 22px; margin-bottom: 8px;
+    display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .mark {
+    width: 40px; height: 40px; border-radius: 10px; flex: none;
+    background: var(--accent); color: #fff; display: grid; place-items: center;
+    font-family: var(--font); font-weight: 800; font-size: 1.15rem;
+  }
+  .brand .name { font-family: var(--font); font-weight: 800; font-size: 1.05rem; letter-spacing: -.01em; }
+  .brand .sub { font-size: .8rem; color: var(--ink-soft); }
+  .printbtn {
+    font: inherit; font-size: .85rem; font-weight: 600;
+    color: var(--accent-deep); background: var(--accent-wash);
+    border: 1px solid transparent; border-radius: 999px; padding: 8px 16px; cursor: pointer;
+    transition: background .15s;
+  }
+  .printbtn:hover { background: var(--accent); color: #fff; }
+  .printbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── generic cards ── */
+  .card {
+    background: var(--card); border: 1px solid var(--hair); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: clamp(18px, 3vw, 26px);
+  }
+  .stack > * + * { margin-top: 18px; }
+
+  /* ── two-fee summary ── */
+  .fees { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+  .fee { border-radius: var(--radius); padding: 20px; border: 1px solid var(--hair); background: var(--card); }
+  .fee.up   { border-top: 4px solid var(--money); }
+  .fee.tr   { border-top: 4px solid var(--water); }
+  .fee h3 { display: flex; align-items: center; gap: 8px; }
+  .fee .tag { font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+              padding: 2px 8px; border-radius: 999px; }
+  .fee.up .tag { background: var(--money-wash); color: var(--money); }
+  .fee.tr .tag { background: var(--water-wash); color: var(--water); }
+  .fee p { margin: .5em 0 0; font-size: .96rem; color: var(--ink-soft); }
+  .fee .big { font-family: var(--font); font-weight: 800; color: var(--ink); font-size: 1rem; }
+
+  /* ── rate table ── */
+  .tablewrap { overflow-x: auto; margin-top: 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+  thead th { font-family: var(--font-body); font-size: .74rem; letter-spacing: .08em; text-transform: uppercase;
+             color: var(--ink-soft); font-weight: 700; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:last-child td { border-bottom: none; }
+  .rate { font-weight: 700; color: var(--accent-deep); font-variant-numeric: tabular-nums; }
+  .fundtag { font-family: var(--font); font-weight: 800; }
+
+  .callout {
+    border-left: 4px solid var(--accent); background: var(--accent-wash);
+    border-radius: 0 12px 12px 0; padding: 14px 18px; margin-top: 18px; font-size: .95rem;
+  }
+  .callout.soft { border-left-color: var(--ink-soft); background: color-mix(in srgb, var(--ink-soft) 8%, transparent); }
+
+  /* ── example cards ── */
+  .ex { margin-top: 22px; break-inside: avoid; }
+  .ex-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px; }
+  .chip {
+    flex: none; font-family: var(--font); font-weight: 800; font-size: .95rem;
+    width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+    background: var(--ink); color: var(--paper);
+  }
+  .ex-head h3 { margin: 0; align-self: center; }
+
+  /* ── the level bar (the thesis) ── */
+  .level { margin: 16px 0 6px; }
+  .track {
+    position: relative; height: 30px; border-radius: 8px;
+    background: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 100%) , var(--water-wash);
+    background-size: 25% 100%, 100% 100%;
+    border: 1px solid var(--hair); overflow: hidden;
+  }
+  .fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 7px 0 0 7px; }
+  .fill.water { background: var(--water); opacity: .85; }
+  .fill.new   { background: var(--money); border-radius: 0; }
+  .mark {
+    position: absolute; top: -6px; bottom: -6px; width: 0;
+    border-left: 2px dashed var(--accent);
+  }
+  .mark::after {
+    content: attr(data-label); position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
+    white-space: nowrap; font-size: .68rem; font-weight: 700; color: var(--accent-deep);
+    font-variant-numeric: tabular-nums;
+  }
+  .level-cap { display: flex; justify-content: space-between; gap: 12px; font-size: .82rem;
+               color: var(--ink-soft); margin-top: 10px; font-variant-numeric: tabular-nums; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: baseline; margin-right: 5px; }
+  .sw-water { background: var(--water); }
+  .sw-new { background: var(--money); }
+
+  .earn {
+    display: inline-flex; align-items: center; gap: 8px; margin-top: 6px;
+    background: var(--money-wash); color: var(--money); font-weight: 700;
+    padding: 8px 14px; border-radius: 999px; font-size: .95rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .earn.zero { background: color-mix(in srgb, var(--ink-soft) 12%, transparent); color: var(--ink-soft); }
+  .oneline { margin-top: 12px; font-size: .95rem; }
+  .oneline b { color: var(--accent-deep); }
+
+  /* ── golden rules ── */
+  .rules { counter-reset: r; list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 12px; }
+  .rules li { position: relative; padding-left: 46px; font-size: 1rem; }
+  .rules li::before {
+    counter-increment: r; content: counter(r);
+    position: absolute; left: 0; top: -1px; width: 30px; height: 30px; border-radius: 9px;
+    background: var(--accent); color: #fff; font-family: var(--font); font-weight: 800;
+    display: grid; place-items: center; font-size: .95rem;
+  }
+
+  .foot { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line);
+          font-size: .86rem; color: var(--ink-soft); }
+  .foot p { margin: .5em 0; }
+
+  @media (max-width: 560px) {
+    .fees { grid-template-columns: 1fr; }
+    .wrap { font-size: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+  /* ── print / save-as-PDF ── */
+  @media print {
+    :root { --paper:#fff; --card:#fff; --ink:#1c1c1c; --ink-soft:#555; --hair:#ccc; --line:#ddd; --shadow:none; }
+    .wrap { padding: 0; font-size: 11.5pt; }
+    .no-print { display: none !important; }
+    .card, .fee, .ex { box-shadow: none; break-inside: avoid; }
+    h2 { break-after: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+
+<div class="wrap">
+<div class="doc">
+
+  <header class="mast">
+    <div class="brand">
+      <div class="mark">এ</div>
+      <div>
+        <div class="name">Ekush Wealth Management</div>
+        <div class="sub">Selling-agent commission — a simple guide</div>
+      </div>
+    </div>
+    <button class="printbtn no-print" onclick="window.print()">↓ Save as PDF / Print</button>
+  </header>
+
+  <p class="eyebrow" style="margin-top:26px">For our selling agents</p>
+  <h1>How your commission works</h1>
+  <p class="lede">Everything you earn, explained so simply a child could follow it. Keep this
+  handy for when an investor — or a new agent — asks, “so how do the fees actually work?”</p>
+
+  <!-- RATES -->
+  <h2>The rates (read this first)</h2>
+  <p class="read">Ekush has <strong>three funds</strong> in <strong>two groups</strong>. The
+  group decides the <strong>trail</strong> rate.</p>
+
+  <div class="card" style="margin-top:16px">
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Fund</th><th>Full name</th><th>Group</th></tr></thead>
+        <tbody>
+          <tr><td class="fundtag">EFUF</td><td>Ekush First Unit Fund</td><td>Equity</td></tr>
+          <tr><td class="fundtag">EGF</td><td>Ekush Growth Fund</td><td>Equity</td></tr>
+          <tr><td class="fundtag">ESRF</td><td>Ekush Stable Return Fund</td><td>Fixed income</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tablewrap" style="margin-top:22px">
+      <table>
+        <thead><tr>
+          <th>Your rates</th>
+          <th class="num">EFUF &amp; EGF <span style="font-weight:400;text-transform:none;letter-spacing:0">(equity)</span></th>
+          <th class="num">ESRF <span style="font-weight:400;text-transform:none;letter-spacing:0">(fixed income)</span></th>
+        </tr></thead>
+        <tbody>
+          <tr><td><strong>Upfront</strong> — one time, on new money</td><td class="num rate">0.10%</td><td class="num rate">0.10%</td></tr>
+          <tr><td><strong>Trail</strong> — every month, per year</td><td class="num rate">0.30%</td><td class="num rate">0.10%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin:14px 0 0;font-size:.92rem;color:var(--ink-soft)">
+      Reading a rate: <strong>0.10% means 1 taka for every 1,000 taka.</strong>
+      Trail is paid <strong>monthly</strong>, so we take the yearly rate and divide by 12.</p>
+  </div>
+
+  <div class="callout">
+    ⚠️ <strong>These are your rates.</strong> They are set in your Selling Agent Agreement and
+    shown on your dashboard. If a number here is ever different from your dashboard, your
+    dashboard and the office record are the real ones — always ask the office.
+  </div>
+
+  <!-- TWO FEES -->
+  <h2>Two kinds of fee — the whole idea</h2>
+  <p class="read">You earn <strong>two</strong> different fees. They are not the same thing.</p>
+  <div class="fees">
+    <div class="fee up">
+      <h3>Upfront <span class="tag">one time</span></h3>
+      <p><span class="big">A thank-you for bringing new money in.</span> Paid once, only when
+      the investor puts in money that pushes their total <em>higher than ever before</em>.</p>
+    </div>
+    <div class="fee tr">
+      <h3>Trail <span class="tag">every month</span></h3>
+      <p><span class="big">A thank-you for keeping it with us.</span> A tiny slice of what the
+      investor is holding, paid again and again, month after month, while they stay.</p>
+    </div>
+  </div>
+
+  <!-- WATER LINE -->
+  <h2>The one picture to remember 💧</h2>
+  <p class="read">Imagine your investor’s money is <strong>water in a glass</strong>. On the wall
+  behind it we draw a <strong>line</strong> at the <strong>highest the water has ever reached</strong>.</p>
+
+  <div class="card stack" style="margin-top:16px">
+    <div style="display:grid;gap:10px">
+      <div><span class="swatch sw-water"></span><strong>The water</strong> = how much the investor has with you right now (all three funds added together).</div>
+      <div>🖊️ <strong>The line only ever goes UP. It never comes down</strong>, even when they take money out.</div>
+      <div><span class="swatch sw-new"></span>💰 <strong>You earn upfront only when the water rises ABOVE the line</strong> — a brand-new record.</div>
+    </div>
+    <div class="callout soft" style="margin-top:4px">
+      The posh name for this line is a <strong>“high-water mark.”</strong> That’s all it means:
+      the highest point ever reached. And the big rule — <strong>we count all three funds as one
+      glass</strong>, so the same money can never earn upfront twice.
+    </div>
+  </div>
+
+  <p class="read" style="margin-top:22px">Let’s follow one investor, <strong>Mr. Rahim</strong>,
+  whom <strong>you</strong> brought to Ekush. Watch the blue water and the orange line in every step.</p>
+
+  <!-- START -->
+  <div class="ex card">
+    <div class="ex-head"><span class="chip" style="background:var(--money)">★</span><h3>He starts: puts 1,00,000 into EFUF</h3></div>
+    <p>All of it is brand-new money, so the water rises from empty all the way to a new record.</p>
+    <div class="level">
+      <div class="track">
+        <div class="fill new" style="left:0;width:66.7%;border-radius:7px 0 0 7px"></div>
+        <div class="mark" data-label="line → 1,00,000" style="left:66.7%"></div>
+      </div>
+      <div class="level-cap"><span><span class="swatch sw-new"></span>new money 1,00,000</span><span>scale: 0 – 1,50,000</span></div>
+    </div>
+    <span class="earn">💰 You earn 1,00,000 × 0.10% = 100 taka</span>
+    <p class="oneline">The line now sits at <b>1,00,000</b>. Remember that number.</p>
+  </div>
+
+  <!-- 1: FULL WITHDRAWAL -->
+  <div class="ex card">
+    <div class="ex-head"><span class="chip">1</span><h3>Rahim withdraws the FULL amount</h3></div>
+    <p>He takes out all 1,00,000. The glass is empty — but the line stays where it was.</p>
+    <div class="level">
+      <div class="track">
+        <div class="mark" data-label="line stays 1,00,000" style="left:66.7%"></div>
+      </div>
+      <div class="level-cap"><span>water now 0</span><span>line unchanged</span></div>
+    </div>
+    <span class="earn zero">No new upfront — nothing went above the line</span>
+    <p class="oneline">You <b>keep</b> the 100 you already earned. But <b>trail stops</b> — there
+    are no units left to pay a monthly slice on.</p>
+    <p class="oneline"><b>In one line:</b> taking money out never claws back upfront you already
+    earned; it only stops future trail.</p>
+  </div>
+
+  <!-- 2: PARTIAL -->
+  <div class="ex card">
+    <div class="ex-head"><span class="chip">2</span><h3>Rahim withdraws only PART</h3></div>
+    <p>He takes out 40,000 and leaves 60,000. The water drops; the line does not.</p>
+    <div class="level">
+      <div class="track">
+        <div class="fill water" style="width:40%"></div>
+        <div class="mark" data-label="line stays 1,00,000" style="left:66.7%"></div>
+      </div>
+      <div class="level-cap"><span><span class="swatch sw-water"></span>water now 60,000</span><span>gap to the line: 40,000</span></div>
+    </div>
+    <span class="earn zero">No new upfront</span>
+    <p class="oneline">If he later puts money back, he must climb <b>above 1,00,000</b> before you
+    earn again — refilling the 40,000 gap earns nothing. Trail now runs on the smaller 60,000, so
+    it shrinks.</p>
+    <p class="oneline"><b>In one line:</b> a partial withdrawal lowers the water but not the line,
+    so the refill earns nothing until it beats the old record.</p>
+  </div>
+
+  <!-- 3: SWITCH -->
+  <div class="ex card">
+    <div class="ex-head"><span class="chip">3</span><h3>Rahim SWITCHES funds (the key one)</h3></div>
+    <p>He moves his 60,000 out of EFUF and puts the same 60,000 into EGF — same day, no new money,
+    just a different fund. Because we count all funds as <strong>one glass</strong>, the total does
+    not change at all.</p>
+    <div class="level">
+      <div class="track">
+        <div class="fill water" style="width:40%"></div>
+        <div class="mark" data-label="line stays 1,00,000" style="left:66.7%"></div>
+      </div>
+      <div class="level-cap"><span><span class="swatch sw-water"></span>total still 60,000 (moved EFUF → EGF)</span><span>below the line</span></div>
+    </div>
+    <span class="earn zero">Upfront = 0 — the same money cannot earn twice</span>
+    <p class="oneline">In the old system each fund had its <em>own</em> line, so EGF’s line started
+    at 0 and this 60,000 looked “brand new” — paying you a second time on money that never left.
+    <b>That is now fixed.</b></p>
+    <p class="oneline"><b>In one line:</b> moving money between funds is not new money, so it earns
+    no upfront.</p>
+  </div>
+
+  <!-- 4: ADD TO DIFFERENT FUND -->
+  <div class="ex card">
+    <div class="ex-head"><span class="chip">4</span><h3>Rahim adds MORE, into a different fund</h3></div>
+    <p>He holds 60,000 in EGF and adds <strong>70,000 of new money</strong> into ESRF. Combined
+    total = 1,30,000 — a new record! Only the part <em>above the old line</em> counts as new.</p>
+    <div class="level">
+      <div class="track">
+        <div class="fill water" style="width:66.7%"></div>
+        <div class="fill new" style="left:66.7%;width:20%"></div>
+        <div class="mark" data-label="old line 1,00,000" style="left:66.7%"></div>
+        <div class="mark" data-label="new line 1,30,000" style="left:86.7%;border-color:var(--money)"></div>
+      </div>
+      <div class="level-cap">
+        <span><span class="swatch sw-water"></span>already counted 1,00,000 &nbsp; <span class="swatch sw-new"></span>new money 30,000</span>
+        <span>total 1,30,000</span>
+      </div>
+    </div>
+    <span class="earn">💰 You earn 30,000 × 0.10% = 30 taka</span>
+    <p class="oneline">He added 70,000 but you earn on only <b>30,000</b> — the other 40,000 just
+    refilled the space below the old line. Only the part that set a <b>new high</b> counts. We use
+    the rate of the fund the new money went into (ESRF). The line moves up to <b>1,30,000</b>.</p>
+    <p class="oneline"><b>In one line:</b> adding money counts as new only for the part that beats
+    the old record — measured across all funds together.</p>
+  </div>
+
+  <!-- 5: TRAIL -->
+  <div class="ex card">
+    <div class="ex-head"><span class="chip" style="background:var(--water)">5</span><h3>How TRAIL is worked out</h3></div>
+    <p>Trail is the <strong>other</strong> fee — the small <strong>monthly</strong> one. It has
+    nothing to do with the line. It is simply a tiny slice of what Rahim holds, <strong>every
+    month, in each fund at that fund’s own rate</strong>. Rahim now holds two funds:</p>
+    <div class="tablewrap" style="margin-top:14px">
+      <table>
+        <thead><tr><th>Fund</th><th class="num">Held</th><th class="num">Monthly rate (yearly ÷ 12)</th><th class="num">This month’s trail</th></tr></thead>
+        <tbody>
+          <tr><td><span class="fundtag">EGF</span> (equity)</td><td class="num">60,000</td><td class="num">0.30% ÷ 12 = 0.025%</td><td class="num rate">≈ 15 taka</td></tr>
+          <tr><td><span class="fundtag">ESRF</span> (fixed)</td><td class="num">70,000</td><td class="num">0.10% ÷ 12 = 0.0083%</td><td class="num rate">≈ 6 taka</td></tr>
+          <tr><td colspan="3"><strong>Total this month</strong></td><td class="num rate"><strong>≈ 21 taka</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="oneline" style="margin-top:14px">You earn about that <b>every single month</b>, just
+    for Rahim staying invested. If he <b>adds more</b>, next month’s trail grows; if he
+    <b>withdraws</b>, it shrinks; if he <b>fully exits</b>, it stops. (We use the <em>average</em>
+    value across the month, so the number is fair even as the NAV moves up and down.)</p>
+    <p class="oneline"><b>In one line:</b> trail is a small monthly thank-you on what he holds in
+    each fund, at each fund’s rate — it rises and falls with his balance.</p>
+  </div>
+
+  <!-- GOLDEN RULES -->
+  <h2>The five golden rules ✋</h2>
+  <ol class="rules">
+    <li><strong>The line only goes up.</strong> You earn upfront only at a brand-new high, counting all three funds together.</li>
+    <li><strong>Taking money out never claws back upfront</strong> you already earned — but it lowers future trail.</li>
+    <li><strong>Refilling below the old line earns nothing</strong> until it beats the record.</li>
+    <li><strong>Switching funds is not new money</strong> → no upfront. Only genuinely new money that sets a new high pays.</li>
+    <li><strong>Trail is the monthly thank-you</strong> on whatever they hold — bigger balance, bigger trail; it stops on full exit.</li>
+  </ol>
+
+  <div class="foot">
+    <p><strong>A couple of extra notes.</strong> Reinvested dividends (CIP) are the investor’s own
+    money coming back, not money you brought — so they do <em>not</em> raise the line and do not
+    earn upfront. Direct subscriptions (money put in without you) earn no agent commission.</p>
+    <p>Everything on your dashboard is a live estimate; the office confirms the real amount when it
+    runs the monthly commission. Your exact rates and terms are in your Selling Agent Agreement —
+    the office record is always the final word.</p>
+  </div>
+
+</div>
+</div>

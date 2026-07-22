@@ -156,6 +156,7 @@ export default async function DashboardPage() {
         {isAdminOrChecker && (
           <Section title="Selling Agents" desc="Agent panel, commission terms, and approvals.">
             <NavCard href="/admin/agents" title="Selling Agents" desc="Approve, suspend, manage terms history." />
+            <NavCard href="/admin/marketing" title="Marketing Contents" desc="Upload flyers & brochures for agents to share." />
           </Section>
         )}
         {profile.role === "auditor" && (

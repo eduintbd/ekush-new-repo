@@ -787,6 +787,26 @@ model AgentDocument {
   @@schema("xsystem")
 }
 
+// Marketing material an admin uploads for ALL selling agents to download and
+// share with clients (brochures, one-pagers, fund flyers — jpg or pdf). Global,
+// not per-agent. Bytes live in the private `kyc-documents` bucket under
+// `marketing/<uuid>`; agents get a short-lived signed URL to download.
+model AgentMarketingContent {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title      String
+  category   String   @default("general")
+  fileName   String   @map("file_name")
+  filePath   String   @map("file_path") // storage key
+  mimeType   String?  @map("mime_type")
+  isActive   Boolean  @default(true) @map("is_active")
+  uploadedBy String?  @map("uploaded_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([isActive, createdAt])
+  @@map("agent_marketing_contents")
+  @@schema("xsystem")
+}
+
 enum FundCategory {
   equity
   fixed_income

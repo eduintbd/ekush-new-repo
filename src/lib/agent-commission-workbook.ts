@@ -117,8 +117,9 @@ function buildTxSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
     const rate =
       p.termsActive.find((tm) => tm.fundCategory === b.category)?.upfrontPct ?? 0;
     const isBuy = t.direction === "BUY";
-    const commission = isBuy && !b.isDirectSubscription ? t.amount * rate : 0;
-    s.addRow({
+    const earns = isBuy && !b.isDirectSubscription;
+    const commission = earns ? t.amount * rate : 0;
+    const row = s.addRow({
       date: t.date.toISOString().slice(0, 10),
       inv: t.investorCode,
       name: nameByInv.get(t.investorCode) ?? "",
@@ -130,9 +131,23 @@ function buildTxSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
       amount: t.amount,
       nav: t.nav ?? "",
       rate,
-      comm: Math.round(commission * 100) / 100,
-      notes: b.isDirectSubscription ? "Direct subscription — no commission" : "",
+      notes: b.isDirectSubscription
+        ? "Direct subscription — no commission"
+        : !isBuy
+          ? "Redemption — no upfront"
+          : "",
     });
+
+    // The Upfront-commission cell (column L) is a LIVE FORMULA, not a pasted
+    // number, so an agent can click it and see = Amount × Upfront % (I×K) in
+    // the formula bar and trust where the figure comes from. `result` is the
+    // cached value Excel shows before it recalculates. Redemptions and direct
+    // subscriptions earn nothing, so those cells are a literal 0.
+    // I = Amount, K = Upfront %, L = this column.
+    const r = row.number;
+    row.getCell("comm").value = earns
+      ? { formula: `I${r}*K${r}`, result: Math.round(commission * 100) / 100 }
+      : 0;
   }
 }
 
