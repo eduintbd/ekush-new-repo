@@ -835,22 +835,29 @@ function MethodologyPanel() {
 
       <div className="mt-4 space-y-4 text-sm">
         <Method
-          title="① Upfront commission — per-agent high-water-mark (per fund)"
+          title="① Upfront commission — per-agent high-water-mark, per INVESTOR (all funds combined)"
           formula={
-            "net_principal = Σ over the agent's investors in the fund of (BUY − SELL) cash\n" +
-            "watermark = running peak of net_principal (never falls when clients redeem)\n" +
-            "upfront = max(0, new_peak − stored_watermark) × upfront_pct"
+            "net_principal(investor) = Σ across ALL funds of (BUY − SELL) cash for that\n" +
+            "                          investor under this agent, EXCLUDING CIP reinvestment\n" +
+            "watermark(agent, investor) = running peak of net_principal (never falls on\n" +
+            "                             redemption or fund switch)\n" +
+            "increment = max(0, new_peak − stored_watermark)\n" +
+            "upfront   = increment × upfront_pct of the fund that RECEIVED the money"
           }
           example={
-            "Agent BR0000, EGF, upfront 0.10%. Day1 net 330,000 (peak) → upfront 0.10% × 330,000 = 330; watermark 330,000. " +
-            "Day2 clients redeem, net 180,000 → below peak → 0. Day3 net 310,000 → still below → 0. " +
-            "Day4 new purchases lift net to 450,000 (new peak) → upfront on 450,000 − 330,000 = 120,000 × 0.10% = 120; watermark → 450,000."
+            "Agent BI0000, investor A00123, sourced into ESRF (equity, 0.10%) with 500,000 → net principal 500,000 (peak) → upfront 0.10% × 500,000 = 500; watermark 500,000. " +
+            "The investor then redeems 200,000 from ESRF and purchases 250,000 into EFUF (fixed income, 0.15%). Combined net principal moves 500,000 → 300,000 → 550,000. " +
+            "The new high is 550,000, i.e. 50,000 above the watermark — and the money that set it went into EFUF, so EFUF's rate applies: 50,000 × 0.15% = 75; watermark → 550,000. " +
+            "The 200,000 that merely moved house earns nothing. Under the old per-fund model the same events paid on the whole 250,000 EFUF purchase while the ESRF watermark stayed put — paying the agent a second time on money that never left."
           }
           notes={[
-            "Per agent, per fund. The watermark ratchets up only; redemptions/NAV moves never reduce it and never earn upfront — only net-new principal above the prior peak does.",
+            "Per agent, per INVESTOR — one watermark spanning EGF, ESRF and EFUF together. Money moving between funds is not new money and earns nothing.",
+            "CIP dividend reinvestment is excluded from net principal — a reinvested dividend is not money the agent brought in, so it never lifts the watermark.",
+            "Rate attribution: the increment is charged at the category rate of the fund that received the money setting the new high. If two funds set the high in one evaluation, the increment splits and each part carries its own fund's rate — the Rate column then shows a blended figure; expand the row for the split.",
+            "The watermark ratchets up only; redemptions/NAV moves never reduce it and never earn upfront — only net-new principal above the prior peak does.",
             "Skipped if `is_direct_subscription = true` (clause 6.5 — no agent commission on direct subscriptions).",
-            "Evaluated monthly by `/api/cron/monthly-upfront` (1st of month); admin can post early with 'Post upfront now'. Posted as an agent-level CommissionRun (type=upfront, fund_code set, agent_investor_id null).",
-            "Month-end snapshot: a peak that comes and goes within the month isn't paid; a peak that persists to month-end is.",
+            "Evaluated monthly by `/api/cron/monthly-upfront` (1st of month); admin can post early with 'Post upfront now'. Posted as one CommissionRun per driving fund (type=upfront, fund_code = the fund whose rate applied, agent_investor_id set).",
+            "Changed 2026-07 from a per-(agent, fund) watermark. No upfront had been posted under the old model, so nothing is restated.",
           ]}
         />
 
@@ -1006,10 +1013,10 @@ function CommissionPreviewPanel({
           <form
             action={setAgentWatermark}
             className="flex items-center justify-end gap-1"
-            data-confirm={`Set ${w.fundCode} watermark to the entered value? Future upfront pays only on new money above it.`}
+            data-confirm={`Set ${w.investorCode}${w.investorName ? ` (${w.investorName})` : ""} watermark to the entered value? This is one figure covering ALL funds for this investor. Their current peak is ${formatBdt(Math.max(w.storedWatermark, w.peak))} — setting BELOW it pays out the difference on the next run; setting AT or ABOVE it pays nothing until they bring in more money.`}
           >
             <input type="hidden" name="agentId" value={agentId} />
-            <input type="hidden" name="fundCode" value={w.fundCode} />
+            <input type="hidden" name="investorCode" value={w.investorCode} />
             <input
               name="watermark"
               type="number"

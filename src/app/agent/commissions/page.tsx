@@ -43,8 +43,9 @@ export default async function AgentCommissionsPage() {
 
         {runs.length === 0 ? (
           <p className="mt-10 text-sm text-zinc-500">
-            No commission runs recorded yet. Upfront accrues on each new
-            sourced investor; trail accrues quarterly; clawbacks scan nightly.
+            No commission runs recorded yet. Upfront accrues when an investor&apos;s
+            principal with you reaches a new high; trail accrues each period and is
+            posted after it closes.
           </p>
         ) : (
           <div className="mt-6 overflow-x-auto rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">

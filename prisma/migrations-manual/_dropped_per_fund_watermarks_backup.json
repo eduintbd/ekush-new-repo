@@ -1,0 +1,32 @@
+[
+  {
+    "id": "d8dd53d2-915a-48e0-b6a5-01fb0d5128d2",
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "fund_code": "EFUF",
+    "watermark": "76434.34",
+    "through_date": "2026-06-12T00:00:00.000Z",
+    "created_at": "2026-06-12T07:57:32.270Z",
+    "updated_at": "2026-06-12T07:57:32.270Z",
+    "agent_code": "BR0000"
+  },
+  {
+    "id": "1ec1f8d9-8fd6-48f0-bd2f-1f31083f3326",
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "fund_code": "EGF",
+    "watermark": "146365.3",
+    "through_date": "2026-06-12T00:00:00.000Z",
+    "created_at": "2026-06-12T07:57:32.547Z",
+    "updated_at": "2026-06-12T07:57:32.547Z",
+    "agent_code": "BR0000"
+  },
+  {
+    "id": "85799a61-7d4e-4b1d-af52-64c45596b3a3",
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "fund_code": "ESRF",
+    "watermark": "155000",
+    "through_date": "2026-06-12T00:00:00.000Z",
+    "created_at": "2026-06-12T07:57:32.677Z",
+    "updated_at": "2026-06-12T07:57:32.677Z",
+    "agent_code": "BR0000"
+  }
+]

@@ -43,9 +43,9 @@ const COPY: Record<
 > = {
   admin: {
     entitlementHint:
-      "While suspended the monthly run pays no upfront (forfeit — no catch-up). At re-instatement, set each fund's watermark below so no back-dated upfront accrues.",
+      "While suspended the monthly run pays no upfront (forfeit — no catch-up). At re-instatement, set the watermark for each affected investor below so no back-dated upfront accrues.",
     watermarkCaption:
-      "Upfront = high-water-mark per fund. Paid only on net invested principal (Σ BUY−SELL) rising above the agent's prior peak; the peak never falls when clients redeem.",
+      "Upfront = high-water-mark per investor, across all three funds combined. Paid only on net invested principal (Σ BUY−SELL, excluding CIP reinvestment) rising above that investor's prior peak; the peak never falls when they redeem or switch funds. The rate applied is that of the fund the new money went into.",
     trailSummary: (n) => `Trail commission — quarter-by-quarter (${n} rows)`,
     footer: (
       <>
@@ -61,7 +61,7 @@ const COPY: Record<
     entitlementHint:
       "While upfront is suspended no upfront is paid for that period, and it is not paid later in arrears. Trail is unaffected.",
     watermarkCaption:
-      "Upfront is paid per fund on new money only — on the amount by which your invested principal rises above its previous peak. Redemptions do not lower that peak, so money that leaves and comes back does not earn upfront twice.",
+      "Upfront is paid on new money only — on the amount by which each investor's principal with you rises above its previous peak, counting all three funds together. Redemptions do not lower that peak, and money moved from one fund to another is not new money, so the same money never earns upfront twice. Dividends reinvested under CIP do not count as new money.",
     trailSummary: (n) => `Trail commission — period by period (${n} rows)`,
     footer: (
       <>
@@ -150,7 +150,7 @@ export function CommissionBreakdown({
         />
       </div>
 
-      {/* Per-fund high-water-mark */}
+      {/* Per-investor combined-fund high-water-mark */}
       {preview.upfrontWatermarks.length > 0 && (
         <div className="mt-4 overflow-x-auto rounded-md border border-zinc-200 dark:border-zinc-800">
           <table className="min-w-full divide-y divide-zinc-200 text-xs dark:divide-zinc-800">
@@ -159,47 +159,118 @@ export function CommissionBreakdown({
             </caption>
             <thead className="bg-zinc-50 text-left text-[10px] uppercase tracking-wider text-zinc-500 dark:bg-zinc-950">
               <tr>
-                <th className="py-1.5 pr-3 pl-3">Fund</th>
+                <th className="py-1.5 pr-3 pl-3">Investor</th>
                 <th className="py-1.5 pr-3 text-right">Net principal now</th>
                 <th className="py-1.5 pr-3 text-right">Watermark (peak)</th>
-                <th className="py-1.5 pr-3 text-right">Upfront %</th>
                 <th className="py-1.5 pr-3 text-right">Pending new money</th>
+                <th className="py-1.5 pr-3 text-right">Rate</th>
                 <th className="py-1.5 pr-3 text-right">Pending upfront</th>
                 {showRowAction && <th className="py-1.5 pr-3 text-right">Set watermark</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {preview.upfrontWatermarks.map((w) => (
-                <tr key={w.fundCode}>
-                  <td className="py-1.5 pr-3 pl-3 font-mono">{w.fundCode}</td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {formatBdt(w.currentNetPrincipal)}
-                  </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {formatBdt(Math.max(w.storedWatermark, w.peak))}
-                  </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {(w.upfrontPct * 100).toFixed(4)}%
-                  </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {!preview.upfrontEntitled ? (
-                      <span className="text-amber-700 dark:text-amber-300">forfeit</span>
-                    ) : w.pendingIncrement > 0 ? (
-                      formatBdt(w.pendingIncrement)
-                    ) : (
-                      "—"
+              {preview.upfrontWatermarks.map((w) => {
+                const drivingLeg =
+                  w.legs.find((l) => l.attributedIncrement > 0) ?? w.legs[0];
+                const rateCell = w.mixedRate
+                  ? `${(w.blendedPct * 100).toFixed(4)}% blended`
+                  : drivingLeg
+                    ? `${(drivingLeg.upfrontPct * 100).toFixed(4)}%`
+                    : "—";
+                return (
+                  <tr key={w.investorCode}>
+                    <td className="py-1.5 pr-3 pl-3">
+                      <details>
+                        <summary className="cursor-pointer list-none">
+                          <span className="font-mono">{w.investorCode}</span>
+                          {w.investorName && (
+                            <span className="ml-2 text-zinc-500">{w.investorName}</span>
+                          )}
+                          {w.unratedFunds.length > 0 && (
+                            <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-red-800 dark:bg-red-950 dark:text-red-300">
+                              no term: {w.unratedFunds.join(", ")}
+                            </span>
+                          )}
+                          {w.cipOffset > 0 && (
+                            <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-medium uppercase text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                              CIP excl {formatBdt(w.cipOffset)}
+                            </span>
+                          )}
+                        </summary>
+                        {/* Where the money actually sits, fund by fund. */}
+                        <table className="mt-1.5 ml-3 w-auto text-[10px]">
+                          <thead className="text-zinc-400">
+                            <tr>
+                              <th className="pr-3 text-left font-medium">Fund</th>
+                              <th className="pr-3 text-right font-medium">Net principal</th>
+                              <th className="pr-3 text-right font-medium">New money</th>
+                              <th className="pr-3 text-right font-medium">Rate</th>
+                              <th className="pr-3 text-right font-medium">Upfront</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {w.legs.map((leg) => (
+                              <tr key={leg.fundCode}>
+                                <td className="pr-3 font-mono">{leg.fundCode}</td>
+                                <td className="pr-3 text-right tabular-nums">
+                                  {formatBdt(leg.netPrincipal)}
+                                </td>
+                                <td className="pr-3 text-right tabular-nums">
+                                  {leg.attributedIncrement > 0 ? formatBdt(leg.attributedIncrement) : "—"}
+                                </td>
+                                <td className="pr-3 text-right tabular-nums">
+                                  {(leg.upfrontPct * 100).toFixed(4)}%
+                                </td>
+                                <td className="pr-3 text-right tabular-nums">
+                                  {leg.attributedUpfront > 0 ? formatBdt(leg.attributedUpfront) : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </details>
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">
+                      {formatBdt(w.currentNetPrincipal)}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">
+                      {formatBdt(Math.max(w.storedWatermark, w.peak))}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">
+                      {!preview.upfrontEntitled ? (
+                        <span className="text-amber-700 dark:text-amber-300">forfeit</span>
+                      ) : w.pendingIncrement > 0 ? (
+                        formatBdt(w.pendingIncrement)
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">
+                      {w.pendingIncrement > 0 ? rateCell : "—"}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right font-medium tabular-nums">
+                      {preview.upfrontEntitled && w.pendingUpfront > 0
+                        ? formatBdt(w.pendingUpfront)
+                        : "—"}
+                    </td>
+                    {showRowAction && (
+                      <td className="py-1.5 pr-3">{watermarkRowAction!(w)}</td>
                     )}
-                  </td>
-                  <td className="py-1.5 pr-3 text-right font-medium tabular-nums">
-                    {preview.upfrontEntitled && w.pendingUpfront > 0
-                      ? formatBdt(w.pendingUpfront)
-                      : "—"}
-                  </td>
-                  {showRowAction && (
-                    <td className="py-1.5 pr-3">{watermarkRowAction!(w)}</td>
-                  )}
-                </tr>
-              ))}
+                  </tr>
+                );
+              })}
+              {/* TOTAL — bound to the same figure as the "Upfront pending" stat. */}
+              <tr className="border-t-2 border-zinc-300 font-semibold dark:border-zinc-700">
+                <td className="py-1.5 pr-3 pl-3">TOTAL</td>
+                <td className="py-1.5 pr-3" />
+                <td className="py-1.5 pr-3" />
+                <td className="py-1.5 pr-3" />
+                <td className="py-1.5 pr-3" />
+                <td className="py-1.5 pr-3 text-right tabular-nums">
+                  {formatBdt(preview.totals.pendingUpfront)}
+                </td>
+                {showRowAction && <td className="py-1.5 pr-3" />}
+              </tr>
             </tbody>
           </table>
         </div>

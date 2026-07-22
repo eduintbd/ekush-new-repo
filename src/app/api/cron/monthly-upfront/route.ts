@@ -1,8 +1,12 @@
 // GET / POST /api/cron/monthly-upfront
-// Evaluates the per-(agent, fund) upfront high-water-mark for the just-
-// completed month and posts an agent-level upfront CommissionRun on any
-// new-money increment above each watermark. Idempotent via the watermark
-// itself (re-running a period yields increment 0).
+// Evaluates the per-(agent, INVESTOR) combined-fund upfront high-water-mark for
+// the just-completed month and posts upfront CommissionRun rows on any new-
+// money increment above each investor's watermark. Idempotent via the watermark
+// itself (re-running a period yields increment 0) and now also via the
+// (agent_investor_id, type, period_start, period_end) unique index.
+//
+// GATED: this cron will not post until UPFRONT_POSTING_ENABLED=true — see the
+// safety gate in handle(). "Post upfront now" in the admin UI is not gated.
 //
 // Auth: `Authorization: Bearer $CRON_SECRET` (Vercel Cron) or
 // `x-cron-secret: $CRON_SECRET` (manual / external scheduler).
@@ -58,6 +62,25 @@ async function handle(req: NextRequest) {
   if (!authoriseCron(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  // SAFETY GATE. No upfront has ever been posted (commission_runs is empty),
+  // and the watermark model is mid-change from per-fund to per-investor. An
+  // unattended 1st-of-month run would post the first-ever real upfront —
+  // against the OLD model — with nobody having reviewed a screen.
+  //
+  // The gate is on the CRON only. "Post upfront now" in the admin UI stays
+  // available, because that is a deliberate human action against a preview
+  // they are looking at; this is about the 03:00 UTC job nobody is watching.
+  //
+  // Set UPFRONT_POSTING_ENABLED=true once the combined-watermark model is
+  // signed off and the baseline has been seeded.
+  if (process.env.UPFRONT_POSTING_ENABLED !== "true") {
+    const msg =
+      "Upfront posting is gated: set UPFRONT_POSTING_ENABLED=true once the combined-watermark model is signed off and seeded. Nothing was posted.";
+    console.warn(JSON.stringify({ event: "commission.upfront.gated", at: new Date().toISOString() }));
+    return NextResponse.json({ gated: true, created: 0, evaluated: 0, note: msg });
+  }
+
   const { mStart, mEnd, monthStart, monthEnd } = await resolveMonth(req);
 
   const result = await runUpfront(mStart, mEnd, mEnd);

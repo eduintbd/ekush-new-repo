@@ -713,7 +713,7 @@ model SellingAgent {
   commissionRuns    CommissionRun[]
   accruals          CommissionAccrual[]
   journals          Journal[]
-  upfrontWatermarks AgentUpfrontWatermark[]
+  investorWatermarks AgentInvestorWatermark[]
   upfrontSuspensions AgentUpfrontSuspension[]
   bankAccounts      AgentBankAccount[]
   nominees          AgentNominee[]
@@ -851,23 +851,39 @@ model NavSnapshot {
   @@schema("xsystem")
 }
 
-// Per-(agent, fund) high-water-mark for upfront commission. Upfront is
-// paid only on the increment of the agent's net invested principal
-// (Σ BUY−SELL cash) above `watermark`; the watermark ratchets up and never
-// falls when clients redeem. `throughDate` = last evaluated period end.
-model AgentUpfrontWatermark {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  agentId     String   @map("agent_id") @db.Uuid
-  fundCode    String   @map("fund_code")
-  watermark   Decimal  @default(0) @db.Decimal(18, 2)
-  throughDate DateTime @map("through_date") @db.Date
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+// Per-(agent, INVESTOR) high-water-mark for upfront commission, combined
+// across ALL funds. Upfront is paid only on the increment of that investor's
+// net invested principal (Σ BUY−SELL cash over EFUF+EGF+ESRF, excluding CIP
+// dividend reinvestment) above `watermark`; the watermark ratchets up and
+// never falls when they redeem. `throughDate` = last evaluated period end.
+//
+// Supersedes the per-(agent, fund) model (2026-07). Under that model an
+// investor could redeem from one fund and subscribe to another and the agent
+// earned upfront twice on the same money, because each fund kept its own
+// peak. Combining the funds makes a switch a no-op by construction: the SELL
+// and the BUY cancel, net principal is unchanged, so there is no new high.
+// Investors stay independent of one another — one client's redemption must
+// never cancel out another client's genuinely new money.
+model AgentInvestorWatermark {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId      String   @map("agent_id") @db.Uuid
+  /// Portal investor code (public.investors.investorCode). No FK — the
+  /// investor row lives in the portal's database, not this schema.
+  investorCode String   @map("investor_code")
+  watermark    Decimal  @default(0) @db.Decimal(18, 2)
+  /// Net principal at `throughDate`. Diagnostics only — never drives pay.
+  netPrincipal Decimal  @default(0) @map("net_principal") @db.Decimal(18, 2)
+  /// Σ CIP dividend excluded from the replay that produced this row.
+  cipOffset    Decimal  @default(0) @map("cip_offset") @db.Decimal(18, 2)
+  throughDate  DateTime @map("through_date") @db.Date
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
-  @@unique([agentId, fundCode])
-  @@map("agent_upfront_watermarks")
+  @@unique([agentId, investorCode])
+  @@index([investorCode])
+  @@map("agent_investor_upfront_watermarks")
   @@schema("xsystem")
 }
 

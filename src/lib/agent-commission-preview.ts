@@ -10,21 +10,53 @@
 import type { PrismaClient } from "@/generated/prisma";
 import { categoryForFund, type FundCode } from "@/lib/ekush-web/types";
 import { periodsPerYear, type TrailFrequency } from "@/lib/commission-engine";
-import { computeWatermarkUpfront, isUpfrontEntitled } from "@/lib/upfront-watermark";
+import {
+  computeCombinedWatermarkUpfront,
+  fetchAgentInvestorTxns,
+  isUpfrontEntitled,
+  type FetchWarning,
+  type RateResolver,
+} from "@/lib/upfront-watermark";
 
-export type UpfrontWatermarkView = {
+/** Where one investor's principal sits, and which fund's rate earned the
+ *  pending increment. One leg per fund they hold under this agent. */
+export type UpfrontWatermarkLeg = {
   fundCode: string;
+  category: "equity" | "fixed_income";
+  /** Net principal (Σ BUY−SELL, CIP excluded) in this fund. */
+  netPrincipal: number;
+  /** Share of this row's pendingIncrement attributed to this fund. */
+  attributedIncrement: number;
   upfrontPct: number;
+  attributedUpfront: number;
+};
+
+/** Combined-fund watermark state for ONE investor under this agent.
+ *  Note there is no single `upfrontPct`: an investor spanning equity and
+ *  fixed-income earns at two rates, so the rate lives on the legs and the row
+ *  carries a blended figure for display. */
+export type UpfrontWatermarkView = {
+  investorCode: string;
+  investorName: string;
   /** Watermark already locked in (cumulative new money commissioned). */
   storedWatermark: number;
-  /** All-time peak of net principal reached so far. */
+  /** All-time peak of combined net principal reached so far. */
   peak: number;
-  /** Net principal right now (after redemptions). */
+  /** Combined net principal right now, all funds (after redemptions). */
   currentNetPrincipal: number;
   /** New money above the stored watermark, not yet posted. */
   pendingIncrement: number;
-  /** pendingIncrement × upfrontPct. */
+  /** Σ legs[].attributedUpfront. */
   pendingUpfront: number;
+  /** pendingUpfront ÷ pendingIncrement; 0 when no increment. Display only. */
+  blendedPct: number;
+  /** Legs carry more than one distinct rate. */
+  mixedRate: boolean;
+  /** CIP dividend excluded from this investor's series. */
+  cipOffset: number;
+  /** Funds that drove a new high but have no active term — nothing posts. */
+  unratedFunds: string[];
+  legs: UpfrontWatermarkLeg[];
 };
 
 export type Term = {
@@ -116,8 +148,10 @@ export type PreviewResult = {
   txns: Tx[];
   buckets: Bucket[];
   trailRows: TrailRow[];
-  /** Per-fund high-water-mark upfront state (the live upfront model). */
+  /** Per-INVESTOR combined-fund high-water-mark state (the live model). */
   upfrontWatermarks: UpfrontWatermarkView[];
+  /** Data problems found while replaying — a human should look before posting. */
+  upfrontWarnings: FetchWarning[];
   /** Accountant-controlled upfront entitlement (false = suspended). */
   upfrontEntitled: boolean;
   /** Date the active suspension took effect, if suspended. */
@@ -234,6 +268,7 @@ export async function computeAgentCommissionPreview(
       buckets: [],
       trailRows: [],
       upfrontWatermarks: [],
+      upfrontWarnings: [],
       upfrontEntitled,
       upfrontSuspendedFrom,
       totals: {
@@ -495,35 +530,79 @@ export async function computeAgentCommissionPreview(
   );
 
   // ── Watermark upfront (the live upfront model) ──────────────────
-  // Net invested principal (Σ BUY−SELL cash) per fund vs the stored
-  // per-(agent,fund) watermark → pending new-money increment.
-  const wmRows = await prisma.agentUpfrontWatermark.findMany({ where: { agentId } });
-  const wmByFund = new Map(wmRows.map((w) => [w.fundCode, Number(w.watermark)]));
-  const txByFund = new Map<string, { date: Date; direction: "BUY" | "SELL"; amount: number }[]>();
-  for (const t of txns) {
-    const arr = txByFund.get(t.fundCode) ?? [];
-    arr.push({ date: t.date, direction: t.direction, amount: t.amount });
-    txByFund.set(t.fundCode, arr);
-  }
+  // Combined across ALL funds, per INVESTOR, vs that investor's stored
+  // watermark → pending new-money increment. Calls the SAME functions the
+  // runner posts from, so what the accountant approves on this screen is
+  // exactly what gets written. This block used to re-implement the fetch and
+  // omitted both the isDirectSubscription filter and any as-of bound, so it
+  // could overstate what would actually post — next to the Post button.
+  const wmRows = await prisma.agentInvestorWatermark.findMany({ where: { agentId } });
+  const wmByInvestor = new Map(wmRows.map((w) => [w.investorCode, Number(w.watermark)]));
+  const nameByCode = new Map(bucketsSorted.map((b) => [b.investorCode, b.name]));
+
+  const rateFor: RateResolver = (fundCode: string) => {
+    const category = categoryForFund(fundCode as FundCode);
+    const term = termFor(termsActive, category);
+    return term ? { rate: term.upfrontPct, category } : null;
+  };
+
+  const { byInvestor: wmTxByInvestor, warnings: wmWarnings } = await fetchAgentInvestorTxns(
+    prisma,
+    agentId,
+    asOf,
+  );
+
   const upfrontWatermarks: UpfrontWatermarkView[] = [];
   let pendingUpfront = 0;
-  for (const [fundCode, ftx] of txByFund) {
-    const term = termFor(termsActive, categoryForFund(fundCode as FundCode));
-    const pct = term?.upfrontPct ?? 0;
-    const stored = wmByFund.get(fundCode) ?? 0;
-    const res = computeWatermarkUpfront(ftx, stored, pct);
+  for (const [investorCode, itx] of wmTxByInvestor) {
+    const stored = wmByInvestor.get(investorCode) ?? 0;
+    let res;
+    try {
+      res = computeCombinedWatermarkUpfront(itx, stored, rateFor);
+    } catch {
+      continue; // attribution mismatch — the runner blocks it too
+    }
+    // Net principal per fund, so the row can show WHERE the money sits.
+    const netByFund = new Map<string, number>();
+    for (const t of itx) {
+      netByFund.set(
+        t.fundCode,
+        (netByFund.get(t.fundCode) ?? 0) + (t.direction === "BUY" ? t.amount : -t.amount),
+      );
+    }
+    const legFunds = Array.from(new Set([...netByFund.keys(), ...res.slices.map((s) => s.fundCode)])).sort();
+    const legs = legFunds.map((fundCode) => {
+      const slice = res.slices.find((s) => s.fundCode === fundCode);
+      const resolved = rateFor(fundCode);
+      return {
+        fundCode,
+        category: resolved?.category ?? categoryForFund(fundCode as FundCode),
+        netPrincipal: round2(netByFund.get(fundCode) ?? 0),
+        attributedIncrement: slice?.base ?? 0,
+        upfrontPct: slice?.rate ?? resolved?.rate ?? 0,
+        attributedUpfront: slice?.upfront ?? 0,
+      };
+    });
+    const rates = new Set(res.slices.map((s) => s.rate));
     upfrontWatermarks.push({
-      fundCode,
-      upfrontPct: pct,
+      investorCode,
+      investorName: nameByCode.get(investorCode) ?? "",
       storedWatermark: stored,
       peak: res.peak,
       currentNetPrincipal: res.netPrincipal,
       pendingIncrement: res.increment,
       pendingUpfront: res.upfront,
+      blendedPct: res.increment > 0 ? res.upfront / res.increment : 0,
+      mixedRate: rates.size > 1,
+      cipOffset: res.cipOffset,
+      unratedFunds: res.unratedFunds,
+      legs,
     });
     pendingUpfront += res.upfront;
   }
-  upfrontWatermarks.sort((a, b) => a.fundCode.localeCompare(b.fundCode));
+  upfrontWatermarks.sort((a, b) => a.investorCode.localeCompare(b.investorCode));
+  const upfrontWarnings = wmWarnings;
+
   const postedAgg = await prisma.commissionRun.aggregate({
     where: { agentId, type: "upfront" },
     _sum: { amount: true },
@@ -545,6 +624,7 @@ export async function computeAgentCommissionPreview(
     buckets: bucketsSorted,
     trailRows: trailRowsAll,
     upfrontWatermarks,
+    upfrontWarnings,
     upfrontEntitled,
     upfrontSuspendedFrom,
     totals: {

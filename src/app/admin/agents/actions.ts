@@ -511,7 +511,7 @@ export async function unlinkInvestor(formData: FormData): Promise<void> {
  * next run picks up once they close) and is idempotent via the
  * (agent_investor_id, type, period_start, period_end) unique index.
  *
- * Upfront is not posted here — that's the per-(agent,fund) watermark model,
+ * Upfront is not posted here — that's the per-(agent,investor) watermark model,
  * posted by the monthly cron or "Post upfront now" (postAgentUpfront).
  */
 export async function postAgentCommissions(formData: FormData): Promise<void> {
@@ -553,7 +553,7 @@ export async function postAgentCommissions(formData: FormData): Promise<void> {
 
 /**
  * Post the watermark upfront for one agent "as of today" — evaluates the
- * per-(agent,fund) high-water-mark through today, posts an agent-level
+ * per-(agent,investor) high-water-mark through today, posts an agent-level
  * upfront CommissionRun on any new-money increment, and ratchets the
  * watermark. Same engine the monthly cron uses; idempotent (re-clicking
  * with no new money posts nothing).
@@ -600,7 +600,7 @@ export async function suspendAgentUpfront(formData: FormData): Promise<void> {
 }
 
 /** Re-instate an agent's upfront entitlement from a date. The accountant
- *  should also set each fund's watermark (setAgentWatermark) so no back-dated
+ *  should also set the watermark for each affected investor (setAgentWatermark) so no back-dated
  *  upfront accrues on money that arrived during suspension. */
 export async function reinstateAgentUpfront(formData: FormData): Promise<void> {
   const me = await requireRole(["admin", "checker", "accountant"]);
@@ -626,23 +626,47 @@ export async function reinstateAgentUpfront(formData: FormData): Promise<void> {
 export async function setAgentWatermark(formData: FormData): Promise<void> {
   const me = await requireRole(["admin", "checker", "accountant"]);
   const agentId = String(formData.get("agentId") ?? "").trim();
-  const fundCode = String(formData.get("fundCode") ?? "").trim();
+  const investorCode = String(formData.get("investorCode") ?? "").trim();
   const valueRaw = String(formData.get("watermark") ?? "").trim();
   const value = Number(valueRaw);
-  if (!agentId || !fundCode) redirect(`/admin/agents/${agentId}?error=Missing+agent+or+fund`);
+  if (!agentId || !investorCode) {
+    redirect(`/admin/agents/${agentId}?error=Missing+agent+or+investor`);
+  }
   if (!Number.isFinite(value) || value < 0) {
     redirect(`/admin/agents/${agentId}?error=Watermark+must+be+a+non-negative+number`);
   }
+
+  // investorCode is free-form (was one of three known fund codes). A watermark
+  // against an investor this agent never sourced would silently suppress that
+  // investor's upfront forever, with no row visible anywhere — so confirm the
+  // link exists first.
+  const link = await prisma.agentInvestor.findFirst({
+    where: { agentId, investorCode },
+    select: { id: true },
+  });
+  if (!link) {
+    redirect(
+      `/admin/agents/${agentId}?error=${encodeURIComponent(`${investorCode} is not linked to this agent — cannot set a watermark for them.`)}`,
+    );
+  }
+
+  const prev = await prisma.agentInvestorWatermark.findUnique({
+    where: { agentId_investorCode: { agentId, investorCode } },
+    select: { watermark: true },
+  });
   const today = new Date();
   await withActor(me.id, (tx) =>
-    tx.agentUpfrontWatermark.upsert({
-      where: { agentId_fundCode: { agentId, fundCode } },
-      create: { agentId, fundCode, watermark: round2BD(value), throughDate: today },
+    tx.agentInvestorWatermark.upsert({
+      where: { agentId_investorCode: { agentId, investorCode } },
+      create: { agentId, investorCode, watermark: round2BD(value), throughDate: today },
       update: { watermark: round2BD(value), throughDate: today },
     }),
   );
   revalidatePath(`/admin/agents/${agentId}`);
-  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(`${fundCode} watermark set to ${round2BD(value)}`)}`);
+  const prevStr = prev ? ` (was ${round2BD(Number(prev.watermark))})` : "";
+  redirect(
+    `/admin/agents/${agentId}?ok=${encodeURIComponent(`${investorCode} watermark set to ${round2BD(value)}${prevStr} — applies across all funds.`)}`,
+  );
 }
 
 export async function createAgent(formData: FormData): Promise<void> {

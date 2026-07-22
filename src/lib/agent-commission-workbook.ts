@@ -283,21 +283,52 @@ function buildSummarySheet(
   totRow.font = { bold: true };
   totRow.border = { top: { style: "thin" } };
 
-  // Watermark upfront summary (the live upfront model) — per agent, per fund.
+  // Watermark upfront summary (the live upfront model) — per INVESTOR,
+  // combined across all funds, with a per-fund attribution table beneath.
+  const peakLabel = audience === "agent" ? "Peak" : "Watermark (peak)";
   if (p.upfrontWatermarks.length > 0) {
     s.addRow({});
-    const wmHead = s.addRow({ inv: "UPFRONT WATERMARK (per fund)" });
+    const wmHead = s.addRow({ inv: "UPFRONT WATERMARK (per investor, all funds combined)" });
     wmHead.font = { bold: true };
-    s.addRow({ inv: "Fund", inflow: "Net principal now", net: "Watermark (peak)", initU: "Upfront %", everyU: "Pending new money", tot: "Pending upfront" });
+    s.addRow({ inv: "Investor", name: "Name", inflow: "Net principal now", net: peakLabel, initU: "Rate", everyU: "Pending new money", tot: "Pending upfront" });
+    let wmTotIncrement = 0;
     for (const w of p.upfrontWatermarks) {
+      wmTotIncrement += w.pendingIncrement;
       s.addRow({
-        inv: w.fundCode,
+        inv: w.investorCode,
+        name: w.investorName,
         inflow: Math.round(w.currentNetPrincipal * 100) / 100,
         net: Math.round(Math.max(w.storedWatermark, w.peak) * 100) / 100,
-        initU: `${(w.upfrontPct * 100).toFixed(4)}%`,
+        initU: w.mixedRate ? `${(w.blendedPct * 100).toFixed(4)}% blended` : `${(w.blendedPct * 100).toFixed(4)}%`,
         everyU: Math.round(w.pendingIncrement * 100) / 100,
         tot: Math.round(w.pendingUpfront * 100) / 100,
       });
+    }
+    const wmTot = s.addRow({
+      inv: "TOTAL",
+      everyU: Math.round(wmTotIncrement * 100) / 100,
+      tot: Math.round(p.totals.pendingUpfront * 100) / 100,
+    });
+    wmTot.font = { bold: true };
+    wmTot.border = { top: { style: "thin" } };
+
+    // Per-fund attribution — the audit trail for which fund's rate earned what.
+    s.addRow({});
+    const legHead = s.addRow({ inv: "UPFRONT WATERMARK — by investor × fund" });
+    legHead.font = { bold: true };
+    s.addRow({ inv: "Investor", name: "Fund", cat: "Category", inflow: "Net principal", everyU: "New money", initU: "Rate", tot: "Upfront" });
+    for (const w of p.upfrontWatermarks) {
+      for (const leg of w.legs) {
+        s.addRow({
+          inv: w.investorCode,
+          name: leg.fundCode,
+          cat: leg.category,
+          inflow: Math.round(leg.netPrincipal * 100) / 100,
+          everyU: Math.round(leg.attributedIncrement * 100) / 100,
+          initU: `${(leg.upfrontPct * 100).toFixed(4)}%`,
+          tot: Math.round(leg.attributedUpfront * 100) / 100,
+        });
+      }
     }
   }
 
@@ -310,12 +341,15 @@ function buildSummarySheet(
           [
             `Rate rule: LATEST effective term per category applied to ALL transactions (older term rows treated as superseded).`,
           ],
-          [`Upfront commission: per-agent, per-fund HIGH-WATER-MARK (see the Upfront Watermark block below).`],
+          [`Upfront commission: per-agent, per-INVESTOR HIGH-WATER-MARK across ALL funds (see the Upfront Watermark block below).`],
           [
-            `  • watermark = running peak of net invested principal (Σ BUY−SELL cash) under the agent in the fund; it never falls when clients redeem.`,
+            `  • watermark = running peak of the investor's net invested principal (Σ BUY−SELL cash, all funds combined) under this agent; it never falls when they redeem or switch between funds.`,
           ],
           [
-            `  • upfront = max(0, new peak − stored watermark) × upfront_pct, evaluated monthly. The Initial/Per-inflow columns below are legacy per-investor references only.`,
+            `  • CIP dividend reinvestment is EXCLUDED — a reinvested dividend is not new money and does not lift the watermark.`,
+          ],
+          [
+            `  • upfront = max(0, new peak − stored watermark) × the upfront % of the fund that received the money setting the new high; a split increment is pro-rated across funds at each fund's own rate. The Initial/Per-inflow columns are legacy references only.`,
           ],
           [
             `Trail commission: computed from public.nav_records (daily NAV snapshots per fund). Per period (monthly or quarterly, per the term's Trail frequency):`,
@@ -330,8 +364,9 @@ function buildSummarySheet(
           [`Agent: ${p.agentCode} — ${p.agentName}`],
           [`As-of date: ${p.asOf.toISOString().slice(0, 10)}`],
           [`Commission terms currently in force are applied to all periods.`],
-          [`Upfront: paid per fund on new money only — on the amount by which your invested principal rises above its previous peak.`],
-          [`  • Redemptions do not lower that peak, so money that leaves and returns does not earn upfront twice.`],
+          [`Upfront: paid on new money only — on the amount by which each investor's invested principal with you rises above its previous peak, counting all three funds together.`],
+          [`  • Redemptions do not lower that peak, and moving money from one fund to another is not new money — so the same money never earns upfront twice.`],
+          [`  • Dividends reinvested under CIP are not counted as new money. The rate applied is that of the fund the new money went into.`],
           [`Trail: accrues each period on the average value of units held, at the rate per annum for the applicable year band, and is paid after the period closes.`],
           [`  • Rows marked partial are still accruing and have not been posted.`],
           [`This is an as-of-today estimate for your information, not a statement of account. The amount payable is confirmed when the office posts the run.`],
