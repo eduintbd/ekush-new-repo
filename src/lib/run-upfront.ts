@@ -30,6 +30,7 @@ export type UpfrontBlocked = {
 };
 
 export type UpfrontRunResult = {
+  dryRun: boolean;
   created: number;
   evaluated: number;
   agents: number;
@@ -71,8 +72,9 @@ export async function runUpfront(
   periodStart: Date,
   periodEnd: Date,
   throughDate: Date = periodEnd,
-  opts: { agentId?: string } = {},
+  opts: { agentId?: string; dryRun?: boolean } = {},
 ): Promise<UpfrontRunResult> {
+  const dryRun = opts.dryRun === true;
   const agents = await prisma.sellingAgent.findMany({
     where: { status: "approved", ...(opts.agentId ? { id: opts.agentId } : {}) },
     include: { terms: true, upfrontSuspensions: true, investors: true },
@@ -171,6 +173,18 @@ export async function runUpfront(
         continue;
       }
 
+      // Dry run: count what WOULD post, write nothing (no CommissionRun, no
+      // watermark advance). This is what makes `?dryRun=1` on the cron route a
+      // genuine preview rather than a live run.
+      if (dryRun) {
+        for (const slice of res.slices) {
+          if (slice.upfront <= 0) continue;
+          created++;
+          totalUpfront += slice.upfront;
+        }
+        continue;
+      }
+
       await withActor(null, async (tx) => {
         for (const slice of res.slices) {
           if (slice.upfront <= 0) continue;
@@ -222,6 +236,7 @@ export async function runUpfront(
   }
 
   return {
+    dryRun,
     created,
     evaluated,
     agents: agents.length,

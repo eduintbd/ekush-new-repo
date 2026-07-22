@@ -82,8 +82,9 @@ async function handle(req: NextRequest) {
   }
 
   const { mStart, mEnd, monthStart, monthEnd } = await resolveMonth(req);
+  const dryRun = new URL(req.url).searchParams.get("dryRun") === "1";
 
-  const result = await runUpfront(mStart, mEnd, mEnd);
+  const result = await runUpfront(mStart, mEnd, mEnd, { dryRun });
 
   console.log(
     JSON.stringify({
@@ -96,12 +97,13 @@ async function handle(req: NextRequest) {
     }),
   );
 
-  return NextResponse.json({
-    created: result.created,
-    evaluated: result.evaluated,
-    totalUpfront: result.totalUpfront,
-    month: { monthStart, monthEnd },
-  });
+  // A blocked investor (missing term, data warning) must not read as a clean
+  // run — this is money, and a silent 200 is how a suppressed month hides.
+  const unhealthy = result.blocked > 0;
+  return NextResponse.json(
+    { ...result, month: { monthStart, monthEnd } },
+    { status: unhealthy ? 500 : 200 },
+  );
 }
 
 export async function GET(req: NextRequest) {
