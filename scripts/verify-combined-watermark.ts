@@ -35,14 +35,16 @@ const rateFor: RateResolver = (fundCode) => {
 };
 
 const d = (s: string) => new Date(`${s}T00:00:00.000Z`);
-const buy = (date: string, fundCode: string, amount: number): WmTxn => ({
-  date: d(date), direction: "BUY", amount, fundCode, source: "txn",
+// `inv` defaults to a single investor so the pre-2026-08 traces keep reading as
+// one client's story; the book-level traces pass it explicitly.
+const buy = (date: string, fundCode: string, amount: number, inv = "INV1"): WmTxn => ({
+  date: d(date), direction: "BUY", amount, fundCode, investorCode: inv, source: "txn",
 });
-const sell = (date: string, fundCode: string, amount: number): WmTxn => ({
-  date: d(date), direction: "SELL", amount, fundCode, source: "txn",
+const sell = (date: string, fundCode: string, amount: number, inv = "INV1"): WmTxn => ({
+  date: d(date), direction: "SELL", amount, fundCode, investorCode: inv, source: "txn",
 });
-const cip = (date: string, fundCode: string, amount: number): WmTxn => ({
-  date: d(date), direction: "SELL", amount, fundCode, source: "cip",
+const cip = (date: string, fundCode: string, amount: number, inv = "INV1"): WmTxn => ({
+  date: d(date), direction: "SELL", amount, fundCode, investorCode: inv, source: "cip",
 });
 
 let failures = 0;
@@ -153,13 +155,38 @@ function unitTraces() {
     check("orphan: next genuine 5k earns nothing (underpay)", afterOrphan.increment, 0);
   }
 
-  // S6 — investors are independent of each other.
-  console.log("\nS6  per-investor independence");
+  // S6 — book-level netting. THIS TRACE WAS INVERTED IN 2026-08. It used to
+  // assert that investors are independent: A redeeming 200k and B subscribing
+  // 200k paid B in full. That is the cross-account churn the book-level model
+  // exists to stop, so the same fixture must now pay nothing.
+  console.log("\nS6  book-level netting (replaces per-investor independence)");
   {
-    const a = computeCombinedWatermarkUpfront([sell("2026-03-01", "EFUF", 200_000)], 200_000, rateFor);
-    const b = computeCombinedWatermarkUpfront([buy("2026-03-01", "EFUF", 200_000)], 0, rateFor);
-    check("investor A (redeemed) earns nothing", a.increment, 0);
-    check("investor B (new money) still earns", b.increment, 200_000);
+    const book = [
+      buy("2026-01-01", "EFUF", 200_000, "A"),
+      sell("2026-03-01", "EFUF", 200_000, "A"),
+      buy("2026-03-01", "EFUF", 200_000, "B"),
+    ];
+    const r = computeCombinedWatermarkUpfront(book, 200_000, rateFor);
+    check("A out 200k, B in 200k — nothing new", r.increment, 0);
+    check("no upfront on recycled money", r.upfront, 0);
+    check("book watermark unmoved", r.newWatermark, 200_000);
+
+    // Same movements replayed one investor at a time — what the retired model
+    // paid, and the reason for the change.
+    const perInvestor =
+      computeCombinedWatermarkUpfront(book.filter((t) => t.investorCode === "A"), 200_000, rateFor).upfront +
+      computeCombinedWatermarkUpfront(book.filter((t) => t.investorCode === "B"), 0, rateFor).upfront;
+    check("per-investor model would have paid", perInvestor, 200);
+
+    // Genuinely new money on top of the recycling still earns — the model
+    // blocks the churn, not the growth.
+    const grown = computeCombinedWatermarkUpfront(
+      [...book, buy("2026-04-01", "EFUF", 50_000, "C")],
+      200_000,
+      rateFor,
+    );
+    check("new client above the book peak still earns", grown.increment, 50_000);
+    check("and is billed to that client", grown.slices[0]?.investorCode, "C");
   }
 
   // S7 — idempotency.
@@ -234,53 +261,68 @@ function unitTraces() {
     check("negative BUY reverses, not adds", reversal.netPrincipal, 0);
   }
 
-  // S11 — agent S00004, the case that exposed the bug. Real transactions,
-  // hand-checked against the AMC's own workbook.
-  console.log("\nS11 agent S00004 replay (all rates 0.10%)");
+  // S11 — agent S00004, the case that exposed the sign bug, now replayed as
+  // ONE book. Real transactions, hand-checked against the AMC's own workbook,
+  // which computes it exactly this way.
+  console.log("\nS11 agent S00004 book replay (all rates 0.10%)");
   {
     const flat: RateResolver = (fundCode) => ({
       rate: 0.001,
       category: categoryForFund(fundCode as FundCode),
     });
-    // A00699: 7.5m + 15m + 20m in, 31.5m out, 31.5m back in ⇒ peak 42.5m.
-    const a699 = computeCombinedWatermarkUpfront(
-      [
-        buy("2026-02-18", "ESRF", 7_500_000),
-        buy("2026-03-03", "ESRF", 15_000_000),
-        buy("2026-03-16", "ESRF", 20_000_000),
-        sell("2026-06-29", "ESRF", -31_500_000),
-        buy("2026-06-30", "ESRF", 31_500_000),
-      ],
-      0,
-      flat,
-    );
-    check("A00699 net principal", a699.netPrincipal, 42_500_000);
-    check("A00699 peak", a699.peak, 42_500_000);
-    check("A00699 upfront", a699.upfront, 42_500);
+    const book = [
+      buy("2026-02-18", "ESRF", 7_500_000, "A00699"),
+      buy("2026-03-03", "ESRF", 15_000_000, "A00699"),
+      buy("2026-03-16", "ESRF", 20_000_000, "A00699"),
+      buy("2026-04-05", "ESRF", 15_000_000, "A00713"),
+      sell("2026-06-29", "ESRF", -31_500_000, "A00699"),
+      buy("2026-06-30", "EFUF", 500_000, "A00820"),
+      sell("2026-06-30", "ESRF", -11_500_000, "A00713"),
+      buy("2026-06-30", "ESRF", 31_500_000, "A00699"),
+      buy("2026-07-02", "EFUF", 11_500_000, "A00713"),
+      sell("2026-07-12", "EFUF", -10_000_000, "A00713"),
+      buy("2026-07-15", "ESRF", 10_000_000, "A00713"),
+    ];
+    const r = computeCombinedWatermarkUpfront(book, 0, flat);
 
-    // A00713: 15m ESRF, out 11.5m, 11.5m EFUF, out 10m, 10m ESRF ⇒ peak 15m.
-    const a713 = computeCombinedWatermarkUpfront(
-      [
-        buy("2026-04-05", "ESRF", 15_000_000),
-        sell("2026-06-30", "ESRF", -11_500_000),
-        buy("2026-07-02", "EFUF", 11_500_000),
-        sell("2026-07-12", "EFUF", -10_000_000),
-        buy("2026-07-15", "ESRF", 10_000_000),
-      ],
-      0,
-      flat,
-    );
-    check("A00713 net principal", a713.netPrincipal, 15_000_000);
-    check("A00713 peak", a713.peak, 15_000_000);
-    check("A00713 upfront", a713.upfront, 15_000);
+    // Book peak 5.8cr, reached 2026-07-02. Net principal ends at the same
+    // figure: 11.1cr in, 5.3cr out.
+    check("book net principal", r.netPrincipal, 58_000_000);
+    check("book peak", r.peak, 58_000_000);
+    check("book upfront", r.upfront, 58_000);
 
-    const a820 = computeCombinedWatermarkUpfront(
-      [buy("2026-06-30", "EFUF", 500_000)],
-      0,
-      flat,
+    // Attribution. A00820's 500,000 lands on 30 June while the book is far
+    // below its 5.75cr peak, so it earns nothing — the visible cost of the
+    // model. The 500 it used to earn is now billed to A00713's 2 July EFUF
+    // purchase, the movement that actually lifted the book to a new high.
+    const by = (inv: string) =>
+      r.slices.filter((s) => s.investorCode === inv).reduce((s, x) => s + x.upfront, 0);
+    check("A00699 billed", by("A00699"), 42_500);
+    check("A00713 billed", by("A00713"), 15_500);
+    check("A00820 billed (new client, book below peak)", by("A00820"), 0);
+    check("every slice carries an investor", r.slices.every((s) => s.investorCode !== ""), true);
+
+    // The AMC's workbook totals 57,500 by hand because it skips the 2 July
+    // crossing; 5.8cr genuinely exceeds the 5.75cr peak by 500,000.
+    check("the 2 Jul crossing is real", by("A00713") - 15_000, 500);
+  }
+
+  // S12 — the churn this model exists to stop, in its plainest form: one
+  // client out, another in, no new money to Ekush at all.
+  console.log("\nS12 cross-account churn earns nothing");
+  {
+    const r = computeCombinedWatermarkUpfront(
+      [
+        buy("2026-01-10", "ESRF", 100_000, "RAHIM"),
+        sell("2026-05-04", "ESRF", -100_000, "RAHIM"),
+        buy("2026-05-07", "EFUF", 100_000, "KARIMA"),
+      ],
+      100_000,
+      rateFor,
     );
-    check("A00820 upfront", a820.upfront, 500);
-    check("agent total upfront", a699.upfront + a713.upfront + a820.upfront, 58_000);
+    check("recycled through a second account", r.upfront, 0);
+    check("book watermark unmoved", r.newWatermark, 100_000);
+    check("no slices to post", r.slices.length, 0);
   }
 }
 

@@ -1,31 +1,48 @@
-// Agent upfront commission — combined-fund high-water-mark (HWM) engine.
+// Agent upfront commission — book-level high-water-mark (HWM) engine.
 //
-// Upfront is paid only on the increment of an INVESTOR's net invested
-// principal, under one agent, ACROSS ALL THREE FUNDS, above its prior peak.
-// The peak (watermark) ratchets up and never falls when the client redeems —
-// money that merely refills below the peak earns nothing; only new money above
-// it does. NAV moves never matter (this is principal, not market value).
+// Upfront is paid only on the increment of an AGENT'S WHOLE BOOK of net
+// invested principal — every investor they sourced, across all three funds —
+// above its prior peak. The peak (watermark) ratchets up and never falls when
+// a client redeems; money that merely refills below the peak earns nothing,
+// only new money above it does. NAV moves never matter (this is principal, not
+// market value).
 //
-//   netPrincipal(investor, T) = Σ over EFUF+EGF+ESRF, for executed txns
-//                               on/after that (investor, fund) pair's
-//                               sourced_on through T, of (BUY − SELL) cash,
-//                               EXCLUDING CIP dividend reinvestment
+//   netPrincipal(agent, T) = Σ over every sourced investor, over
+//                            EFUF+EGF+ESRF, for executed txns on/after that
+//                            (investor, fund) pair's sourced_on through T,
+//                            of (BUY − SELL) cash, EXCLUDING CIP dividend
+//                            reinvestment
 //   peak         = running maximum of netPrincipal
 //   increment    = max(0, peak − storedWatermark)
 //   upfront      = increment × the upfront % of the fund that RECEIVED the
 //                  money which set the new high
 //   newWatermark = max(storedWatermark, peak)
 //
-// WHY COMBINED (2026-07): the watermark used to be per (agent, fund). An
-// investor could redeem 200,000 from ESRF and subscribe 250,000 to EFUF, and
-// because each fund kept its own peak the agent was paid upfront on the whole
-// 250,000 — twice on the same money. Combined, the SELL and the BUY cancel in
-// one series, so only the genuine 50,000 is new. This needs no switch
-// detection, which matters because the portal records a switch as an ordinary
-// SELL and an ordinary BUY with nothing linking them.
+// WHY COMBINED ACROSS FUNDS (2026-07): the watermark used to be per
+// (agent, fund). An investor could redeem 200,000 from ESRF and subscribe
+// 250,000 to EFUF, and because each fund kept its own peak the agent was paid
+// upfront on the whole 250,000 — twice on the same money. Combined, the SELL
+// and the BUY cancel in one series, so only the genuine 50,000 is new. This
+// needs no switch detection, which matters because the portal records a switch
+// as an ordinary SELL and an ordinary BUY with nothing linking them.
 //
-// Investors are independent of one another: one client's redemption must never
-// cancel out another client's genuinely new money.
+// WHY BOOK-LEVEL (2026-08): the same trick still worked one level up. Move
+// money out of client A and into client B under the same agent and the
+// per-investor model saw a brand-new high in B's series and paid in full,
+// though nothing new reached Ekush. There is no related-party field anywhere
+// in the portal, so that cannot be detected — A and B are indistinguishable
+// from two strangers. Netting the whole book makes the arithmetic itself
+// immune: money moving between an agent's own clients leaves the total
+// unchanged, so there is no new high and nothing to pay. The AMC's own
+// reconciliation workbook computes it this way.
+//
+//   This deliberately reverses the earlier rule that investors are independent
+//   of one another. One client's redemption now DOES absorb another client's
+//   subscription. That is the point, and it is also the cost: a genuinely new
+//   client whose money arrives while another client is redeeming earns
+//   nothing. A book peak is the peak of a sum and can never exceed the sum of
+//   peaks, so this model pays the same or less than the old one, never more —
+//   the correct direction of error on a system with no clawback.
 //
 // Idempotent: re-running a period finds peak ≤ watermark → increment 0.
 
@@ -45,6 +62,11 @@ export type WmTxn = {
   amount: number;
   /** Fund this movement belongs to — drives rate attribution. */
   fundCode: string;
+  /** Investor this movement belongs to. Carried on the movement (rather than
+   *  implied by the map key) because the book-level replay mixes investors in
+   *  one series, and every posted row still needs a real AgentInvestor link to
+   *  hang off — see the slice key in computeCombinedWatermarkUpfront. */
+  investorCode: string;
   /** 'txn' = real portal transaction; 'cip' = synthetic dividend-reinvestment
    *  offset. CIP rows are always SELL-direction. */
   source: "txn" | "cip";
@@ -80,8 +102,14 @@ export type RateResolver = (
 
 export type UpfrontSlice = {
   fundCode: string;
+  /** Investor whose purchase set the new high this slice bills for. Keeping
+   *  the investor on the slice is what lets run-upfront resolve a real
+   *  AgentInvestor link for every posted row; without it agentInvestorId goes
+   *  null, and null never collides in a Postgres unique index, so upfront
+   *  would silently lose its DB-level idempotency. */
+  investorCode: string;
   category: FundCategory;
-  /** New money attributed to this fund. */
+  /** New money attributed to this investor × fund. */
   base: number;
   rate: number;
   upfront: number;
@@ -94,6 +122,9 @@ export type UpfrontSlice = {
 export type WatermarkStep = {
   date: Date;
   fundCode: string;
+  /** Whose movement this is. The book replay interleaves investors, so the
+   *  workbook has to name one on every row or the trace is unreadable. */
+  investorCode: string;
   direction: "BUY" | "SELL";
   source: "txn" | "cip";
   /** Signed effect on net invested principal (see principalDelta). */
@@ -190,6 +221,13 @@ export function isUpfrontEntitled(events: SuspensionEvent[], asOf: Date): boolea
  * SELL-first can only ever understate, never overstate, which is the correct
  * direction of error on a system with no clawback. Genuine same-day
  * deposit-plus-redemption is warned on so a human can grant an exception.
+ *
+ * 2026-08: the code is unchanged but its reach is not. Under the book-level
+ * replay this no longer only nets an investor against themselves — it nets one
+ * client's redemption against a DIFFERENT client's subscription on the same
+ * date. That is the cross-account churn defence working as intended rather
+ * than an accident of sorting, and it is worth knowing that a change here now
+ * moves money between clients, not just within one.
  */
 export function orderForReplay(txns: WmTxn[]): WmTxn[] {
   const rank = (t: WmTxn) => (t.direction === "SELL" ? 0 : 1);
@@ -197,13 +235,32 @@ export function orderForReplay(txns: WmTxn[]): WmTxn[] {
 }
 
 /**
- * Pure: replay the investor's combined net principal, pay on any new high
- * above the stored watermark, and attribute each new high to the fund whose
- * purchase caused it.
+ * Every movement the agent sourced, as one series.
+ *
+ * `fetchAgentInvestorTxns` still returns a per-investor map, and must: the CIP
+ * candidate-BUY lookup and the same-day BUY+SELL detection are only meaningful
+ * within one investor's own history. The book replay is a view over that map,
+ * not a replacement for it.
+ */
+export function flattenToAgentSeries(byInvestor: Map<string, WmTxn[]>): WmTxn[] {
+  const out: WmTxn[] = [];
+  for (const txns of byInvestor.values()) out.push(...txns);
+  return out;
+}
+
+/**
+ * Pure: replay net principal, pay on any new high above the stored watermark,
+ * and attribute each new high to the investor × fund whose purchase caused it.
+ *
+ * Fed one investor's movements this is a per-investor watermark; fed
+ * `flattenToAgentSeries(...)` it is the book-level one. The function does not
+ * care — the caller decides the scope, and since 2026-08 every production
+ * caller passes the whole book.
  *
  * Attribution is unambiguous because only a BUY can raise `running` — so every
- * new high has exactly one responsible fund. An investor whose increment spans
- * equity and fixed-income therefore yields two slices at two rates.
+ * new high has exactly one responsible movement, and therefore exactly one
+ * investor and one fund. A book increment spanning equity and fixed-income, or
+ * two investors, yields one slice per (investor, fund) at that fund's rate.
  */
 export function computeCombinedWatermarkUpfront(
   txns: WmTxn[],
@@ -211,7 +268,13 @@ export function computeCombinedWatermarkUpfront(
   rateFor: RateResolver,
 ): CombinedWatermarkResult {
   const sorted = orderForReplay(txns);
-  const sliceByFund = new Map<string, { base: number; category: FundCategory; rate: number }>();
+  // Keyed by `investorCode|fundCode`, not fundCode: two investors buying into
+  // the same fund must stay separate slices so each posted row keeps its own
+  // AgentInvestor link.
+  const sliceByKey = new Map<
+    string,
+    { investorCode: string; fundCode: string; base: number; category: FundCategory; rate: number }
+  >();
   const unrated = new Set<string>();
 
   let running = 0;
@@ -231,12 +294,16 @@ export function computeCombinedWatermarkUpfront(
     let note: string;
 
     if (running <= peak) {
+      // Under the book model a BUY below the peak is not necessarily the same
+      // client's money coming back — it can be a brand-new client arriving
+      // while someone else is redeeming. Saying "already commissioned" there
+      // would be plainly wrong to the agent reading the workbook.
       note =
         t.source === "cip"
           ? "CIP reinvestment — not new money"
           : delta < 0
-            ? "Redemption — peak does not fall"
-            : "Refills below the peak — money already commissioned";
+            ? "Redemption — the book's peak does not fall"
+            : "Book still below its peak — this money replaces money that left, so no new high";
     } else {
       // New high. Bill only the part above whatever has already been paid for.
       const from = Math.max(peak, storedWatermark);
@@ -252,10 +319,13 @@ export function computeCombinedWatermarkUpfront(
         } else {
           newMoney = base;
           rate = resolved.rate;
-          const cur = sliceByFund.get(t.fundCode);
+          const key = `${t.investorCode}|${t.fundCode}`;
+          const cur = sliceByKey.get(key);
           if (cur) cur.base += base;
           else
-            sliceByFund.set(t.fundCode, {
+            sliceByKey.set(key, {
+              investorCode: t.investorCode,
+              fundCode: t.fundCode,
               base,
               category: resolved.category,
               rate: resolved.rate,
@@ -271,6 +341,7 @@ export function computeCombinedWatermarkUpfront(
     trace.push({
       date: t.date,
       fundCode: t.fundCode,
+      investorCode: t.investorCode,
       direction: t.direction,
       source: t.source,
       delta: r2(delta),
@@ -285,15 +356,19 @@ export function computeCombinedWatermarkUpfront(
 
   const newWatermark = Math.max(storedWatermark, peak);
   const increment = r2(Math.max(0, newWatermark - storedWatermark));
-  const slices: UpfrontSlice[] = [...sliceByFund.entries()]
-    .map(([fundCode, s]) => ({
-      fundCode,
+  const slices: UpfrontSlice[] = [...sliceByKey.values()]
+    .map((s) => ({
+      fundCode: s.fundCode,
+      investorCode: s.investorCode,
       category: s.category,
       base: r2(s.base),
       rate: s.rate,
       upfront: r2(s.base * s.rate),
     }))
-    .sort((a, b) => a.fundCode.localeCompare(b.fundCode));
+    .sort(
+      (a, b) =>
+        a.investorCode.localeCompare(b.investorCode) || a.fundCode.localeCompare(b.fundCode),
+    );
 
   // Portal amounts are Float; hundreds of movements drift. If the attributed
   // bases stop reconciling to the increment, the attribution is wrong and we
@@ -447,6 +522,7 @@ export async function fetchAgentInvestorTxns(
       direction: t.direction,
       amount,
       fundCode,
+      investorCode: invCode,
       source: "txn",
     });
   }
@@ -507,6 +583,7 @@ export async function fetchAgentInvestorTxns(
         direction: "SELL",
         amount,
         fundCode: d.fundCode,
+        investorCode: invCode,
         source: "cip",
       });
     }

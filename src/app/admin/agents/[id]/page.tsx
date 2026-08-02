@@ -835,29 +835,31 @@ function MethodologyPanel() {
 
       <div className="mt-4 space-y-4 text-sm">
         <Method
-          title="① Upfront commission — per-agent high-water-mark, per INVESTOR (all funds combined)"
+          title="① Upfront commission — per-agent BOOK high-water-mark (every investor, all funds combined)"
           formula={
-            "net_principal(investor) = Σ across ALL funds of (BUY − SELL) cash for that\n" +
-            "                          investor under this agent, EXCLUDING CIP reinvestment\n" +
-            "watermark(agent, investor) = running peak of net_principal (never falls on\n" +
-            "                             redemption or fund switch)\n" +
+            "net_principal(agent) = Σ across EVERY sourced investor and ALL funds of\n" +
+            "                       (BUY − SELL) cash, EXCLUDING CIP reinvestment\n" +
+            "watermark(agent) = running peak of net_principal (never falls on redemption,\n" +
+            "                   fund switch, or a transfer between the agent's clients)\n" +
             "increment = max(0, new_peak − stored_watermark)\n" +
             "upfront   = increment × upfront_pct of the fund that RECEIVED the money"
           }
           example={
-            "Agent BI0000, investor A00123, sourced into ESRF (equity, 0.10%) with 500,000 → net principal 500,000 (peak) → upfront 0.10% × 500,000 = 500; watermark 500,000. " +
-            "The investor then redeems 200,000 from ESRF and purchases 250,000 into EFUF (fixed income, 0.15%). Combined net principal moves 500,000 → 300,000 → 550,000. " +
+            "Agent BI0000 sources A00123 into ESRF (equity, 0.10%) with 500,000 → book net principal 500,000 (peak) → upfront 0.10% × 500,000 = 500; watermark 500,000. " +
+            "A00123 then redeems 200,000 from ESRF and buys 250,000 into EFUF (fixed income, 0.15%). The book moves 500,000 → 300,000 → 550,000. " +
             "The new high is 550,000, i.e. 50,000 above the watermark — and the money that set it went into EFUF, so EFUF's rate applies: 50,000 × 0.15% = 75; watermark → 550,000. " +
-            "The 200,000 that merely moved house earns nothing. Under the old per-fund model the same events paid on the whole 250,000 EFUF purchase while the ESRF watermark stayed put — paying the agent a second time on money that never left."
+            "Now a DIFFERENT investor, A00456, subscribes 200,000 on the same day A00123 redeems 200,000. The book is unchanged, so there is no new high and no upfront — under the old per-investor model A00456 looked like a brand-new client and paid in full on money that never left the agent's book."
           }
           notes={[
-            "Per agent, per INVESTOR — one watermark spanning EGF, ESRF and EFUF together. Money moving between funds is not new money and earns nothing.",
+            "Per agent — ONE watermark spanning every investor they sourced and EGF, ESRF and EFUF together. Money moving between funds, or between two of this agent's own clients, is not new money and earns nothing.",
+            "The cost is deliberate: a genuinely new client whose money arrives while another client is redeeming earns nothing, because the book has not made a new high. A book peak can never exceed the sum of the individual peaks, so this model pays the same or less than the one it replaced — the right direction of error given there is no clawback.",
             "CIP dividend reinvestment is excluded from net principal — a reinvested dividend is not money the agent brought in, so it never lifts the watermark.",
-            "Rate attribution: the increment is charged at the category rate of the fund that received the money setting the new high. If two funds set the high in one evaluation, the increment splits and each part carries its own fund's rate — the Rate column then shows a blended figure; expand the row for the split.",
+            "Rate attribution: the increment is charged at the category rate of the fund that received the money setting the new high. If two funds or two investors set the high in one evaluation, the increment splits and each part carries its own fund's rate — the Rate column then shows a blended figure; expand the row for the split.",
             "The watermark ratchets up only; redemptions/NAV moves never reduce it and never earn upfront — only net-new principal above the prior peak does.",
             "Skipped if `is_direct_subscription = true` (clause 6.5 — no agent commission on direct subscriptions).",
-            "Evaluated monthly by `/api/cron/monthly-upfront` (1st of month); admin can post early with 'Post upfront now'. Posted as one CommissionRun per driving fund (type=upfront, fund_code = the fund whose rate applied, agent_investor_id set).",
-            "Changed 2026-07 from a per-(agent, fund) watermark. No upfront had been posted under the old model, so nothing is restated.",
+            "A blocking data warning, or a fund with no active term, now blocks the WHOLE agent rather than one investor — the book is a single series, so dropping one investor's rows would stop their SELLs cancelling and overstate everyone else.",
+            "Evaluated monthly by `/api/cron/monthly-upfront` (1st of month); admin can post early with 'Post upfront now'. Posted as one CommissionRun per driving investor × fund (type=upfront, fund_code = the fund whose rate applied, agent_investor_id set).",
+            "Changed 2026-08 from a per-(agent, investor) watermark, which was itself a 2026-07 change from per-(agent, fund). Posted upfront exists under the previous model and was restated by scripts/restate-global-watermark.ts.",
           ]}
         />
 
@@ -997,7 +999,7 @@ function CommissionPreviewPanel({
           <form
             action={reinstateAgentUpfront}
             className="flex flex-wrap items-end gap-2"
-            data-confirm="Re-instate upfront from the chosen date? Remember to set each fund's watermark so no back-dated upfront accrues."
+            data-confirm="Re-instate upfront from the chosen date? Remember to set the book watermark so no back-dated upfront accrues."
           >
             <input type="hidden" name="agentId" value={agentId} />
             <label className="block">
@@ -1013,10 +1015,9 @@ function CommissionPreviewPanel({
           <form
             action={setAgentWatermark}
             className="flex items-center justify-end gap-1"
-            data-confirm={`Set ${w.investorCode}${w.investorName ? ` (${w.investorName})` : ""} watermark to the entered value? This is one figure covering ALL funds for this investor. Their current peak is ${formatBdt(Math.max(w.storedWatermark, w.peak))} — setting BELOW it pays out the difference on the next run; setting AT or ABOVE it pays nothing until they bring in more money.`}
+            data-confirm={`Set this agent's BOOK watermark to the entered value? This is one figure covering every investor they sourced and all three funds. The book's current peak is ${formatBdt(Math.max(w.storedWatermark, w.peak))} — setting BELOW it pays out the difference on the next run; setting AT or ABOVE it pays nothing until the book grows past it.`}
           >
             <input type="hidden" name="agentId" value={agentId} />
-            <input type="hidden" name="investorCode" value={w.investorCode} />
             <input
               name="watermark"
               type="number"

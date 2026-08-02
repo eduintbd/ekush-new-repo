@@ -569,9 +569,18 @@ export async function postAgentUpfront(formData: FormData): Promise<void> {
   const res = await runUpfront(monthStart, through, through, { agentId });
 
   revalidatePath(`/admin/agents/${agentId}`);
+  // "Nothing to post" is only true if the agent was actually evaluated. It used
+  // to be reported for unapproved agents too, which meant an accountant looking
+  // at a real pending increment was told the money did not exist.
   const msg = res.created > 0
     ? `Posted ${res.created} upfront row(s) · ${res.totalUpfront.toFixed(2)} BDT (watermark ratcheted).`
-    : `No new money above the watermark — nothing to post.`;
+    : res.notApproved.length > 0
+      ? `Not posted — ${res.notApproved[0]}. Approve the agent first.`
+      : res.blocked > 0
+        ? `Not posted — ${res.blockedDetail[0]?.reason ?? "blocked, see the run warnings"}.`
+        : res.suspended > 0
+          ? `Not posted — upfront is suspended for this agent.`
+          : `No new money above the book watermark — nothing to post.`;
   redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(msg)}`);
 }
 
@@ -600,8 +609,9 @@ export async function suspendAgentUpfront(formData: FormData): Promise<void> {
 }
 
 /** Re-instate an agent's upfront entitlement from a date. The accountant
- *  should also set the watermark for each affected investor (setAgentWatermark) so no back-dated
- *  upfront accrues on money that arrived during suspension. */
+ *  should also set the book watermark (setAgentWatermark) so no back-dated
+ *  upfront accrues on money that arrived during suspension. One figure now,
+ *  not one per investor. */
 export async function reinstateAgentUpfront(formData: FormData): Promise<void> {
   const me = await requireRole(["admin", "checker", "accountant"]);
   const agentId = String(formData.get("agentId") ?? "").trim();
@@ -620,52 +630,44 @@ export async function reinstateAgentUpfront(formData: FormData): Promise<void> {
   redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(`Upfront re-instated from ${fromRaw} — review the watermark below`)}`);
 }
 
-/** Manually set a (agent, fund) upfront watermark. Used at re-instatement to
- *  baseline the high-water-mark so future upfront pays only on new money
- *  above this value. */
+/** Manually set an agent's BOOK upfront watermark. Used at re-instatement to
+ *  baseline the high-water-mark so future upfront pays only on new money above
+ *  this value.
+ *
+ *  One figure per agent since 2026-08. The old per-investor form took an
+ *  investorCode and had to guard that the investor was actually linked, since
+ *  a watermark against a stranger would have suppressed nobody's upfront while
+ *  sitting invisible in the table. There is no such footgun now — there is
+ *  exactly one row per agent and the agent id comes from the page, not a
+ *  free-form field. */
 export async function setAgentWatermark(formData: FormData): Promise<void> {
   const me = await requireRole(["admin", "checker", "accountant"]);
   const agentId = String(formData.get("agentId") ?? "").trim();
-  const investorCode = String(formData.get("investorCode") ?? "").trim();
   const valueRaw = String(formData.get("watermark") ?? "").trim();
   const value = Number(valueRaw);
-  if (!agentId || !investorCode) {
-    redirect(`/admin/agents/${agentId}?error=Missing+agent+or+investor`);
+  if (!agentId) {
+    redirect(`/admin/agents?error=Missing+agent`);
   }
   if (!Number.isFinite(value) || value < 0) {
     redirect(`/admin/agents/${agentId}?error=Watermark+must+be+a+non-negative+number`);
   }
 
-  // investorCode is free-form (was one of three known fund codes). A watermark
-  // against an investor this agent never sourced would silently suppress that
-  // investor's upfront forever, with no row visible anywhere — so confirm the
-  // link exists first.
-  const link = await prisma.agentInvestor.findFirst({
-    where: { agentId, investorCode },
-    select: { id: true },
-  });
-  if (!link) {
-    redirect(
-      `/admin/agents/${agentId}?error=${encodeURIComponent(`${investorCode} is not linked to this agent — cannot set a watermark for them.`)}`,
-    );
-  }
-
-  const prev = await prisma.agentInvestorWatermark.findUnique({
-    where: { agentId_investorCode: { agentId, investorCode } },
+  const prev = await prisma.agentBookWatermark.findUnique({
+    where: { agentId },
     select: { watermark: true },
   });
   const today = new Date();
   await withActor(me.id, (tx) =>
-    tx.agentInvestorWatermark.upsert({
-      where: { agentId_investorCode: { agentId, investorCode } },
-      create: { agentId, investorCode, watermark: round2BD(value), throughDate: today },
+    tx.agentBookWatermark.upsert({
+      where: { agentId },
+      create: { agentId, watermark: round2BD(value), throughDate: today },
       update: { watermark: round2BD(value), throughDate: today },
     }),
   );
   revalidatePath(`/admin/agents/${agentId}`);
   const prevStr = prev ? ` (was ${round2BD(Number(prev.watermark))})` : "";
   redirect(
-    `/admin/agents/${agentId}?ok=${encodeURIComponent(`${investorCode} watermark set to ${round2BD(value)}${prevStr} — applies across all funds.`)}`,
+    `/admin/agents/${agentId}?ok=${encodeURIComponent(`Book watermark set to ${round2BD(value)}${prevStr} — applies across every investor and all funds.`)}`,
   );
 }
 

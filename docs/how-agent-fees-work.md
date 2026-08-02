@@ -46,19 +46,37 @@ You earn **two** different fees. They are not the same thing.
 
 ### The water line (please remember this one picture)
 
-Imagine your investor's money is **water in a glass**. On the wall behind the
-glass we draw a **line** at the **highest the water has ever reached**.
+Imagine **all the money you have brought to Ekush** is **water in one glass**. On
+the wall behind the glass we draw a **line** at the **highest the water has ever
+reached**.
 
 - 🖊️ **The line only ever goes UP. It never comes down.**
 - 💰 **You earn upfront ONLY when the water rises ABOVE the line** (a brand-new record).
 - The fancy name for this line is a **"high-water mark"**. That's all it means:
   the highest point ever reached.
 
-**One more big rule (the new one):** we look at **all three funds together as one
-glass**. EFUF, EGF and ESRF are added up into a single total. This stops the same
-money from earning upfront twice — you'll see why in Example 3.
+**The big rule — ONE glass for everything.** All three funds (EFUF, EGF, ESRF)
+**and all of your investors** are added up into a single total. Not one glass per
+fund. Not one glass per client. **One glass for your whole book.**
 
-Let's follow one investor, **Mr. Rahim**, whom **you** brought to Ekush.
+This stops the same money earning upfront twice. Example 3 shows it for a client
+switching funds; Example 6 shows it for money moving between two of your clients.
+
+> **What changed in August 2026.** We used to keep a separate glass for each
+> investor. That meant if one client took money out and another put the same money
+> in, it looked like brand-new money and paid upfront a second time — even though
+> nothing new had actually arrived at Ekush. One glass for your whole book fixes
+> that.
+>
+> **Be aware of the honest downside.** If one client withdraws in the same period
+> that another client invests, the two cancel out in the glass. The water may not
+> reach the line, and then **no upfront is earned that period — even on money from
+> a genuinely new client.** Nothing is lost permanently: the line stays where it
+> is, and as soon as your book grows past it you earn again.
+
+Let's follow one investor, **Mr. Rahim**, whom **you** brought to Ekush. For
+Examples 1 to 5, assume Rahim is your only client — so his glass and your book
+glass are the same thing.
 
 ---
 
@@ -200,15 +218,44 @@ goes up or down as his balance does.
 
 ---
 
+## Example 6 — money moves from one of your clients to another
+
+This is the rule that changed in August 2026, so it is worth walking through.
+
+Say your book stands at **10,00,000** and the line is drawn there. Then:
+
+- **Mr. Rahim withdraws 1,00,000.** Your glass drops to **9,00,000**.
+- A week later **Mrs. Karima invests 1,00,000.** Your glass goes back to
+  **10,00,000**.
+
+**Upfront earned: nothing.** The water came back up to the line but never went
+**above** it. No new record, no upfront.
+
+Is that fair? Think about what actually happened at Ekush: **the same 1,00,000
+left and came back.** No new money arrived. Karima might be Rahim's wife moving
+the family's savings between accounts — the system has no way of knowing, and it
+does not need to. The glass simply never made a new high.
+
+**Now the other side of it.** If Karima had invested **1,50,000** instead, your
+glass would reach **10,50,000** — **50,000 above the line.** You earn upfront on
+that **50,000**, and the line moves up to 10,50,000.
+
+So: **the part that is genuinely new still earns.** Only the part that was
+recycled does not.
+
+---
+
 ## The five golden rules (the whole guide on one hand ✋)
 
-1. **The line only goes up.** You earn upfront only when the investor reaches a
-   **brand-new high**, counting all three funds together.
+1. **The line only goes up.** You earn upfront only when your **whole book**
+   reaches a **brand-new high**, counting all three funds and all your investors
+   together.
 2. **Taking money out never takes back upfront you already earned** — but it lowers
    future trail.
 3. **Refilling below the old line earns nothing** until it beats the record.
-4. **Switching funds is not new money** → no upfront. **Only genuinely new money**
-   that sets a new high earns upfront.
+4. **Switching funds is not new money, and moving money between two of your own
+   clients is not new money either** → no upfront. **Only genuinely new money**
+   that lifts your book to a new high earns upfront.
 5. **Trail is the monthly thank-you** on whatever they're holding — bigger balance,
    bigger trail; smaller balance, smaller trail; stops when they fully withdraw.
 

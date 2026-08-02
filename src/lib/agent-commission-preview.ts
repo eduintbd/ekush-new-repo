@@ -13,6 +13,7 @@ import { periodsPerYear, type TrailFrequency } from "@/lib/commission-engine";
 import {
   computeCombinedWatermarkUpfront,
   fetchAgentInvestorTxns,
+  flattenToAgentSeries,
   isUpfrontEntitled,
   principalDelta,
   type FetchWarning,
@@ -20,31 +21,32 @@ import {
   type WatermarkStep,
 } from "@/lib/upfront-watermark";
 
-/** Where one investor's principal sits, and which fund's rate earned the
- *  pending increment. One leg per fund they hold under this agent. */
+/** Where the book's principal sits, and which investor × fund earned the
+ *  pending increment. One leg per (investor, fund) pair under this agent. */
 export type UpfrontWatermarkLeg = {
   fundCode: string;
+  investorCode: string;
+  investorName: string;
   category: "equity" | "fixed_income";
-  /** Net principal (Σ BUY−SELL, CIP excluded) in this fund. */
+  /** Net principal (Σ BUY−SELL, CIP excluded) in this investor × fund. */
   netPrincipal: number;
-  /** Share of this row's pendingIncrement attributed to this fund. */
+  /** Share of the book's pendingIncrement attributed to this leg. */
   attributedIncrement: number;
   upfrontPct: number;
   attributedUpfront: number;
 };
 
-/** Combined-fund watermark state for ONE investor under this agent.
- *  Note there is no single `upfrontPct`: an investor spanning equity and
- *  fixed-income earns at two rates, so the rate lives on the legs and the row
+/** Book-level watermark state for ONE agent — every investor they sourced,
+ *  all funds, as a single net-principal series (2026-08).
+ *  Note there is no single `upfrontPct`: an increment spanning equity and
+ *  fixed-income earns at two rates, so the rate lives on the legs and the view
  *  carries a blended figure for display. */
 export type UpfrontWatermarkView = {
-  investorCode: string;
-  investorName: string;
   /** Watermark already locked in (cumulative new money commissioned). */
   storedWatermark: number;
-  /** All-time peak of combined net principal reached so far. */
+  /** All-time peak of the book's net principal reached so far. */
   peak: number;
-  /** Combined net principal right now, all funds (after redemptions). */
+  /** Book net principal right now, all investors and funds (after redemptions). */
   currentNetPrincipal: number;
   /** New money above the stored watermark, not yet posted. */
   pendingIncrement: number;
@@ -54,7 +56,7 @@ export type UpfrontWatermarkView = {
   blendedPct: number;
   /** Legs carry more than one distinct rate. */
   mixedRate: boolean;
-  /** CIP dividend excluded from this investor's series. */
+  /** CIP dividend excluded from the book's series. */
   cipOffset: number;
   /** Funds that drove a new high but have no active term — nothing posts. */
   unratedFunds: string[];
@@ -155,7 +157,9 @@ export type PreviewResult = {
   buckets: Bucket[];
   trailRows: TrailRow[];
   /** Per-INVESTOR combined-fund high-water-mark state (the live model). */
-  upfrontWatermarks: UpfrontWatermarkView[];
+  /** Book-level watermark state — one per agent, null when they have sourced
+   *  nothing or the replay could not be attributed. */
+  upfrontWatermark: UpfrontWatermarkView | null;
   /** Data problems found while replaying — a human should look before posting. */
   upfrontWarnings: FetchWarning[];
   /** Accountant-controlled upfront entitlement (false = suspended). */
@@ -273,7 +277,7 @@ export async function computeAgentCommissionPreview(
       txns: [],
       buckets: [],
       trailRows: [],
-      upfrontWatermarks: [],
+      upfrontWatermark: null,
       upfrontWarnings: [],
       upfrontEntitled,
       upfrontSuspendedFrom,
@@ -542,14 +546,12 @@ export async function computeAgentCommissionPreview(
   );
 
   // ── Watermark upfront (the live upfront model) ──────────────────
-  // Combined across ALL funds, per INVESTOR, vs that investor's stored
-  // watermark → pending new-money increment. Calls the SAME functions the
-  // runner posts from, so what the accountant approves on this screen is
-  // exactly what gets written. This block used to re-implement the fetch and
-  // omitted both the isDirectSubscription filter and any as-of bound, so it
-  // could overstate what would actually post — next to the Post button.
-  const wmRows = await prisma.agentInvestorWatermark.findMany({ where: { agentId } });
-  const wmByInvestor = new Map(wmRows.map((w) => [w.investorCode, Number(w.watermark)]));
+  // ONE replay for the agent's whole book — every investor they sourced, all
+  // funds, one net-principal series — against the agent's stored watermark.
+  // Calls the SAME functions the runner posts from, so what the accountant
+  // approves on this screen is exactly what gets written.
+  const wmRow = await prisma.agentBookWatermark.findUnique({ where: { agentId } });
+  const stored = wmRow ? Number(wmRow.watermark) : 0;
   const nameByCode = new Map(bucketsSorted.map((b) => [b.investorCode, b.name]));
 
   const rateFor: RateResolver = (fundCode: string) => {
@@ -564,53 +566,61 @@ export async function computeAgentCommissionPreview(
     asOf,
   );
 
-  const upfrontWatermarks: UpfrontWatermarkView[] = [];
+  let upfrontWatermark: UpfrontWatermarkView | null = null;
   let pendingUpfront = 0;
-  for (const [investorCode, itx] of wmTxByInvestor) {
-    const stored = wmByInvestor.get(investorCode) ?? 0;
+  const bookTxns = flattenToAgentSeries(wmTxByInvestor);
+  if (bookTxns.length > 0) {
     let res;
     try {
-      res = computeCombinedWatermarkUpfront(itx, stored, rateFor);
+      res = computeCombinedWatermarkUpfront(bookTxns, stored, rateFor);
     } catch {
-      continue; // attribution mismatch — the runner blocks it too
+      res = null; // attribution mismatch — the runner blocks it too
     }
-    // Net principal per fund, so the row can show WHERE the money sits.
-    const netByFund = new Map<string, number>();
-    for (const t of itx) {
-      netByFund.set(t.fundCode, (netByFund.get(t.fundCode) ?? 0) + principalDelta(t));
-    }
-    const legFunds = Array.from(new Set([...netByFund.keys(), ...res.slices.map((s) => s.fundCode)])).sort();
-    const legs = legFunds.map((fundCode) => {
-      const slice = res.slices.find((s) => s.fundCode === fundCode);
-      const resolved = rateFor(fundCode);
-      return {
-        fundCode,
-        category: resolved?.category ?? categoryForFund(fundCode as FundCode),
-        netPrincipal: round2(netByFund.get(fundCode) ?? 0),
-        attributedIncrement: slice?.base ?? 0,
-        upfrontPct: slice?.rate ?? resolved?.rate ?? 0,
-        attributedUpfront: slice?.upfront ?? 0,
+    if (res) {
+      // Net principal per investor × fund, so the screen can show WHERE in the
+      // book the money sits, not just the one book total.
+      const netByLeg = new Map<string, number>();
+      for (const t of bookTxns) {
+        const key = `${t.investorCode}|${t.fundCode}`;
+        netByLeg.set(key, (netByLeg.get(key) ?? 0) + principalDelta(t));
+      }
+      const legKeys = Array.from(
+        new Set([...netByLeg.keys(), ...res.slices.map((s) => `${s.investorCode}|${s.fundCode}`)]),
+      ).sort();
+      const legs = legKeys.map((key) => {
+        const [investorCode, fundCode] = key.split("|");
+        const slice = res.slices.find(
+          (s) => s.investorCode === investorCode && s.fundCode === fundCode,
+        );
+        const resolved = rateFor(fundCode);
+        return {
+          fundCode,
+          investorCode,
+          investorName: nameByCode.get(investorCode) ?? "",
+          category: resolved?.category ?? categoryForFund(fundCode as FundCode),
+          netPrincipal: round2(netByLeg.get(key) ?? 0),
+          attributedIncrement: slice?.base ?? 0,
+          upfrontPct: slice?.rate ?? resolved?.rate ?? 0,
+          attributedUpfront: slice?.upfront ?? 0,
+        };
+      });
+      const rates = new Set(res.slices.map((s) => s.rate));
+      upfrontWatermark = {
+        storedWatermark: stored,
+        peak: res.peak,
+        currentNetPrincipal: res.netPrincipal,
+        pendingIncrement: res.increment,
+        pendingUpfront: res.upfront,
+        blendedPct: res.increment > 0 ? res.upfront / res.increment : 0,
+        mixedRate: rates.size > 1,
+        cipOffset: res.cipOffset,
+        unratedFunds: res.unratedFunds,
+        legs,
+        trace: res.trace,
       };
-    });
-    const rates = new Set(res.slices.map((s) => s.rate));
-    upfrontWatermarks.push({
-      investorCode,
-      investorName: nameByCode.get(investorCode) ?? "",
-      storedWatermark: stored,
-      peak: res.peak,
-      currentNetPrincipal: res.netPrincipal,
-      pendingIncrement: res.increment,
-      pendingUpfront: res.upfront,
-      blendedPct: res.increment > 0 ? res.upfront / res.increment : 0,
-      mixedRate: rates.size > 1,
-      cipOffset: res.cipOffset,
-      unratedFunds: res.unratedFunds,
-      legs,
-      trace: res.trace,
-    });
-    pendingUpfront += res.upfront;
+      pendingUpfront = res.upfront;
+    }
   }
-  upfrontWatermarks.sort((a, b) => a.investorCode.localeCompare(b.investorCode));
   const upfrontWarnings = wmWarnings;
 
   // Reversed rows are corrections, not payments — counting them as "posted"
@@ -635,7 +645,7 @@ export async function computeAgentCommissionPreview(
     txns,
     buckets: bucketsSorted,
     trailRows: trailRowsAll,
-    upfrontWatermarks,
+    upfrontWatermark,
     upfrontWarnings,
     upfrontEntitled,
     upfrontSuspendedFrom,

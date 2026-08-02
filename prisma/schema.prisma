@@ -714,6 +714,8 @@ model SellingAgent {
   accruals          CommissionAccrual[]
   journals          Journal[]
   investorWatermarks AgentInvestorWatermark[]
+  /// The live upfront watermark — one row per agent (2026-08).
+  bookWatermark      AgentBookWatermark?
   upfrontSuspensions AgentUpfrontSuspension[]
   bankAccounts      AgentBankAccount[]
   nominees          AgentNominee[]
@@ -871,19 +873,16 @@ model NavSnapshot {
   @@schema("xsystem")
 }
 
-// Per-(agent, INVESTOR) high-water-mark for upfront commission, combined
-// across ALL funds. Upfront is paid only on the increment of that investor's
-// net invested principal (Σ BUY−SELL cash over EFUF+EGF+ESRF, excluding CIP
-// dividend reinvestment) above `watermark`; the watermark ratchets up and
-// never falls when they redeem. `throughDate` = last evaluated period end.
+// RETIRED 2026-08 — superseded by AgentBookWatermark. Kept, unused, until the
+// book-level cutover is signed off; scripts/restate-global-watermark.ts dumps
+// these rows to prisma/migrations-manual/_dropped_investor_watermarks_backup.json
+// before they go. No live code path reads this model.
 //
-// Supersedes the per-(agent, fund) model (2026-07). Under that model an
-// investor could redeem from one fund and subscribe to another and the agent
-// earned upfront twice on the same money, because each fund kept its own
-// peak. Combining the funds makes a switch a no-op by construction: the SELL
-// and the BUY cancel, net principal is unchanged, so there is no new high.
-// Investors stay independent of one another — one client's redemption must
-// never cancel out another client's genuinely new money.
+// Per-(agent, INVESTOR) high-water-mark for upfront commission, combined
+// across ALL funds. Upfront was paid only on the increment of that investor's
+// net invested principal (Σ BUY−SELL cash over EFUF+EGF+ESRF, excluding CIP
+// dividend reinvestment) above `watermark`; the watermark ratcheted up and
+// never fell when they redeemed. `throughDate` = last evaluated period end.
 model AgentInvestorWatermark {
   id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   agentId      String   @map("agent_id") @db.Uuid
@@ -904,6 +903,45 @@ model AgentInvestorWatermark {
   @@unique([agentId, investorCode])
   @@index([investorCode])
   @@map("agent_investor_upfront_watermarks")
+  @@schema("xsystem")
+}
+
+// Per-AGENT high-water-mark for upfront commission — one peak for the agent's
+// whole book, across every investor they sourced and all three funds. Upfront
+// is paid only on the increment of that book's net invested principal
+// (Σ BUY−SELL cash, excluding CIP dividend reinvestment) above `watermark`;
+// the watermark ratchets up and never falls. `throughDate` = last evaluated
+// period end.
+//
+// Supersedes the per-(agent, investor) model (2026-08). Under that model,
+// money moved out of one client and into another under the same agent read as
+// a brand-new high in the receiving client's series and paid in full, though
+// nothing new had reached Ekush. The portal has no related-party field, so
+// those two accounts are indistinguishable from two strangers and the churn
+// cannot be detected. Netting the whole book makes it arithmetically
+// impossible instead: an internal transfer leaves the total unchanged, so
+// there is no new high and nothing to pay.
+//
+// The cost is deliberate and known: a genuinely new client whose money arrives
+// while another client is redeeming earns nothing. A book peak is the peak of
+// a sum and can never exceed the sum of peaks, so this model pays the same or
+// less than the one it replaces — the right direction of error given there is
+// no clawback anywhere in the live system.
+model AgentBookWatermark {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId      String   @unique @map("agent_id") @db.Uuid
+  watermark    Decimal  @default(0) @db.Decimal(18, 2)
+  /// Net principal at `throughDate`. Diagnostics only — never drives pay.
+  netPrincipal Decimal  @default(0) @map("net_principal") @db.Decimal(18, 2)
+  /// Σ CIP dividend excluded from the replay that produced this row.
+  cipOffset    Decimal  @default(0) @map("cip_offset") @db.Decimal(18, 2)
+  throughDate  DateTime @map("through_date") @db.Date
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@map("agent_book_upfront_watermarks")
   @@schema("xsystem")
 }
 
