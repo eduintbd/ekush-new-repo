@@ -55,7 +55,8 @@ export type FetchWarning = {
     | "unknown_direction"
     | "same_day_buy_sell"
     | "cip_no_candidate_buy"
-    | "direct_mixed";
+    | "direct_mixed"
+    | "sign_contradicts_direction";
   investorCode: string;
   fundCode: string | null;
   detail: string;
@@ -86,6 +87,30 @@ export type UpfrontSlice = {
   upfront: number;
 };
 
+/** One movement of the replay, in the order the engine actually processed it.
+ *  This is the audit trail an agent gets in their workbook: it shows why each
+ *  subscription did or did not earn upfront, rather than asking them to take
+ *  the total on faith. */
+export type WatermarkStep = {
+  date: Date;
+  fundCode: string;
+  direction: "BUY" | "SELL";
+  source: "txn" | "cip";
+  /** Signed effect on net invested principal (see principalDelta). */
+  delta: number;
+  /** Net invested principal after this movement. */
+  running: number;
+  /** Peak after this movement — never falls. */
+  peak: number;
+  /** Part of this movement above everything already paid for. */
+  newMoney: number;
+  /** Rate applied to newMoney; 0 when nothing was earned. */
+  rate: number;
+  upfront: number;
+  /** Plain-language reason, safe to show an agent. */
+  note: string;
+};
+
 export type CombinedWatermarkResult = {
   peak: number;
   netPrincipal: number;
@@ -103,10 +128,33 @@ export type CombinedWatermarkResult = {
   negativeRunningSeen: boolean;
   /** Σ CIP dividend excluded from this series. */
   cipOffset: number;
+  /** The replay itself, one row per movement, in processed order. */
+  trace: WatermarkStep[];
 };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const iso = (d: Date) => new Date(d).toISOString().slice(0, 10);
+
+/**
+ * How much a movement changes net invested principal, as a SIGNED number.
+ *
+ * `public.transactions.amount` already carries the sign of the movement: every
+ * executed SELL in the portal is stored NEGATIVE (1,866 of 1,868 rows as of
+ * 2026-08). This engine used to do `BUY ? amount : -amount`, which negated an
+ * already-negative redemption and so ADDED it to the series — a redemption
+ * pushed the watermark UP and paid upfront on money going out the door. On
+ * agent S00004 that reported A00699's net principal as 105,500,000 against a
+ * true 42,500,000, and billed the redeemed money again on re-entry.
+ *
+ * So SELL is normalised on magnitude — `-|amount|` reduces principal under
+ * either sign convention. BUY keeps its stored sign: the handful of negative
+ * BUY rows are corrections/reversals, and taking their magnitude would turn a
+ * reversal into a subscription. Both choices can only ever understate, which
+ * is the correct direction of error on a system with no clawback.
+ */
+export function principalDelta(t: { direction: "BUY" | "SELL"; amount: number }): number {
+  return t.direction === "BUY" ? t.amount : -Math.abs(t.amount);
+}
 
 export type SuspensionEvent = { action: string; effectiveFrom: Date; createdAt?: Date };
 
@@ -171,26 +219,68 @@ export function computeCombinedWatermarkUpfront(
   let negativeRunningSeen = false;
   let cipOffset = 0;
 
+  const trace: WatermarkStep[] = [];
   for (const t of sorted) {
-    if (t.source === "cip") cipOffset += t.amount;
-    running += t.direction === "BUY" ? t.amount : -t.amount;
+    if (t.source === "cip") cipOffset += Math.abs(t.amount);
+    const delta = principalDelta(t);
+    running += delta;
     if (running < 0) negativeRunningSeen = true;
-    if (running <= peak) continue;
 
-    // New high. Bill only the part above whatever has already been paid for.
-    const from = Math.max(peak, storedWatermark);
-    peak = running;
-    const base = running - from;
-    if (base <= 0) continue; // new high still below the stored watermark
+    let newMoney = 0;
+    let rate = 0;
+    let note: string;
 
-    const resolved = rateFor(t.fundCode);
-    if (!resolved) {
-      unrated.add(t.fundCode);
-      continue;
+    if (running <= peak) {
+      note =
+        t.source === "cip"
+          ? "CIP reinvestment — not new money"
+          : delta < 0
+            ? "Redemption — peak does not fall"
+            : "Refills below the peak — money already commissioned";
+    } else {
+      // New high. Bill only the part above whatever has already been paid for.
+      const from = Math.max(peak, storedWatermark);
+      peak = running;
+      const base = running - from;
+      if (base <= 0) {
+        note = "New peak, but still below the watermark already paid on";
+      } else {
+        const resolved = rateFor(t.fundCode);
+        if (!resolved) {
+          unrated.add(t.fundCode);
+          note = `No commission term covers ${t.fundCode} — nothing posts`;
+        } else {
+          newMoney = base;
+          rate = resolved.rate;
+          const cur = sliceByFund.get(t.fundCode);
+          if (cur) cur.base += base;
+          else
+            sliceByFund.set(t.fundCode, {
+              base,
+              category: resolved.category,
+              rate: resolved.rate,
+            });
+          note =
+            base < delta
+              ? "New high — upfront on the part above the previous peak only"
+              : "New high — upfront on the full amount";
+        }
+      }
     }
-    const cur = sliceByFund.get(t.fundCode);
-    if (cur) cur.base += base;
-    else sliceByFund.set(t.fundCode, { base, category: resolved.category, rate: resolved.rate });
+
+    trace.push({
+      date: t.date,
+      fundCode: t.fundCode,
+      direction: t.direction,
+      source: t.source,
+      delta: r2(delta),
+      running: r2(running),
+      peak: r2(peak),
+      newMoney: r2(newMoney),
+      rate,
+      upfront: r2(newMoney * rate),
+      note,
+    });
   }
 
   const newWatermark = Math.max(storedWatermark, peak);
@@ -226,6 +316,7 @@ export function computeCombinedWatermarkUpfront(
     unratedFunds: [...unrated],
     negativeRunningSeen,
     cipOffset: r2(cipOffset),
+    trace,
   };
 }
 
@@ -338,10 +429,23 @@ export async function fetchAgentInvestorTxns(
       });
       continue;
     }
+    // The portal signs SELL amounts negative. A row whose sign disagrees with
+    // its direction is either a correction or a data-entry error, and
+    // principalDelta() resolves it conservatively — say so out loud rather than
+    // letting it move money silently.
+    const amount = Number(t.amount ?? 0);
+    if ((t.direction === "BUY" && amount < 0) || (t.direction === "SELL" && amount > 0)) {
+      warnings.push({
+        kind: "sign_contradicts_direction",
+        investorCode: invCode,
+        fundCode,
+        detail: `${iso(t.date)} ${t.direction} amount ${amount.toFixed(2)} — sign disagrees with direction; treated as ${principalDelta({ direction: t.direction, amount }).toFixed(2)}`,
+      });
+    }
     push(invCode, {
       date: t.date,
       direction: t.direction,
-      amount: Number(t.amount ?? 0),
+      amount,
       fundCode,
       source: "txn",
     });
@@ -459,7 +563,7 @@ export function computeWatermarkUpfront(
   let running = 0;
   let peak = 0;
   for (const t of sorted) {
-    running += t.direction === "BUY" ? t.amount : -t.amount;
+    running += principalDelta(t);
     if (running > peak) peak = running;
   }
   const newWatermark = Math.max(storedWatermark, peak);

@@ -14,8 +14,10 @@ import {
   computeCombinedWatermarkUpfront,
   fetchAgentInvestorTxns,
   isUpfrontEntitled,
+  principalDelta,
   type FetchWarning,
   type RateResolver,
+  type WatermarkStep,
 } from "@/lib/upfront-watermark";
 
 /** Where one investor's principal sits, and which fund's rate earned the
@@ -57,6 +59,10 @@ export type UpfrontWatermarkView = {
   /** Funds that drove a new high but have no active term — nothing posts. */
   unratedFunds: string[];
   legs: UpfrontWatermarkLeg[];
+  /** The replay behind the numbers above, movement by movement. Rendered as
+   *  the workbook's "Upfront watermark" sheet so the figure can be checked
+   *  rather than trusted. */
+  trace: WatermarkStep[];
 };
 
 export type Term = {
@@ -394,9 +400,15 @@ export async function computeAgentCommissionPreview(
       b.perInflowUpfront += commission;
       b.buys.push({ date: t.date, units: t.units });
     } else {
-      b.outflowTotal += t.amount;
-      b.unitsSold += t.units;
-      b.sells.push({ date: t.date, units: t.units });
+      // Redemptions arrive from the portal ALREADY signed negative (amount and
+      // units both). Stored raw, every consumer that subtracts them added them
+      // instead: "Net inflow" read inflow − (−outflow), and unitsAt() below
+      // handed the trail engine the redeemed units back, overstating trail for
+      // the whole rest of the life of the holding. Keep magnitudes here so a
+      // redemption is subtracted exactly once, whichever sign it arrives with.
+      b.outflowTotal += Math.abs(t.amount);
+      b.unitsSold += Math.abs(t.units);
+      b.sells.push({ date: t.date, units: Math.abs(t.units) });
     }
     // Per-spec initial upfront: only on the first BUY at sourcing date.
     const link = linkByPair.get(key)!;
@@ -565,10 +577,7 @@ export async function computeAgentCommissionPreview(
     // Net principal per fund, so the row can show WHERE the money sits.
     const netByFund = new Map<string, number>();
     for (const t of itx) {
-      netByFund.set(
-        t.fundCode,
-        (netByFund.get(t.fundCode) ?? 0) + (t.direction === "BUY" ? t.amount : -t.amount),
-      );
+      netByFund.set(t.fundCode, (netByFund.get(t.fundCode) ?? 0) + principalDelta(t));
     }
     const legFunds = Array.from(new Set([...netByFund.keys(), ...res.slices.map((s) => s.fundCode)])).sort();
     const legs = legFunds.map((fundCode) => {
@@ -597,14 +606,17 @@ export async function computeAgentCommissionPreview(
       cipOffset: res.cipOffset,
       unratedFunds: res.unratedFunds,
       legs,
+      trace: res.trace,
     });
     pendingUpfront += res.upfront;
   }
   upfrontWatermarks.sort((a, b) => a.investorCode.localeCompare(b.investorCode));
   const upfrontWarnings = wmWarnings;
 
+  // Reversed rows are corrections, not payments — counting them as "posted"
+  // would make a restated run look like it had already paid what it withdrew.
   const postedAgg = await prisma.commissionRun.aggregate({
-    where: { agentId, type: "upfront" },
+    where: { agentId, type: "upfront", status: { not: "reversed" } },
     _sum: { amount: true },
   });
   const postedUpfront = Number(postedAgg._sum.amount ?? 0);

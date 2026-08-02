@@ -316,9 +316,12 @@ async function main() {
       b.perInflowUpfront += commission;
       b.buys.push({ date: t.date, units: t.units });
     } else {
-      b.outflowTotal += t.amount;
-      b.unitsSold += t.units;
-      b.sells.push({ date: t.date, units: t.units });
+      // Portal signs redemptions negative — store magnitudes so outflow, net
+      // and unitsAt() each subtract them exactly once. See the same note in
+      // src/lib/agent-commission-preview.ts.
+      b.outflowTotal += Math.abs(t.amount);
+      b.unitsSold += Math.abs(t.units);
+      b.sells.push({ date: t.date, units: Math.abs(t.units) });
     }
 
     // Mark per-spec initial-only upfront on the first BUY at-or-after sourcedOn

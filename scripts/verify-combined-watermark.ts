@@ -192,6 +192,96 @@ function unitTraces() {
     check("unratedFunds", r.unratedFunds, ["ESRF"]);
     check("no slices", r.slices.length, 0);
   }
+
+  // S10 — THE SIGN BUG. public.transactions stores executed SELLs with a
+  // NEGATIVE amount (1,866 of 1,868 rows). The engine used to negate that
+  // again, so a redemption ADDED to net principal and lifted the watermark.
+  // Agent S00004's screen read A00699 at 105,500,000 net principal against a
+  // true 42,500,000, and re-billed the redeemed money when it came back.
+  console.log("\nS10 portal sign convention: SELL amounts arrive negative");
+  {
+    const t = [
+      buy("2026-01-01", "EFUF", 200_000),
+      sell("2026-02-01", "EFUF", -150_000), // as the portal stores it
+    ];
+    const r = computeCombinedWatermarkUpfront(t, 200_000, rateFor);
+    check("negative SELL reduces principal", r.netPrincipal, 50_000);
+    check("peak holds, nothing new to pay", r.increment, 0);
+
+    // Refilling below the peak must still earn nothing.
+    const back = computeCombinedWatermarkUpfront(
+      [...t, buy("2026-03-01", "EFUF", 150_000)],
+      200_000,
+      rateFor,
+    );
+    check("refill to the old peak earns nothing", back.increment, 0);
+
+    // Both sign conventions must land on the same number.
+    const positiveConvention = computeCombinedWatermarkUpfront(
+      [buy("2026-01-01", "EFUF", 200_000), sell("2026-02-01", "EFUF", 150_000)],
+      200_000,
+      rateFor,
+    );
+    check("sign convention is immaterial", positiveConvention.netPrincipal, r.netPrincipal);
+
+    // A negative BUY is a correction/reversal — it must NOT be flipped into a
+    // subscription by taking its magnitude.
+    const reversal = computeCombinedWatermarkUpfront(
+      [buy("2026-01-01", "EFUF", 200_000), buy("2026-01-05", "EFUF", -200_000)],
+      0,
+      rateFor,
+    );
+    check("negative BUY reverses, not adds", reversal.netPrincipal, 0);
+  }
+
+  // S11 — agent S00004, the case that exposed the bug. Real transactions,
+  // hand-checked against the AMC's own workbook.
+  console.log("\nS11 agent S00004 replay (all rates 0.10%)");
+  {
+    const flat: RateResolver = (fundCode) => ({
+      rate: 0.001,
+      category: categoryForFund(fundCode as FundCode),
+    });
+    // A00699: 7.5m + 15m + 20m in, 31.5m out, 31.5m back in ⇒ peak 42.5m.
+    const a699 = computeCombinedWatermarkUpfront(
+      [
+        buy("2026-02-18", "ESRF", 7_500_000),
+        buy("2026-03-03", "ESRF", 15_000_000),
+        buy("2026-03-16", "ESRF", 20_000_000),
+        sell("2026-06-29", "ESRF", -31_500_000),
+        buy("2026-06-30", "ESRF", 31_500_000),
+      ],
+      0,
+      flat,
+    );
+    check("A00699 net principal", a699.netPrincipal, 42_500_000);
+    check("A00699 peak", a699.peak, 42_500_000);
+    check("A00699 upfront", a699.upfront, 42_500);
+
+    // A00713: 15m ESRF, out 11.5m, 11.5m EFUF, out 10m, 10m ESRF ⇒ peak 15m.
+    const a713 = computeCombinedWatermarkUpfront(
+      [
+        buy("2026-04-05", "ESRF", 15_000_000),
+        sell("2026-06-30", "ESRF", -11_500_000),
+        buy("2026-07-02", "EFUF", 11_500_000),
+        sell("2026-07-12", "EFUF", -10_000_000),
+        buy("2026-07-15", "ESRF", 10_000_000),
+      ],
+      0,
+      flat,
+    );
+    check("A00713 net principal", a713.netPrincipal, 15_000_000);
+    check("A00713 peak", a713.peak, 15_000_000);
+    check("A00713 upfront", a713.upfront, 15_000);
+
+    const a820 = computeCombinedWatermarkUpfront(
+      [buy("2026-06-30", "EFUF", 500_000)],
+      0,
+      flat,
+    );
+    check("A00820 upfront", a820.upfront, 500);
+    check("agent total upfront", a699.upfront + a713.upfront + a820.upfront, 58_000);
+  }
 }
 
 async function compareLive(onlyAgent?: string) {

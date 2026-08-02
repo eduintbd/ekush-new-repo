@@ -25,6 +25,7 @@ export async function buildAgentCommissionWorkbook(
 
   buildTermsSheet(wb, preview.termsActive, audience);
   buildTxSheet(wb, preview);
+  buildWatermarkSheet(wb, preview, audience);
   buildTrailSheet(wb, preview);
   buildSummarySheet(wb, preview, audience);
 
@@ -148,6 +149,154 @@ function buildTxSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
     row.getCell("comm").value = earns
       ? { formula: `I${r}*K${r}`, result: Math.round(commission * 100) / 100 }
       : 0;
+  }
+}
+
+/**
+ * The upfront watermark, replayed movement by movement — one block per
+ * investor, in the order the engine actually processed them.
+ *
+ * Every figure past the opening row is a LIVE FORMULA, so an agent can click
+ * any cell and see the rule rather than take the total on faith:
+ *
+ *   Net principal   E = E(prev) + D          running Σ BUY − SELL, all funds
+ *   Watermark       F = MAX(F(prev), E)      the peak; never falls
+ *   New money       G = MAX(0, F − F(prev))  only what rose above the peak
+ *   Upfront         I = G × H
+ *
+ * The opening row seeds F with the watermark already commissioned, so money
+ * that merely refills below it visibly earns nothing. That chain reproduces
+ * the engine exactly, including the case where a redemption and a
+ * re-subscription cancel out — which is the whole point of the model.
+ *
+ * The preamble is written BEFORE any data, unlike the other sheets which
+ * splice theirs in at the end: spliceRows does not rewrite formula strings, so
+ * inserting rows above a live chain would silently point every cell one row
+ * off.
+ */
+function buildWatermarkSheet(
+  wb: ExcelJS.Workbook,
+  p: PreviewResult,
+  audience: CommissionAudience,
+): void {
+  const s = wb.addWorksheet("Upfront watermark");
+  const money = "#,##0.00";
+  // No `header` on the columns: the header row is added by hand below the
+  // preamble, so the data starts at a row number we control.
+  s.columns = [
+    { key: "date", width: 12 },
+    { key: "fund", width: 8 },
+    { key: "dir", width: 12 },
+    { key: "delta", width: 16, style: { numFmt: money } },
+    { key: "net", width: 20, style: { numFmt: money } },
+    { key: "peak", width: 18, style: { numFmt: money } },
+    { key: "new", width: 16, style: { numFmt: money } },
+    { key: "rate", width: 12, style: { numFmt: "0.0000%" } },
+    { key: "up", width: 16, style: { numFmt: money } },
+    { key: "why", width: 56 },
+  ];
+
+  const notes: string[] =
+    audience === "admin"
+      ? [
+          `Upfront watermark replay — per INVESTOR, all funds combined, in engine order (SELL before BUY within a date).`,
+          `Net principal E = E(prev) + D · Watermark F = MAX(F(prev), E) · New money G = MAX(0, F − F(prev)) · Upfront I = G × H.`,
+          `CIP rows are synthetic offsetting SELLs — reinvested dividend is not new money and does not lift the watermark.`,
+          `Row order is the replay order, not the transaction id order. Redemptions are subtracted on magnitude (see principalDelta).`,
+        ]
+      : [
+          `How your upfront is worked out, one movement at a time.`,
+          `Upfront is paid on new money only — the amount by which an investor's principal with you rises above its previous peak, counting all three funds together.`,
+          `The peak never falls when they redeem, so money that leaves and comes back does not earn upfront twice. Dividends reinvested under CIP are not new money.`,
+          `Every figure here is a live formula — click any cell to see the calculation behind it.`,
+        ];
+  for (const line of notes) s.addRow({ date: line });
+  s.addRow({});
+
+  const headerRow = s.addRow({
+    date: "Date",
+    fund: "Fund",
+    dir: "Movement",
+    delta: "Amount (BDT)",
+    net: "Net principal after",
+    peak: "Watermark (peak)",
+    new: "New money",
+    rate: "Upfront %",
+    up: "Upfront (BDT)",
+    why: "Why",
+  });
+  headerRow.font = { bold: true };
+  s.views = [{ state: "frozen", ySplit: headerRow.number }];
+
+  if (p.upfrontWatermarks.length === 0) {
+    s.addRow({ why: "No sourced investors yet — no upfront to compute" });
+    return;
+  }
+
+  const openingLabel =
+    audience === "agent" ? "Opening — already commissioned" : "Opening — stored watermark";
+  let grandTotal = 0;
+
+  for (const w of p.upfrontWatermarks) {
+    s.addRow({});
+    const head = s.addRow({ date: w.investorCode, fund: w.investorName });
+    head.font = { bold: true };
+
+    // Seed row: net principal starts at zero, the peak starts at whatever has
+    // already been paid for. Every formula below chains off these two cells.
+    const open = s.addRow({ net: 0, peak: w.storedWatermark, why: openingLabel });
+    open.font = { italic: true };
+    const openRow = open.number;
+
+    const firstRow = openRow + 1;
+    for (const step of w.trace) {
+      const row = s.addRow({
+        date: step.date.toISOString().slice(0, 10),
+        fund: step.fundCode,
+        dir: step.source === "cip" ? "CIP" : step.direction,
+        delta: step.delta,
+        rate: step.rate,
+        why: step.note,
+      });
+      const n = row.number;
+      row.getCell("net").value = { formula: `E${n - 1}+D${n}`, result: step.running };
+      row.getCell("peak").value = { formula: `MAX(F${n - 1},E${n})`, result: step.peak };
+      row.getCell("new").value = { formula: `MAX(0,F${n}-F${n - 1})`, result: step.newMoney };
+      row.getCell("up").value = { formula: `G${n}*H${n}`, result: step.upfront };
+    }
+
+    const lastRow = openRow + w.trace.length;
+    const tot = s.addRow({ why: "Pending upfront for this investor" });
+    tot.font = { bold: true };
+    tot.border = { top: { style: "thin" } };
+    if (w.trace.length > 0) {
+      tot.getCell("new").value = { formula: `SUM(G${firstRow}:G${lastRow})`, result: w.pendingIncrement };
+      tot.getCell("up").value = { formula: `SUM(I${firstRow}:I${lastRow})`, result: w.pendingUpfront };
+    } else {
+      tot.getCell("new").value = 0;
+      tot.getCell("up").value = 0;
+    }
+    grandTotal += w.pendingUpfront;
+
+    if (w.unratedFunds.length > 0) {
+      const flag = s.addRow({
+        why: `Blocked: no commission term covers ${w.unratedFunds.join(", ")} — nothing posts for this investor until that is set up`,
+      });
+      flag.font = { bold: true };
+    }
+  }
+
+  s.addRow({});
+  const grand = s.addRow({ date: "TOTAL", why: "Pending upfront, all investors" });
+  grand.font = { bold: true };
+  grand.border = { top: { style: "thin" } };
+  grand.getCell("up").value = Math.round(grandTotal * 100) / 100;
+
+  if (!p.upfrontEntitled) {
+    const susp = s.addRow({
+      why: `Upfront is suspended from ${p.upfrontSuspendedFrom ?? "—"} — the amounts above are not payable while suspended.`,
+    });
+    susp.font = { bold: true };
   }
 }
 
