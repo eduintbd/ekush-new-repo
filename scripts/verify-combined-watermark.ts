@@ -357,12 +357,126 @@ async function compareLive(onlyAgent?: string) {
   console.log("CIP reinvestment excluded, rate re-attribution, direct-subscription/as-of filtering.");
 }
 
+/**
+ * Per-investor (live) vs global per-agent watermark, read-only, from a zero
+ * baseline — the money decision behind the 2026-08 model change.
+ *
+ * A global peak is the peak of a SUM; the live model pays on the SUM of peaks.
+ * The peak of a sum can never exceed the sum of peaks, so global always pays
+ * the same or less. The gap is exactly the money that left one of the agent's
+ * clients and arrived at another — internal recycling that the per-investor
+ * model books as a brand-new high under the receiving client.
+ *
+ * Totals only, deliberately. Attributing the global increment to a particular
+ * investor needs `investorCode` on the slice, which the engine does not carry
+ * yet; re-deriving it here would mean a second copy of the money logic in a
+ * verification script, which is the one place it must not live.
+ */
+async function compareGlobal(onlyAgent?: string) {
+  console.log("\n\nPER-INVESTOR vs GLOBAL WATERMARK (read-only, from a zero baseline)\n");
+
+  // Every agent with investors, not just approved ones: S00004 is `pending`
+  // and is the case that prompted the change.
+  const agents = await prisma.sellingAgent.findMany({
+    where: onlyAgent ? { code: onlyAgent } : {},
+    include: { terms: true },
+    orderBy: { code: "asc" },
+  });
+  const asOf = new Date();
+  const money = (x: number) => x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  console.log("CODE      STATUS      PER-INVESTOR         GLOBAL          DELTA   INV  WARN");
+  let totPer = 0;
+  let totGlobal = 0;
+  const detail: Array<{ agent: string; lines: string[] }> = [];
+
+  for (const a of agents) {
+    const resolver: RateResolver = (fundCode) => {
+      const category = categoryForFund(fundCode as FundCode);
+      const t = a.terms
+        .filter((x) => x.fundCategory === category && x.effectiveFrom <= asOf && (x.effectiveTo === null || x.effectiveTo > asOf))
+        .sort((x, y) => +y.effectiveFrom - +x.effectiveFrom)[0];
+      return t ? { rate: Number(t.upfrontPct), category } : null;
+    };
+
+    const { byInvestor, warnings } = await fetchAgentInvestorTxns(prisma, a.id, asOf);
+    if (byInvestor.size === 0) continue;
+
+    // Live model: one replay per investor, summed.
+    let perInvestor = 0;
+    const lines: string[] = [];
+    let blocked = false;
+    for (const [code, txns] of byInvestor) {
+      let r;
+      try {
+        r = computeCombinedWatermarkUpfront(txns, 0, resolver);
+      } catch (err) {
+        blocked = true;
+        lines.push(`  ${code.padEnd(9)} ATTRIBUTION ERROR — ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      if (r.unratedFunds.length) {
+        blocked = true;
+        lines.push(`  ${code.padEnd(9)} BLOCKED — no term for ${r.unratedFunds.join(", ")}`);
+        continue;
+      }
+      perInvestor += r.upfront;
+      if (r.upfront > 0) lines.push(`  ${code.padEnd(9)} peak ${money(r.peak).padStart(16)}   upfront ${money(r.upfront).padStart(12)}`);
+    }
+
+    // Proposed model: one replay over every movement the agent sourced.
+    const flat = [...byInvestor.values()].flat();
+    let global = 0;
+    let globalPeak = 0;
+    try {
+      const g = computeCombinedWatermarkUpfront(flat, 0, resolver);
+      global = g.upfront;
+      globalPeak = g.peak;
+    } catch (err) {
+      blocked = true;
+      lines.push(`  GLOBAL ATTRIBUTION ERROR — ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    totPer += perInvestor;
+    totGlobal += global;
+
+    console.log(
+      `${a.code.padEnd(8)}${a.status.padEnd(11)}${money(perInvestor).padStart(14)}${money(global).padStart(15)}` +
+        `${money(global - perInvestor).padStart(15)}${String(byInvestor.size).padStart(6)}${String(warnings.length).padStart(6)}` +
+        `${blocked ? "  (see detail)" : ""}`,
+    );
+
+    if (Math.abs(global - perInvestor) > 0.01 || blocked || onlyAgent) {
+      lines.unshift(`  ${"book peak".padEnd(9)} ${money(globalPeak).padStart(16)}   vs Σ investor peaks`);
+      detail.push({ agent: `${a.code} — ${a.fullName}`, lines });
+    }
+  }
+
+  console.log(`${"".padEnd(19)}${money(totPer).padStart(14)}${money(totGlobal).padStart(15)}${money(totGlobal - totPer).padStart(15)}`);
+
+  for (const d of detail) {
+    console.log(`\n${d.agent}`);
+    for (const l of d.lines) console.log(l);
+  }
+
+  console.log("\nDELTA is what switching to a global watermark costs the agent. It can never be");
+  console.log("positive: the peak of a sum cannot exceed the sum of peaks. The gap is money that");
+  console.log("moved between two of the agent's own clients — new money under the per-investor");
+  console.log("model, no new money at all under the global one.");
+}
+
 async function main() {
   unitTraces();
   const args = process.argv.slice(2);
-  if (args.includes("--compare")) {
+  const agentArg = () => {
     const i = args.indexOf("--agent");
-    await compareLive(i >= 0 ? args[i + 1]?.toUpperCase() : undefined);
+    return i >= 0 ? args[i + 1]?.toUpperCase() : undefined;
+  };
+  if (args.includes("--compare")) {
+    await compareLive(agentArg());
+  }
+  if (args.includes("--compare-global")) {
+    await compareGlobal(agentArg());
   }
   console.log(failures === 0 ? "\nALL UNIT TRACES PASSED" : `\n${failures} UNIT TRACE(S) FAILED`);
   if (failures > 0) process.exitCode = 1;

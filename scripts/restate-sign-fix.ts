@@ -45,14 +45,21 @@ import {
   fetchAgentInvestorTxns,
   type RateResolver,
 } from "@/lib/upfront-watermark";
-import { computeAgentCommissionPreview } from "@/lib/agent-commission-preview";
+import { computeAgentCommissionPreview, round2 } from "@/lib/agent-commission-preview";
 
 /** The date the watermarks were seeded through — the "no back-payment" line. */
 const SEED_THROUGH = new Date("2026-06-30T23:59:59.999Z");
 const PERIOD_START = new Date("2026-07-01T00:00:00.000Z");
 const PERIOD_END = new Date("2026-07-31T00:00:00.000Z");
 const RUN_THROUGH = new Date("2026-07-31T23:59:59.999Z");
-const STAMP = "Restated 2026-08-02: redemption sign fix (redemptions were being added to net principal).";
+// Two causes now sit behind a restatement, so the note names both rather than
+// asserting the sign fix for a row that actually moved because its rate did.
+// The rate rule is retroactive by design — "LATEST effective term per category
+// applied to ALL transactions, older term rows treated as superseded" — so a
+// corrected term restates every period it ever touched.
+const STAMP =
+  "Restated 2026-08-02: recomputed on the corrected engine (redemptions were being added to net principal) " +
+  "and on the currently effective terms (BI0000 upfront/trail rates corrected from percent literals).";
 
 const n = (x: number) => x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
@@ -235,9 +242,18 @@ async function main() {
       console.log(`  (trail skipped — preview failed for ${a.code})`);
       continue;
     }
-    const freshTrail = new Map<string, number>();
+    // Carry the base and the rate, not just the amount. A row restated for a
+    // corrected TERM moves because its rate moved; leaving rateApplied at the
+    // old figure would leave the agent's commission list showing 20.0000%
+    // against an amount computed at 0.1500%. post-trail.ts:211-221 is the
+    // shape being mirrored — baseAmount = avgValue, rateApplied = rateQuarter.
+    const freshTrail = new Map<string, { trail: number; base: number; rate: number }>();
     for (const r of preview.trailRows) {
-      freshTrail.set(`${r.agentInvestorId}|${ymd(r.quarterStart)}|${ymd(r.quarterEnd)}`, r.trail);
+      freshTrail.set(`${r.agentInvestorId}|${ymd(r.quarterStart)}|${ymd(r.quarterEnd)}`, {
+        trail: r.trail,
+        base: round2(r.avgValue),
+        rate: r.rateQuarter,
+      });
     }
     const trailRows = await prisma.commissionRun.findMany({ where: { agentId: a.id, type: "trail" } });
     for (const row of trailRows) {
@@ -255,18 +271,24 @@ async function main() {
         unmatched.push(`${a.code} trail ${ymd(row.periodStart)}→${ymd(row.periodEnd)} ${n(had)} — fixed engine generates no row (nothing held)`);
         continue;
       }
-      if (same(fresh, had)) continue;
+      const hadRate = Number(row.rateApplied);
+      if (same(fresh.trail, had) && same(hadRate, fresh.rate)) continue;
       head();
-      console.log(`  trail ${ymd(row.periodStart)}→${ymd(row.periodEnd)}  ${n(had).padStart(12)} → ${n(fresh).padStart(12)}`);
+      const rateNote = same(hadRate, fresh.rate)
+        ? ""
+        : `   rate ${(hadRate * 100).toFixed(4)}% → ${(fresh.rate * 100).toFixed(4)}%`;
+      console.log(`  trail ${ymd(row.periodStart)}→${ymd(row.periodEnd)}  ${n(had).padStart(12)} → ${n(fresh.trail).padStart(12)}${rateNote}`);
       trailChanged++;
-      trailDelta += fresh - had;
+      trailDelta += fresh.trail - had;
       if (apply) {
         await withActor(null, (tx) =>
           tx.commissionRun.update({
             where: { id: row.id },
             data: {
-              amount: fresh,
-              notes: `${row.notes ?? ""}\n${STAMP} Original amount ${n(had)} — redeemed units were still being counted as held.`,
+              amount: fresh.trail,
+              baseAmount: fresh.base,
+              rateApplied: fresh.rate,
+              notes: `${row.notes ?? ""}\n${STAMP} Original amount ${n(had)} at ${(hadRate * 100).toFixed(4)}%.`,
             },
           }),
         );
