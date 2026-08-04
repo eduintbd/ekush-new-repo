@@ -16,7 +16,14 @@
 
 import type { PrismaClient } from "@/generated/prisma";
 import { categoryForFund, type FundCode } from "@/lib/ekush-web/types";
-import { periodsPerYear, type TrailFrequency } from "@/lib/commission-engine";
+/** Cadence trail is paid on for a term. Admin-set; monthly is the default. */
+export type TrailFrequency = "monthly" | "quarterly";
+
+/** Trail periods in a year — the annualised rate is divided by this to get the
+ *  per-period rate. */
+export function periodsPerYear(f: TrailFrequency): number {
+  return f === "monthly" ? 12 : 4;
+}
 import {
   computeCombinedWatermarkUpfront,
   fetchAgentInvestorTxns,
@@ -104,10 +111,12 @@ export type InvestorLink = {
   investorCode: string;
   fundCode: string;
   sourcedOn: Date;
-  initialUnits: number;
-  unitPriceAtSourcing: number;
   isDirectSubscription: boolean;
 };
+// `initialUnits` / `unitPriceAtSourcing` used to be carried here to compute a
+// per-spec upfront at sourcing. They are still recorded on AgentInvestor as the
+// record of what was sourced, but no commission is derived from them: upfront
+// comes from the book replay, which reads actual BUY/SELL transactions.
 
 export type Bucket = {
   agentInvestorId: string;
@@ -360,8 +369,6 @@ export async function computeAgentCommissionPreview(
       investorCode: l.investorCode,
       fundCode: l.fundCode,
       sourcedOn: l.sourcedOn,
-      initialUnits: Number(l.initialUnits),
-      unitPriceAtSourcing: Number(l.unitPriceAtSourcing),
       isDirectSubscription: l.isDirectSubscription,
     });
   }

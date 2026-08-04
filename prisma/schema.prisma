@@ -714,7 +714,6 @@ model SellingAgent {
   commissionPayments CommissionPayment[]
   accruals          CommissionAccrual[]
   journals          Journal[]
-  investorWatermarks AgentInvestorWatermark[]
   /// The live upfront watermark — one row per agent (2026-08).
   bookWatermark      AgentBookWatermark?
   upfrontSuspensions AgentUpfrontSuspension[]
@@ -884,28 +883,11 @@ model NavSnapshot {
 // net invested principal (Σ BUY−SELL cash over EFUF+EGF+ESRF, excluding CIP
 // dividend reinvestment) above `watermark`; the watermark ratcheted up and
 // never fell when they redeemed. `throughDate` = last evaluated period end.
-model AgentInvestorWatermark {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  agentId      String   @map("agent_id") @db.Uuid
-  /// Portal investor code (public.investors.investorCode). No FK — the
-  /// investor row lives in the portal's database, not this schema.
-  investorCode String   @map("investor_code")
-  watermark    Decimal  @default(0) @db.Decimal(18, 2)
-  /// Net principal at `throughDate`. Diagnostics only — never drives pay.
-  netPrincipal Decimal  @default(0) @map("net_principal") @db.Decimal(18, 2)
-  /// Σ CIP dividend excluded from the replay that produced this row.
-  cipOffset    Decimal  @default(0) @map("cip_offset") @db.Decimal(18, 2)
-  throughDate  DateTime @map("through_date") @db.Date
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-
-  agent SellingAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
-
-  @@unique([agentId, investorCode])
-  @@index([investorCode])
-  @@map("agent_investor_upfront_watermarks")
-  @@schema("xsystem")
-}
+// AgentInvestorWatermark (xsystem.agent_investor_upfront_watermarks) was the
+// per-(agent, investor) upfront watermark, superseded 2026-08 by the book-level
+// AgentBookWatermark above. Model and table both removed by
+// prisma/migrations-manual/08_drop_investor_watermark.sql; its 26 rows are
+// archived at docs/archive-agent-investor-watermarks-2026-08-04.json.
 
 // Per-AGENT high-water-mark for upfront commission — one peak for the agent's
 // whole book, across every investor they sourced and all three funds. Upfront
@@ -1066,6 +1048,11 @@ model CommissionPayment {
   agent SellingAgent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
   runs  CommissionRun[]
 
+  /// One payment voucher, one payout row. A duplicate would mean two payout
+  /// rows claiming the same Cr Bank lines — the same cash counted twice.
+  /// Declared here, not only in SQL: `prisma db push` drops indexes it does not
+  /// know about, and this one is a money control.
+  @@unique([paymentBatchId])
   @@index([agentId, paidOn])
   @@map("commission_payments")
   @@schema("xsystem")

@@ -58,11 +58,15 @@ ALTER TABLE xsystem.commission_payments
   ADD CONSTRAINT commission_payment_paid_after_period
   CHECK (paid_on >= period_end);
 
--- 6. One payment voucher, one payout row. The app allocates a fresh batch id
---    per payout; a duplicate would mean two payout rows claiming the same
---    Cr Bank lines, i.e. the same cash counted twice.
-CREATE UNIQUE INDEX IF NOT EXISTS commission_payments_payment_batch_uniq
-  ON xsystem.commission_payments (payment_batch_id);
+-- 6. SUPERSEDED 2026-08-04 — do not re-enable. This block created
+--    commission_payments_payment_batch_uniq by hand, which `prisma db push`
+--    then wanted to drop because the Prisma schema did not declare it. The
+--    constraint now lives on the CommissionPayment model as
+--    @@unique([paymentBatchId]) and is managed by Prisma, so it survives a
+--    push. Re-running the CREATE here would only add a second, redundant
+--    unique index under a different name.
+--    (One payment voucher, one payout row: a duplicate would mean two payout
+--    rows claiming the same Cr Bank lines, i.e. the same cash counted twice.)
 
 -- 7. A paid run must name the payout it was settled in, and an unpaid one must
 --    not. Without this, a hand-written UPDATE could mark runs paid with no

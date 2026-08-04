@@ -961,9 +961,11 @@ function MethodologyPanel() {
             "The upfront is recovered by suppression rather than by a debit."
           }
           notes={[
-            "The `clawback_months` / `clawback_pct` fields on a term are still stored and editable, but nothing reads them for posting. They are retained for the agreement's paper trail.",
-            "`CommissionType.clawback` exists in the schema and no code writes it. The legacy `computeClawbacks` in commission-engine.ts is deprecated with no live callers.",
-            "This is why the book-level watermark is deliberately the conservative model: with no clawback, paying too little is recoverable by paying it later, whereas paying too much is not recoverable at all.",
+            "Posting a clawback ON TOP of the watermark would charge twice for one redemption. Example: upfront BDT 1,000 paid on 10,00,000 at 0.10%; the client redeems 3,00,000. The watermark already forfeits the next BDT 300 the agent would have earned (they must replace the 3,00,000 before earning again). A 100% clawback would ALSO debit BDT 300 now. Same event, recovered twice.",
+            "The `clawback_months` / `clawback_pct` fields on a term are still stored and editable — they record what the agreement says — but nothing reads them for posting, and nothing should while the watermark is the upfront model.",
+            "Known gap, accepted deliberately: the watermark suppresses FUTURE upfront, it does not recover cash already paid. An agent who takes an upfront and never brings new money again is never clawed back. Recovering that would need a real clawback AND the suppression switched off for the same redemption — a separate decision, not a default.",
+            "`CommissionType.clawback` exists in the schema and no code writes it.",
+            "This is also why the book-level watermark is deliberately conservative: underpaying is correctable by paying later, overpaying is not correctable at all.",
           ]}
         />
       </div>

@@ -703,62 +703,8 @@ export async function getAgentBookShortfall(
   };
 }
 
-// ─── Legacy per-fund model ───────────────────────────────────────
-// Retained ONLY so scripts/verify-combined-watermark.ts --compare can show the
-// AMC the money difference between the old and new models. Not called by any
-// production code path. Delete once the combined model is signed off, seeded
-// and posted.
-
-export type WatermarkResult = {
-  peak: number;
-  netPrincipal: number;
-  increment: number;
-  upfront: number;
-  newWatermark: number;
-  txCount: number;
-};
-
-/** @deprecated Legacy per-fund model — comparison reporting only. */
-export function computeWatermarkUpfront(
-  txns: Array<{ date: Date; direction: "BUY" | "SELL"; amount: number }>,
-  storedWatermark: number,
-  upfrontPct: number,
-): WatermarkResult {
-  const sorted = [...txns].sort((a, b) => +a.date - +b.date);
-  let running = 0;
-  let peak = 0;
-  for (const t of sorted) {
-    running += principalDelta(t);
-    if (running > peak) peak = running;
-  }
-  const newWatermark = Math.max(storedWatermark, peak);
-  const increment = r2(Math.max(0, newWatermark - storedWatermark));
-  return {
-    peak: r2(peak),
-    netPrincipal: r2(running),
-    increment,
-    upfront: r2(increment * upfrontPct),
-    newWatermark: r2(newWatermark),
-    txCount: sorted.length,
-  };
-}
-
-/** @deprecated Legacy per-fund grouping — comparison reporting only. */
-export async function fetchAgentFundTxns(
-  prisma: PrismaClient,
-  agentId: string,
-  throughDate: Date,
-): Promise<Map<string, WmTxn[]>> {
-  const { byInvestor } = await fetchAgentInvestorTxns(prisma, agentId, throughDate, {
-    excludeCip: false,
-  });
-  const out = new Map<string, WmTxn[]>();
-  for (const txns of byInvestor.values()) {
-    for (const t of txns) {
-      const arr = out.get(t.fundCode) ?? [];
-      arr.push(t);
-      out.set(t.fundCode, arr);
-    }
-  }
-  return out;
-}
+// The legacy per-fund model (`computeWatermarkUpfront` / `fetchAgentFundTxns`)
+// lived here so the cutover script could show the AMC the money difference
+// against the old model. The cutover is done and signed off, so both are gone —
+// `computeCombinedWatermarkUpfront` above is the only upfront calculation in
+// the system.

@@ -20,16 +20,14 @@
 -- guard here; it would refuse to run. The restatement is handled deliberately
 -- and reversibly by scripts/restate-global-watermark.ts instead.
 
--- The old table stays until the cutover is signed off. Refuse to proceed if it
--- has already been dropped by hand, since that would mean the backup the
--- restatement script writes has nothing to read.
-DO $$
-BEGIN
-  IF to_regclass('xsystem.agent_investor_upfront_watermarks') IS NULL THEN
-    RAISE EXCEPTION
-      'agent_investor_upfront_watermarks is gone. The book-level cutover reads it to seed and to back up. STOP.';
-  END IF;
-END $$;
+-- SUPERSEDED 2026-08-04. This file used to RAISE if
+-- xsystem.agent_investor_upfront_watermarks was missing, because the cutover
+-- read it to seed and to back up. The cutover is complete and signed off, and
+-- 08_drop_investor_watermark.sql has since dropped that table — so the guard
+-- would now abort a legitimate re-run of this file. Removed rather than
+-- softened: a check that can only ever fail is not a check.
+-- The dropped table's contents are archived at
+-- docs/archive-agent-investor-watermarks-2026-08-04.json.
 
 -- A watermark decides whether money is owed, so it gets the same audit trail
 -- the per-investor table had. Reuses xsystem.audit_trigger() from

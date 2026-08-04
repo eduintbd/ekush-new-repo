@@ -1,0 +1,263 @@
+﻿rows: 26
+[
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0002",
+    "watermark": "10810",
+    "net_principal": "10810",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:13.294Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0010",
+    "watermark": "131590",
+    "net_principal": "131590",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:13.893Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0011",
+    "watermark": "100000",
+    "net_principal": "100000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:15.092Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0012",
+    "watermark": "6680",
+    "net_principal": "6680",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:14.492Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0013",
+    "watermark": "75000",
+    "net_principal": "75000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:15.690Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0014",
+    "watermark": "25000",
+    "net_principal": "25000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:16.290Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0015",
+    "watermark": "10000",
+    "net_principal": "10000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:16.889Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0016",
+    "watermark": "4000",
+    "net_principal": "4000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:17.488Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0020",
+    "watermark": "49840",
+    "net_principal": "49840",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:18.086Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0021",
+    "watermark": "3000",
+    "net_principal": "3000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:20.183Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0023",
+    "watermark": "30000",
+    "net_principal": "30000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:19.432Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0025",
+    "watermark": "7119",
+    "net_principal": "7119",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:18.834Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0026",
+    "watermark": "12000",
+    "net_principal": "12000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:20.931Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0027",
+    "watermark": "112330",
+    "net_principal": "-910",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-02T10:29:19.082Z"
+  },
+  {
+    "agent_id": "75744ceb-8efc-47ac-889b-52542da5727b",
+    "agent_code": "BI0000",
+    "investor_code": "BI0028",
+    "watermark": "255552",
+    "net_principal": "255552",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:22.440Z"
+  },
+  {
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "agent_code": "BR0000",
+    "investor_code": "BR0001",
+    "watermark": "6000",
+    "net_principal": "6000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:08.403Z"
+  },
+  {
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "agent_code": "BR0000",
+    "investor_code": "BR0002",
+    "watermark": "6000",
+    "net_principal": "6000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:09.002Z"
+  },
+  {
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "agent_code": "BR0000",
+    "investor_code": "BR0003",
+    "watermark": "5000",
+    "net_principal": "-484.87",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-02T10:29:26.456Z"
+  },
+  {
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "agent_code": "BR0000",
+    "investor_code": "BR0004",
+    "watermark": "5000",
+    "net_principal": "-1046.5",
+    "cip_offset": "147",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-02T10:29:26.329Z"
+  },
+  {
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "agent_code": "BR0000",
+    "investor_code": "BR0005",
+    "watermark": "229300",
+    "net_principal": "229300",
+    "cip_offset": "3652.64",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:06.950Z"
+  },
+  {
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "agent_code": "BR0000",
+    "investor_code": "BR0006",
+    "watermark": "55000",
+    "net_principal": "55000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:10.536Z"
+  },
+  {
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "agent_code": "BR0000",
+    "investor_code": "BR0007",
+    "watermark": "5000",
+    "net_principal": "5000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:11.135Z"
+  },
+  {
+    "agent_id": "1dd60273-5607-4cc3-a82d-c8e88ee86a64",
+    "agent_code": "BR0000",
+    "investor_code": "BR0008",
+    "watermark": "125000",
+    "net_principal": "125000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:11.734Z"
+  },
+  {
+    "agent_id": "6970da72-9b71-4ddd-915e-9cfebbb8ed9a",
+    "agent_code": "S00001",
+    "investor_code": "A00005",
+    "watermark": "214937.91",
+    "net_principal": "214937.91",
+    "cip_offset": "23333.2",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-02T10:29:30.883Z"
+  },
+  {
+    "agent_id": "60ff167e-4726-466c-855c-2ddfa95fb00e",
+    "agent_code": "S00003",
+    "investor_code": "A00851",
+    "watermark": "1400000",
+    "net_principal": "1400000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:25.609Z"
+  },
+  {
+    "agent_id": "60ff167e-4726-466c-855c-2ddfa95fb00e",
+    "agent_code": "S00003",
+    "investor_code": "A00855",
+    "watermark": "1000000",
+    "net_principal": "1000000",
+    "cip_offset": "0",
+    "through_date": "2026-07-31T00:00:00.000Z",
+    "updated_at": "2026-08-01T04:00:26.368Z"
+  }
+]
