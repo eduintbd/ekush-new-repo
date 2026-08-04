@@ -123,9 +123,15 @@ export const ACCOUNT = {
   liabForPfFund: "Liab: For PF Fund",
   withholdingVatAndTds: "Withholding VAT & TDs",
   withholdingTaxEmployees: "Withholding TAX Employees",
+  // Tax deducted at source on vendor/agent payments, owed to the NBR until
+  // remitted. Credited by the commission payment voucher
+  // (src/lib/commission-payout.ts). It was in the chart of accounts but on no
+  // statement line, so any balance on it fell off the balance sheet.
+  aitAndVatPayable: "AIT & VAT Payble",
   liabOfficeRent: "Liab-Office Rent",
   liabilityAuditFee: "Liability Audit Fee",
   liabUtilityExp: "Liab-Utility Exp.",
+  liabSellingAgentCommission: "Liab-Selling Agent Commission",
 
   // Tax (TB-C r26, r27, r87, r98, r104, r125)
   deferredTax: "Deferred Tax",
@@ -696,12 +702,17 @@ export function buildBalanceSheet(
     + netC(tb, ACCOUNT.liabForEmployeeAllowance) // L38
     + netC(tb, ACCOUNT.liabOfficeRent)           // L115
     + netC(tb, ACCOUNT.liabilityAuditFee)        // L121
-    + netC(tb, ACCOUNT.liabUtilityExp);          // L122
+    + netC(tb, ACCOUNT.liabUtilityExp)           // L122
+    // L134 — commission accrued to selling agents at a billing period end,
+    // outstanding until the bank transfer clears it. Omitting it from this
+    // bucket would leave the accrual voucher's credit off the balance sheet.
+    + netC(tb, ACCOUNT.liabSellingAgentCommission);
 
   const liabForProvidentFund = grossC(tb, ACCOUNT.liabForPfFund); // I112 (gross credit)
   const withholdingVatAndTds =
     netC(tb, ACCOUNT.withholdingVatAndTds)       // L113
-    + netC(tb, ACCOUNT.withholdingTaxEmployees); // L114
+    + netC(tb, ACCOUNT.withholdingTaxEmployees)  // L114
+    + netC(tb, ACCOUNT.aitAndVatPayable);        // L17
 
   const currentLiabilities: StatementLine[] = [
     {
@@ -728,6 +739,7 @@ export function buildBalanceSheet(
         ACCOUNT.liabOfficeRent,
         ACCOUNT.liabilityAuditFee,
         ACCOUNT.liabUtilityExp,
+        ACCOUNT.liabSellingAgentCommission,
       ],
     },
     {
@@ -738,7 +750,11 @@ export function buildBalanceSheet(
     {
       label: "Withholding VAT & TDs",
       amount: withholdingVatAndTds,
-      sources: [ACCOUNT.withholdingVatAndTds, ACCOUNT.withholdingTaxEmployees],
+      sources: [
+        ACCOUNT.withholdingVatAndTds,
+        ACCOUNT.withholdingTaxEmployees,
+        ACCOUNT.aitAndVatPayable,
+      ],
     },
   ];
 

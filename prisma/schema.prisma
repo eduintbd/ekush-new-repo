@@ -711,6 +711,7 @@ model SellingAgent {
   terms             AgentTerm[]
   investors         AgentInvestor[]
   commissionRuns    CommissionRun[]
+  commissionPayments CommissionPayment[]
   accruals          CommissionAccrual[]
   journals          Journal[]
   investorWatermarks AgentInvestorWatermark[]
@@ -997,20 +998,76 @@ model CommissionRun {
   baseAmount      Decimal          @map("base_amount") @db.Decimal(18, 2)
   rateApplied     Decimal          @map("rate_applied") @db.Decimal(8, 6)
   amount          Decimal          @db.Decimal(18, 2)
+  /// accrued → approved (accrual voucher posted) → paid (bank transfer posted).
+  /// `reversed` is a restatement, never a payment.
   status          CommissionStatus @default(accrued)
+  /// Date the bank transfer left, set by payAgentCommission. NOT the period end.
   paidOn          DateTime?        @map("paid_on") @db.Date
+  /// The ACCRUAL voucher (Dr Selling agent fees / Cr Liab-Selling Agent
+  /// Commission), dated the billing period end. Non-null = accrued to the GL,
+  /// and is the idempotency lock: accrueAgentCommission only picks up nulls.
   journalBatchId  String?          @map("journal_batch_id") @db.Uuid
+  /// The payout this row was settled in. Null until paid.
+  paymentId       String?          @map("payment_id") @db.Uuid
   notes           String?
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
 
   agent         SellingAgent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
   agentInvestor AgentInvestor? @relation(fields: [agentInvestorId], references: [id], onDelete: SetNull)
+  payment       CommissionPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
 
   // Idempotency for the quarterly run job
   @@unique([agentInvestorId, type, periodStart, periodEnd], name: "uniq_run_period")
   @@index([agentId, status])
+  @@index([paymentId])
   @@map("commission_runs")
+  @@schema("xsystem")
+}
+
+/// One bank transfer to one agent, settling every commission run accrued up to
+/// a billing period end.
+///
+/// Exists because billing date and payment date are not the same day: the
+/// accountant bills to 30 Jul and transfers on 5 Aug. The accrual voucher is
+/// dated the former so the expense lands in July; this row's payment voucher is
+/// dated the latter so the cash leaves in August. They can even fall in
+/// different fiscal years — each voucher is allocated in its own.
+model CommissionPayment {
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agentId  String @map("agent_id") @db.Uuid
+  /// Earliest periodStart across the settled runs — informational.
+  periodStart DateTime? @map("period_start") @db.Date
+  /// The billing cut-off: every run with periodEnd <= this was swept in.
+  periodEnd   DateTime  @map("period_end") @db.Date
+  /// The day the transfer left the bank.
+  paidOn      DateTime  @map("paid_on") @db.Date
+
+  /// Σ of the settled runs. gross = withholding + net, always.
+  grossAmount       Decimal @map("gross_amount") @db.Decimal(18, 2)
+  /// Tax deducted at source; credited to `AIT & VAT Payble`, not to the bank.
+  withholdingAmount Decimal @map("withholding_amount") @db.Decimal(18, 2)
+  /// What actually hit the agent's account.
+  netAmount         Decimal @map("net_amount") @db.Decimal(18, 2)
+  /// Rate the withholding was computed at, kept so a past payout can be
+  /// re-explained after the default rate changes.
+  withholdingPct    Decimal @map("withholding_pct") @db.Decimal(8, 6)
+
+  /// CoA name of the bank the money left from.
+  bankAccountName String  @map("bank_account_name")
+  /// Voucher batch of the accrual this settles (Dr expense / Cr payable).
+  accrualBatchId  String? @map("accrual_batch_id") @db.Uuid
+  /// Voucher batch of the payment itself (Dr payable / Cr bank / Cr AIT).
+  paymentBatchId  String  @map("payment_batch_id") @db.Uuid
+  notes           String?
+  createdBy       String? @map("created_by") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  agent SellingAgent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  runs  CommissionRun[]
+
+  @@index([agentId, paidOn])
+  @@map("commission_payments")
   @@schema("xsystem")
 }
 

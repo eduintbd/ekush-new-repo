@@ -6,6 +6,13 @@ import { Prisma, UserRole } from "@/generated/prisma";
 import { prisma, withActor } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
 import { postTrailFromPreview } from "@/lib/post-trail";
+import { parseAsOf } from "@/lib/agent-commission-preview";
+import {
+  accrueAgentCommission,
+  parseDateOnly,
+  payAgentCommission,
+  PayoutError,
+} from "@/lib/commission-payout";
 import { runUpfront } from "@/lib/run-upfront";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
@@ -519,14 +526,20 @@ export async function postAgentCommissions(formData: FormData): Promise<void> {
   const agentId = String(formData.get("agentId") ?? "").trim();
   if (!agentId) return;
 
-  const res = await postTrailFromPreview({ agentId, actorId: me.id });
+  // The page's billing cut-off, carried through so the rows written match the
+  // rows the admin was looking at when they clicked. Blank → today.
+  const asOfRaw = String(formData.get("asOf") ?? "").trim();
+  const asOf = parseAsOf(asOfRaw);
+  const back = asOfRaw ? `&asOf=${encodeURIComponent(asOfRaw)}` : "";
+
+  const res = await postTrailFromPreview({ agentId, actorId: me.id, asOf });
   const a = res.perAgent[0];
 
   revalidatePath(`/admin/agents/${agentId}`);
 
   if (a?.error) {
     redirect(
-      `/admin/agents/${agentId}?error=${encodeURIComponent(`Posting failed: ${a.error}`)}`,
+      `/admin/agents/${agentId}?error=${encodeURIComponent(`Posting failed: ${a.error}`)}${back}`,
     );
   }
 
@@ -541,14 +554,15 @@ export async function postAgentCommissions(formData: FormData): Promise<void> {
     redirect(
       `/admin/agents/${agentId}?error=${encodeURIComponent(
         `Posted ${res.created} row(s), but REFUSED ${res.overlapConflicts} overlapping period(s) — these would double-pay. ${detail}. Check the term's trail frequency against what is already posted.`,
-      )}`,
+      )}${back}`,
     );
   }
 
   const bits = [`Posted ${res.created} trail row(s) (BDT ${res.createdAmount.toFixed(2)})`];
   if (res.duplicates) bits.push(`${res.duplicates} already posted`);
   if (res.partialSkipped) bits.push(`${res.partialSkipped} still accruing`);
-  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(`${bits.join("; ")}.`)}`);
+  if (asOfRaw) bits.push(`as of ${asOfRaw}`);
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(`${bits.join("; ")}.`)}${back}`);
 }
 
 /**
@@ -563,9 +577,13 @@ export async function postAgentUpfront(formData: FormData): Promise<void> {
   const agentId = String(formData.get("agentId") ?? "").trim();
   if (!agentId) return;
 
-  const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const through = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  // Evaluate through the page's billing cut-off, not the wall clock — billing
+  // to 30 Jul on 4 Aug must not sweep in four days of August new money.
+  const asOfRaw = String(formData.get("asOf") ?? "").trim();
+  const back = asOfRaw ? `&asOf=${encodeURIComponent(asOfRaw)}` : "";
+  const cut = parseAsOf(asOfRaw);
+  const through = new Date(Date.UTC(cut.getUTCFullYear(), cut.getUTCMonth(), cut.getUTCDate()));
+  const monthStart = new Date(Date.UTC(cut.getUTCFullYear(), cut.getUTCMonth(), 1));
   const res = await runUpfront(monthStart, through, through, { agentId });
 
   revalidatePath(`/admin/agents/${agentId}`);
@@ -581,7 +599,7 @@ export async function postAgentUpfront(formData: FormData): Promise<void> {
         : res.suspended > 0
           ? `Not posted — upfront is suspended for this agent.`
           : `No new money above the book watermark — nothing to post.`;
-  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(msg)}`);
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(msg)}${back}`);
 }
 
 function round2BD(n: number): number {
@@ -668,6 +686,136 @@ export async function setAgentWatermark(formData: FormData): Promise<void> {
   const prevStr = prev ? ` (was ${round2BD(Number(prev.watermark))})` : "";
   redirect(
     `/admin/agents/${agentId}?ok=${encodeURIComponent(`Book watermark set to ${round2BD(value)}${prevStr} — applies across every investor and all funds.`)}`,
+  );
+}
+
+// ─── Commission payout: accrue → pay ──────────────────────────────────
+// Thin form wrappers over src/lib/commission-payout.ts. The engine throws
+// PayoutError with a message written for the accountant, so the only job here
+// is to unwrap the form, call it, and put the message back on the page.
+
+/** Paths whose numbers move when a commission voucher is posted. Same set the
+ *  tax-provision action revalidates — a payable that shows on the balance sheet
+ *  but not in the day book is how an accountant loses trust in the system. */
+const STATEMENT_PATHS = [
+  "/balance-sheet",
+  "/income-statement",
+  "/trial-balance",
+  "/day-book",
+  "/journals",
+];
+
+function payoutBack(agentId: string, asOfRaw: string, key: "ok" | "error", msg: string): never {
+  const back = asOfRaw ? `&asOf=${encodeURIComponent(asOfRaw)}` : "";
+  redirect(`/admin/agents/${agentId}?${key}=${encodeURIComponent(msg)}${back}`);
+}
+
+/**
+ * Step 1 — post the accrual voucher, dated the billing period end.
+ * Dr Selling agent fees / Cr Liab-Selling Agent Commission.
+ */
+export async function accrueAgentCommissionAction(formData: FormData): Promise<void> {
+  const me = await requireRole(["admin", "checker", "accountant"]);
+  const agentId = String(formData.get("agentId") ?? "").trim();
+  if (!agentId) redirect("/admin/agents?error=Missing+agent");
+
+  const billingRaw = String(formData.get("billingEnd") ?? "").trim();
+  const asOfRaw = String(formData.get("asOf") ?? "").trim();
+  const billingEnd = parseDateOnly(billingRaw);
+  if (!billingEnd) {
+    payoutBack(agentId, asOfRaw, "error", "Billing period end is required (YYYY-MM-DD).");
+  }
+
+  let res;
+  try {
+    res = await accrueAgentCommission({ agentId, billingEnd, actorId: me.id });
+  } catch (err) {
+    if (err instanceof PayoutError) payoutBack(agentId, asOfRaw, "error", err.message);
+    throw err;
+  }
+
+  revalidatePath(`/admin/agents/${agentId}`);
+  for (const p of STATEMENT_PATHS) revalidatePath(p);
+
+  if (res.noop) {
+    payoutBack(
+      agentId,
+      asOfRaw,
+      "ok",
+      `Nothing to accrue up to ${billingRaw} — every commission run in that period is already on the ledger. Post upfront/trail first if the period is not computed yet.`,
+    );
+  }
+  payoutBack(
+    agentId,
+    asOfRaw,
+    "ok",
+    `Accrued BDT ${res.amount.toFixed(2)} across ${res.runs} run(s) — voucher ${res.voucherNo} dated ${res.periodEnd}. Dr Selling agent fees / Cr Liab-Selling Agent Commission.`,
+  );
+}
+
+/**
+ * Step 2 — post the payment voucher, dated the day the transfer left.
+ * Dr the payable / Cr bank (net) / Cr AIT & VAT Payble (withheld).
+ */
+export async function payAgentCommissionAction(formData: FormData): Promise<void> {
+  const me = await requireRole(["admin", "checker", "accountant"]);
+  const agentId = String(formData.get("agentId") ?? "").trim();
+  if (!agentId) redirect("/admin/agents?error=Missing+agent");
+
+  const asOfRaw = String(formData.get("asOf") ?? "").trim();
+  const billingRaw = String(formData.get("billingEnd") ?? "").trim();
+  const paidRaw = String(formData.get("paidOn") ?? "").trim();
+  const bankAccountName = String(formData.get("bankAccountName") ?? "").trim();
+  const whtRaw = String(formData.get("withholdingPct") ?? "").trim();
+
+  const billingEnd = parseDateOnly(billingRaw);
+  const paidOn = parseDateOnly(paidRaw);
+  if (!billingEnd) {
+    payoutBack(agentId, asOfRaw, "error", "Billing period end is required (YYYY-MM-DD).");
+  }
+  if (!paidOn) {
+    payoutBack(agentId, asOfRaw, "error", "Payment date is required (YYYY-MM-DD).");
+  }
+  if (!bankAccountName) {
+    payoutBack(agentId, asOfRaw, "error", "Pick the bank account the transfer left from.");
+  }
+  // Entered as a percentage (10 = 10%); the engine works in fractions.
+  const whtPct = whtRaw === "" ? 0 : Number(whtRaw);
+  if (!Number.isFinite(whtPct) || whtPct < 0 || whtPct >= 100) {
+    payoutBack(agentId, asOfRaw, "error", "Withholding must be a percentage between 0 and 100.");
+  }
+
+  let res;
+  try {
+    res = await payAgentCommission({
+      agentId,
+      billingEnd,
+      paidOn,
+      bankAccountName,
+      withholdingPct: whtPct / 100,
+      actorId: me.id,
+    });
+  } catch (err) {
+    if (err instanceof PayoutError) payoutBack(agentId, asOfRaw, "error", err.message);
+    throw err;
+  }
+
+  revalidatePath(`/admin/agents/${agentId}`);
+  for (const p of STATEMENT_PATHS) revalidatePath(p);
+
+  if (res.noop) {
+    payoutBack(
+      agentId,
+      asOfRaw,
+      "ok",
+      `Nothing accrued-and-unpaid up to ${billingRaw} — either it is already paid, or the accrual voucher has not been posted yet (step 1).`,
+    );
+  }
+  payoutBack(
+    agentId,
+    asOfRaw,
+    "ok",
+    `Paid BDT ${res.net.toFixed(2)} net (gross ${res.gross.toFixed(2)} − withholding ${res.withholding.toFixed(2)}) from ${bankAccountName} on ${paidRaw} — voucher ${res.voucherNo}, ${res.runs} run(s) settled.`,
   );
 }
 

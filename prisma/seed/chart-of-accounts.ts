@@ -168,4 +168,12 @@ export const CHART_OF_ACCOUNTS_SEED: SeedAccount[] = [
   // Hits other comprehensive income, not P&L — kept separate from
   // sl 132 so the IS can place it under the OCI heading.
   { sl: 133, name: "Deferred Tax Expense", normalBalance: "DEBIT" },
+  // ─── Selling-agent commission payout ───────────────────────────
+  // Liability leg of the commission accrual. Posted by
+  // src/lib/commission-payout.ts → accrueAgentCommission, which debits
+  // `Selling agent fees` (sl 115) on the billing period end, and cleared by
+  // payAgentCommission on the day the bank transfer actually leaves.
+  // Without this account the expense had no credit side, which is why the
+  // commission engine contributed nothing to the trial balance.
+  { sl: 134, name: "Liab-Selling Agent Commission", normalBalance: "CREDIT" },
 ];

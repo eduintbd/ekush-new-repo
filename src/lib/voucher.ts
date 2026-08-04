@@ -4,7 +4,8 @@
 //
 // Voucher number shape: '{PREFIX}/{FY_SHORT}/{####}' where:
 //   PREFIX   — JV (manual journal), OB (opening balance), BV (buy trade),
-//              SV (sell trade), FV (fair-value adjustment)
+//              SV (sell trade), FV (fair-value adjustment), TX (tax provision),
+//              AC (agent commission accrual), CP (agent commission payment)
 //   FY_SHORT — '25-26' (extracted from 'FY2025-26')
 //   ####     — zero-padded 4-digit sequence, scoped per (fiscalYear, prefix)
 //
@@ -13,7 +14,7 @@
 
 import type { Prisma } from "@/generated/prisma";
 
-export type VoucherPrefix = "JV" | "OB" | "BV" | "SV" | "FV" | "TX";
+export type VoucherPrefix = "JV" | "OB" | "BV" | "SV" | "FV" | "TX" | "AC" | "CP";
 
 /** Derive the short fiscal-year suffix from a FiscalYear.label.
  *  'FY2025-26' → '25-26'; 'FY2026-27' → '26-27'; falls back to stripping 'FY'. */
@@ -28,19 +29,24 @@ export function shortFyLabel(label: string): string {
  * line-by-line — that only patches the GL and leaves the source (and the
  * views that read it) stale. They are edited at their source, which
  * re-posts the voucher:
- *   - 'trade' → BV/SV, backed by a Trade row      → /trades/<id>/edit
- *   - 'fva'   → FV, posted by /portfolio "Revalue" → /portfolio
+ *   - 'trade'      → BV/SV, backed by a Trade row      → /trades/<id>/edit
+ *   - 'fva'        → FV, posted by /portfolio "Revalue" → /portfolio
+ *   - 'commission' → AC/CP, backed by CommissionRun / CommissionPayment rows
+ *                    → /admin/agents/<id>. Editing the lines by hand would
+ *                    move the GL without moving `status`/`paidOn`, so the
+ *                    books would say paid while the runs still say accrued.
  * Everything else (manual JV, opening-balance OB, tax) returns null and
  * stays directly editable.
  */
 export function derivedVoucherKind(
   voucherNo: string | null | undefined,
   txnType: string | null | undefined,
-): "trade" | "fva" | null {
+): "trade" | "fva" | "commission" | null {
   const prefix = (voucherNo?.split("/")[0] ?? "").toUpperCase();
   const tt = (txnType ?? "").toUpperCase();
   if (prefix === "BV" || prefix === "SV" || tt === "BV" || tt === "SV") return "trade";
   if (prefix === "FV" || tt === "FV") return "fva";
+  if (prefix === "AC" || prefix === "CP" || tt === "AC" || tt === "CP") return "commission";
   return null;
 }
 

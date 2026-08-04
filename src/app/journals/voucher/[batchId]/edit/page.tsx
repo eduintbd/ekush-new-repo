@@ -93,6 +93,47 @@ export default async function EditJournalPage({
       </main>
     );
   }
+  if (derived === "commission") {
+    const payment = await prisma.commissionPayment.findFirst({
+      where: { OR: [{ paymentBatchId: batchId }, { accrualBatchId: batchId }] },
+      select: { agentId: true },
+    });
+    const run = payment
+      ? null
+      : await prisma.commissionRun.findFirst({
+          where: { journalBatchId: batchId },
+          select: { agentId: true },
+        });
+    const agentId = payment?.agentId ?? run?.agentId ?? null;
+    return (
+      <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">
+        <div className="mx-auto max-w-3xl">
+          <div className="text-xs uppercase tracking-widest text-zinc-500">
+            <Link href="/day-book" className="hover:text-zinc-700 dark:hover:text-zinc-300">← Day book</Link>
+            <span className="mx-1.5 text-zinc-400">/</span>
+            <Link href={`/journals/voucher/${batchId}`} className="hover:text-zinc-700 dark:hover:text-zinc-300">
+              {head.voucherNo ?? "voucher"}
+            </Link>
+          </div>
+          <h1 className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
+            Voucher <span className="font-mono">{head.voucherNo ?? "—"}</span> isn&apos;t edited here
+          </h1>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            This is a selling-agent commission voucher, posted from the agent&apos;s payout
+            panel. Editing the lines here would move the ledger without moving the underlying
+            commission runs, so the books would show the agent paid while the runs still read
+            accrued.
+          </p>
+          <Link
+            href={agentId ? `/admin/agents/${agentId}` : "/admin/agents"}
+            className="mt-6 inline-block rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            Agent → Commission payout →
+          </Link>
+        </div>
+      </main>
+    );
+  }
   if (derived === "fva") {
     return (
       <main className="min-h-screen bg-zinc-50 px-6 py-10 dark:bg-zinc-950">

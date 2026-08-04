@@ -287,9 +287,7 @@ export function CommissionBreakdown({
                   reconciliation; showing an agent a figure they are not paid
                   on only invites a dispute. */}
               {isAdmin && <th className="py-2 pr-3 text-right">Initial upfront</th>}
-              <th className="py-2 pr-3 text-right">Per-inflow upfront</th>
-              <th className="py-2 pr-3 text-right">Trail</th>
-              <th className="py-2 pr-3 text-right">Payable</th>
+              <th className="py-2 pr-3 text-right">Trail payable</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -316,12 +314,8 @@ export function CommissionBreakdown({
                     {formatBdt(b.initialUpfront)}
                   </td>
                 )}
-                <td className="py-1.5 pr-3 text-right tabular-nums">
-                  {formatBdt(b.perInflowUpfront)}
-                </td>
-                <td className="py-1.5 pr-3 text-right tabular-nums">{formatBdt(b.trailTotal)}</td>
                 <td className="py-1.5 pr-3 text-right font-semibold tabular-nums">
-                  {formatBdt(b.perInflowUpfront + b.trailTotal)}
+                  {formatBdt(b.trailTotal)}
                 </td>
               </tr>
             ))}
@@ -338,18 +332,22 @@ export function CommissionBreakdown({
                 </td>
               )}
               <td className="py-1.5 pr-3 text-right tabular-nums">
-                {formatBdt(preview.totals.perInflowUpfront)}
-              </td>
-              <td className="py-1.5 pr-3 text-right tabular-nums">
                 {formatBdt(preview.totals.trail)}
-              </td>
-              <td className="py-1.5 pr-3 text-right tabular-nums">
-                {formatBdt(preview.totals.totalPayable)}
               </td>
             </tr>
           </tbody>
         </table>
       </div>
+      {/* This table is trail only, and the rows sum to their own total. Upfront
+          cannot appear here: the live model is a high-water-mark on the agent's
+          WHOLE book, so there is no such thing as one investor's share of it.
+          It used to show a per-BUY "per-inflow upfront" that nobody is paid on,
+          which made the rows disagree with their own TOTAL row. */}
+      <p className="mt-2 text-[11px] text-zinc-500">
+        Trail only. Upfront is a book-level figure — see the watermark table above.
+        TOTAL PAYABLE ({formatBdt(preview.totals.totalPayable)}) = pending upfront{" "}
+        {formatBdt(preview.totals.pendingUpfront)} + trail {formatBdt(preview.totals.trail)}.
+      </p>
 
       {/* Trail per-period detail */}
       {preview.trailRows.length > 0 && (

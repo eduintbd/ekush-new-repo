@@ -82,6 +82,12 @@ export default async function AgentCommissionsPage() {
                 ))}
               </tbody>
             </table>
+            <p className="border-t border-zinc-100 px-4 py-2 text-[11px] text-zinc-500 dark:border-zinc-800">
+              <strong>accrued</strong> — earned and recorded. <strong>approved</strong> — booked
+              to the accounts for the billing period, awaiting the transfer.{" "}
+              <strong>paid</strong> — transferred to your bank on the date shown; the amount
+              credited is net of any tax deducted at source.
+            </p>
           </div>
         )}
       </div>

@@ -174,6 +174,13 @@ export async function updateJournalBatch(formData: FormData): Promise<void> {
   if (derived === "fva") {
     redirect(`/portfolio?error=${encodeURIComponent("Edit fair-value vouchers via Portfolio → Revalue to market.")}`);
   }
+  if (derived === "commission") {
+    redirect(
+      `/journals/voucher/${batchId}?error=${encodeURIComponent(
+        "This is a selling-agent commission voucher; it is posted from the agent's payout panel and is not edited line by line.",
+      )}`,
+    );
+  }
 
   const accounts = formData.getAll("account").map(String);
   const debits = formData.getAll("debit").map(String);

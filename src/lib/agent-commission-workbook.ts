@@ -94,13 +94,13 @@ function buildTxSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
     { header: "Units", key: "units", width: 12, style: { numFmt: "#,##0.00" } },
     { header: "Amount (BDT)", key: "amount", width: 16, style: { numFmt: "#,##0.00" } },
     { header: "NAV at txn", key: "nav", width: 12, style: { numFmt: "#,##0.0000" } },
+    // The term's upfront rate is kept as documentation of what was in force on
+    // the day. The "Upfront commission" column that used to sit beside it —
+    // Amount × Upfront %, per BUY — was removed: nobody is paid on that basis.
+    // Upfront is a high-water-mark on the agent's whole book, so a per-BUY
+    // figure here only invited the reader to add up a column that is not owed.
+    // See the "Upfront watermark" sheet for what actually accrues.
     { header: "Upfront %", key: "rate", width: 12, style: { numFmt: "0.0000%" } },
-    {
-      header: "Upfront commission (BDT)",
-      key: "comm",
-      width: 24,
-      style: { numFmt: "#,##0.00" },
-    },
     { header: "Notes", key: "notes", width: 40 },
   ];
   s.getRow(1).font = { bold: true };
@@ -118,9 +118,7 @@ function buildTxSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
     const rate =
       p.termsActive.find((tm) => tm.fundCategory === b.category)?.upfrontPct ?? 0;
     const isBuy = t.direction === "BUY";
-    const earns = isBuy && !b.isDirectSubscription;
-    const commission = earns ? t.amount * rate : 0;
-    const row = s.addRow({
+    s.addRow({
       date: t.date.toISOString().slice(0, 10),
       inv: t.investorCode,
       name: nameByInv.get(t.investorCode) ?? "",
@@ -138,17 +136,6 @@ function buildTxSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
           ? "Redemption — no upfront"
           : "",
     });
-
-    // The Upfront-commission cell (column L) is a LIVE FORMULA, not a pasted
-    // number, so an agent can click it and see = Amount × Upfront % (I×K) in
-    // the formula bar and trust where the figure comes from. `result` is the
-    // cached value Excel shows before it recalculates. Redemptions and direct
-    // subscriptions earn nothing, so those cells are a literal 0.
-    // I = Amount, K = Upfront %, L = this column.
-    const r = row.number;
-    row.getCell("comm").value = earns
-      ? { formula: `I${r}*K${r}`, result: Math.round(commission * 100) / 100 }
-      : 0;
   }
 }
 
@@ -413,30 +400,24 @@ function buildSummarySheet(
       width: 18,
       style: { numFmt: "#,##0.00" },
     },
-    { header: "Units bought", key: "ub", width: 12, style: { numFmt: "#,##0.00" } },
-    { header: "Units sold", key: "us", width: 12, style: { numFmt: "#,##0.00" } },
+    { header: "Units bought", key: "ub", width: 16, style: { numFmt: "#,##0.00" } },
+    { header: "Units sold", key: "us", width: 16, style: { numFmt: "#,##0.00" } },
     {
       header: "Per-spec upfront (initial only)",
       key: "initU",
       width: 28,
       style: { numFmt: "#,##0.00" },
     },
+    // Trail is the only per-investor payable there is. The two columns that
+    // used to follow — "Per-inflow upfront (every BUY)" and a "Total payable"
+    // built on it — were removed: upfront is a high-water-mark on the whole
+    // book, so it has no per-investor share, and carrying one meant these rows
+    // never summed to their own TOTAL row. The book-level upfront is in the
+    // UPFRONT WATERMARK block below.
     {
-      header: "Per-inflow upfront (every BUY)",
-      key: "everyU",
-      width: 28,
-      style: { numFmt: "#,##0.00" },
-    },
-    {
-      header: "Trail commission (BDT)",
+      header: "Trail payable (BDT)",
       key: "trail",
       width: 22,
-      style: { numFmt: "#,##0.00" },
-    },
-    {
-      header: "Total payable (per-inflow + trail)",
-      key: "tot",
-      width: 30,
       style: { numFmt: "#,##0.00" },
     },
   ];
@@ -457,9 +438,7 @@ function buildSummarySheet(
       ub: b.unitsBought,
       us: b.unitsSold,
       initU: b.initialUpfront,
-      everyU: Math.round(b.perInflowUpfront * 100) / 100,
       trail: Math.round(b.trailTotal * 100) / 100,
-      tot: Math.round((b.perInflowUpfront + b.trailTotal) * 100) / 100,
     });
   }
   const totRow = s.addRow({
@@ -468,9 +447,7 @@ function buildSummarySheet(
     outflow: p.totals.outflow,
     net: Math.round((p.totals.inflow - p.totals.outflow) * 100) / 100,
     initU: p.totals.initialUpfront,
-    everyU: p.totals.perInflowUpfront,
     trail: p.totals.trail,
-    tot: p.totals.totalPayable,
   });
   totRow.font = { bold: true };
   totRow.border = { top: { style: "thin" } };
@@ -483,15 +460,18 @@ function buildSummarySheet(
     s.addRow({});
     const wmHead = s.addRow({ inv: "UPFRONT WATERMARK (whole book — every investor, all funds combined)" });
     wmHead.font = { bold: true };
-    s.addRow({ inv: "Book", name: "Investors", inflow: "Net principal now", net: peakLabel, initU: "Rate", everyU: "Pending new money", tot: "Pending upfront" });
+    // These rows borrow the sheet's columns for their own layout — `ub` carries
+    // pending new money and `trail` the pending upfront. Each block prints its
+    // own header row directly above, so the borrowed columns are labelled.
+    s.addRow({ inv: "Book", name: "Investors", inflow: "Net principal now", net: peakLabel, initU: "Rate", ub: "Pending new money", trail: "Pending upfront" });
     const wmRow = s.addRow({
       inv: p.agentCode,
       name: new Set(wm.legs.map((l) => l.investorCode)).size,
       inflow: Math.round(wm.currentNetPrincipal * 100) / 100,
       net: Math.round(Math.max(wm.storedWatermark, wm.peak) * 100) / 100,
       initU: wm.mixedRate ? `${(wm.blendedPct * 100).toFixed(4)}% blended` : `${(wm.blendedPct * 100).toFixed(4)}%`,
-      everyU: Math.round(wm.pendingIncrement * 100) / 100,
-      tot: Math.round(p.totals.pendingUpfront * 100) / 100,
+      ub: Math.round(wm.pendingIncrement * 100) / 100,
+      trail: Math.round(p.totals.pendingUpfront * 100) / 100,
     });
     wmRow.font = { bold: true };
 
@@ -499,16 +479,16 @@ function buildSummarySheet(
     s.addRow({});
     const legHead = s.addRow({ inv: "UPFRONT WATERMARK — by investor × fund" });
     legHead.font = { bold: true };
-    s.addRow({ inv: "Investor", name: "Fund", cat: "Category", inflow: "Net principal", everyU: "New money", initU: "Rate", tot: "Upfront" });
+    s.addRow({ inv: "Investor", name: "Fund", cat: "Category", inflow: "Net principal", ub: "New money", initU: "Rate", trail: "Upfront" });
     for (const leg of wm.legs) {
       s.addRow({
         inv: leg.investorName ? `${leg.investorCode} ${leg.investorName}` : leg.investorCode,
         name: leg.fundCode,
         cat: leg.category,
         inflow: Math.round(leg.netPrincipal * 100) / 100,
-        everyU: Math.round(leg.attributedIncrement * 100) / 100,
+        ub: Math.round(leg.attributedIncrement * 100) / 100,
         initU: `${(leg.upfrontPct * 100).toFixed(4)}%`,
-        tot: Math.round(leg.attributedUpfront * 100) / 100,
+        trail: Math.round(leg.attributedUpfront * 100) / 100,
       });
     }
   }
@@ -533,7 +513,10 @@ function buildSummarySheet(
             `  • CIP dividend reinvestment is EXCLUDED — a reinvested dividend is not new money and does not lift the watermark.`,
           ],
           [
-            `  • upfront = max(0, new peak − stored watermark) × the upfront % of the fund that received the money setting the new high; a split increment is pro-rated across funds at each fund's own rate. The Initial/Per-inflow columns are legacy references only.`,
+            `  • upfront = max(0, new peak − stored watermark) × the upfront % of the fund that received the money setting the new high; a split increment is pro-rated across funds at each fund's own rate. The "Per-spec upfront (initial only)" column is a legacy reference, not payable.`,
+          ],
+          [
+            `Summary sheet: the per-investor rows are TRAIL ONLY and sum to their own TOTAL. Upfront has no per-investor share — see the UPFRONT WATERMARK block. Total payable = pending upfront + trail.`,
           ],
           [
             `Trail commission: computed from public.nav_records (daily NAV snapshots per fund). Per period (monthly or quarterly, per the term's Trail frequency):`,

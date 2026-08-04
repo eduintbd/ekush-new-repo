@@ -114,7 +114,6 @@ export type Bucket = {
   unitsBought: number;
   unitsSold: number;
   initialUpfront: number;
-  perInflowUpfront: number;
   trailTotal: number;
   txCount: number;
   buys: Array<{ date: Date; units: number }>;
@@ -170,7 +169,6 @@ export type PreviewResult = {
     inflow: number;
     outflow: number;
     initialUpfront: number;
-    perInflowUpfront: number;
     /** Watermark upfront not yet posted (Σ pendingUpfront). */
     pendingUpfront: number;
     /** Upfront already posted to CommissionRun (watermark + legacy). */
@@ -188,6 +186,27 @@ export function addMonths(d: Date, months: number): Date {
 
 export function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * Parse an accountant-supplied `asOf` (YYYY-MM-DD) into the cut-off instant
+ * the preview should be computed at.
+ *
+ * End of day, not midnight: billing "as of 2026-07-30" must INCLUDE trades
+ * executed on the 30th. Midnight would silently drop them and understate the
+ * payable by a full day.
+ *
+ * A future date is clamped to now — the preview reads NAV history, and no
+ * amount of date-picking makes tomorrow's NAV exist. Anything unparseable
+ * falls back to now rather than throwing: a bad query string should not 500
+ * the agent page.
+ */
+export function parseAsOf(raw: string | null | undefined, now: Date = new Date()): Date {
+  const s = (raw ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return now;
+  const d = new Date(`${s}T23:59:59.999Z`);
+  if (Number.isNaN(d.getTime())) return now;
+  return d > now ? now : d;
 }
 
 function termFor(terms: Term[], category: "equity" | "fixed_income"): Term | null {
@@ -285,7 +304,6 @@ export async function computeAgentCommissionPreview(
         inflow: 0,
         outflow: 0,
         initialUpfront: 0,
-        perInflowUpfront: 0,
         pendingUpfront: 0,
         postedUpfront: 0,
         trail: 0,
@@ -385,7 +403,6 @@ export async function computeAgentCommissionPreview(
         unitsBought: 0,
         unitsSold: 0,
         initialUpfront: 0,
-        perInflowUpfront: 0,
         trailTotal: 0,
         txCount: 0,
         buys: [],
@@ -396,12 +413,9 @@ export async function computeAgentCommissionPreview(
     }
     b.txCount += 1;
     const isBuy = t.direction === "BUY";
-    // Direct subscriptions earn no commission (clause 6.5).
-    const commission = isBuy && !b.isDirectSubscription ? round2(t.amount * rate) : 0;
     if (isBuy) {
       b.inflowTotal += t.amount;
       b.unitsBought += t.units;
-      b.perInflowUpfront += commission;
       b.buys.push({ date: t.date, units: t.units });
     } else {
       // Redemptions arrive from the portal ALREADY signed negative (amount and
@@ -539,10 +553,9 @@ export async function computeAgentCommissionPreview(
       inflow: acc.inflow + b.inflowTotal,
       outflow: acc.outflow + b.outflowTotal,
       initialUpfront: acc.initialUpfront + b.initialUpfront,
-      perInflowUpfront: acc.perInflowUpfront + b.perInflowUpfront,
       trail: acc.trail + b.trailTotal,
     }),
-    { inflow: 0, outflow: 0, initialUpfront: 0, perInflowUpfront: 0, trail: 0 },
+    { inflow: 0, outflow: 0, initialUpfront: 0, trail: 0 },
   );
 
   // ── Watermark upfront (the live upfront model) ──────────────────
@@ -653,7 +666,6 @@ export async function computeAgentCommissionPreview(
       inflow: round2(totals.inflow),
       outflow: round2(totals.outflow),
       initialUpfront: round2(totals.initialUpfront),
-      perInflowUpfront: round2(totals.perInflowUpfront),
       pendingUpfront: round2(effPendingUpfront),
       postedUpfront: round2(postedUpfront),
       trail: round2(totals.trail),

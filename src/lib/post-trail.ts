@@ -7,8 +7,10 @@
 // replaces the old run-trail.ts, which read `xsystem.nav_snapshots` (a table
 // with no writer anywhere in the repo) and therefore posted nothing, ever.
 //
-// Neither caller passes `asOf`: both let the preview default to now. That is
-// what makes cron output identical to the admin button by construction.
+// The cron never passes `asOf`, so it lets the preview default to now. That is
+// what makes cron output identical to the admin button by construction —
+// unless the admin has explicitly set a billing cut-off on the page, in which
+// case the button passes that date through and posts exactly what was shown.
 // `periodsFor` caps the final period at asOf and flags it `partial`, so a
 // single monthly cron correctly serves both monthly and quarterly cadences —
 // a quarterly bucket simply stays partial until its quarter closes.
@@ -97,6 +99,8 @@ export async function postTrailFromPreview(
     dryRun?: boolean;
     /** Attributed in the audit trail. null for cron. */
     actorId?: string | null;
+    /** Billing cut-off. Omit (cron) to compute at now. */
+    asOf?: Date;
   } = {},
 ): Promise<TrailPostResult> {
   const dryRun = opts.dryRun === true;
@@ -138,7 +142,7 @@ export async function postTrailFromPreview(
     perAgent.reduce((s, r) => s + pick(r), 0);
 
   return {
-    asOf: new Date().toISOString(),
+    asOf: (opts.asOf ?? new Date()).toISOString(),
     dryRun,
     agents: agents.length,
     agentsFailed: perAgent.filter((r) => r.error !== null).length,
@@ -155,9 +159,9 @@ async function postForAgent(
   agentId: string,
   agentCode: string,
   dryRun: boolean,
-  opts: { since?: Date; actorId?: string | null },
+  opts: { since?: Date; actorId?: string | null; asOf?: Date },
 ): Promise<AgentTrailPostResult> {
-  const preview = await computeAgentCommissionPreview(prisma, agentId);
+  const preview = await computeAgentCommissionPreview(prisma, agentId, opts.asOf);
 
   const completed = preview.trailRows.filter((r) => !r.partial);
   const partialSkipped = preview.trailRows.length - completed.length;
@@ -207,7 +211,12 @@ async function postForAgent(
     return true;
   });
 
+  // Two distinct dates, and the notes carry both: `postedOn` is when the row
+  // was written, `cutOff` is the billing date it was computed at. They differ
+  // whenever an accountant bills a closed period after the fact, and only the
+  // latter explains the amount.
   const postedOn = ymd(new Date());
+  const cutOff = ymd(preview.asOf);
   const data = safe.map((r) => ({
     agentId,
     agentInvestorId: r.agentInvestorId,
@@ -217,7 +226,7 @@ async function postForAgent(
     baseAmount: round2(r.avgValue),
     rateApplied: r.rateQuarter,
     amount: r.trail,
-    notes: `${r.navPoints} NAV pts · ${r.tier} tier · posted from preview ${postedOn}`,
+    notes: `${r.navPoints} NAV pts · ${r.tier} tier · posted ${postedOn} from preview as of ${cutOff}`,
   }));
 
   // Rows that do not already exist verbatim. Computing this explicitly (rather

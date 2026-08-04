@@ -450,11 +450,17 @@ function note15_liabilityForExpenses({ tb }: NotesContext): Note {
   const auditAccrued = netC(tb, ACCOUNT.auditFeeAccrued);
   const auditPayable = netC(tb, ACCOUNT.liabilityAuditFee);
   const tdsVat =
-    netC(tb, ACCOUNT.withholdingVatAndTds) + netC(tb, ACCOUNT.withholdingTaxEmployees);
+    netC(tb, ACCOUNT.withholdingVatAndTds)
+    + netC(tb, ACCOUNT.withholdingTaxEmployees)
+    + netC(tb, ACCOUNT.aitAndVatPayable);
   const pf = grossC(tb, ACCOUNT.liabForPfFund);
   const employee = netC(tb, ACCOUNT.liabForEmployeeAllowance);
   const rent = netC(tb, ACCOUNT.liabOfficeRent);
-  const total = utility + auditAccrued + auditPayable + tdsVat + pf + employee + rent;
+  // Commission accrued to selling agents at a billing period end, outstanding
+  // until the bank transfer clears it (src/lib/commission-payout.ts).
+  const agentCommission = netC(tb, ACCOUNT.liabSellingAgentCommission);
+  const total =
+    utility + auditAccrued + auditPayable + tdsVat + pf + employee + rent + agentCommission;
   return {
     number: "15.00",
     title: "Liability for Expenses",
@@ -466,6 +472,7 @@ function note15_liabilityForExpenses({ tb }: NotesContext): Note {
       { label: "Liability for PF Fund", amount: pf },
       { label: "Liability for Employee Allowance", amount: employee },
       { label: "Liability for Office Rent", amount: rent },
+      { label: "Selling Agent Commission Payable", amount: agentCommission },
     ],
     total,
   };

@@ -13,6 +13,8 @@ import {
   deleteAgent,
   deleteAgentTerm,
   linkInvestorToAgent,
+  accrueAgentCommissionAction,
+  payAgentCommissionAction,
   postAgentCommissions,
   postAgentUpfront,
   reinstateAgent,
@@ -24,7 +26,8 @@ import {
   unlinkInvestor,
   updateAgentTerm,
 } from "@/app/admin/agents/actions";
-import { computeAgentCommissionPreview } from "@/lib/agent-commission-preview";
+import { computeAgentCommissionPreview, parseAsOf } from "@/lib/agent-commission-preview";
+import { getPayoutState } from "@/lib/commission-payout";
 import { CommissionBreakdown } from "@/components/commission-breakdown";
 import { formatBdt } from "@/lib/format";
 import {
@@ -39,9 +42,25 @@ import {
   type PortalRedemption,
 } from "@/lib/portal-data";
 
-type Search = { ok?: string; error?: string; editTerm?: string; link?: string };
+type Search = {
+  ok?: string;
+  error?: string;
+  editTerm?: string;
+  link?: string;
+  /** Billing cut-off (YYYY-MM-DD) the whole commission panel is computed at. */
+  asOf?: string;
+};
 
 const FUND_CATEGORIES = ["equity", "fixed_income"] as const;
+
+// Same detection the bank-reconciliation page uses to pick cash/bank accounts
+// out of the chart of accounts (src/app/bank-reconciliation/new/page.tsx).
+const BANK_NAME_PATTERN =
+  /(cash|bank|brac|ucb|bkash|nagad|rocket|mtbl|dbbl|ebl|std account|midland|premier|prime|nccb)/i;
+
+/** Default tax deducted at source on agent commission, as a percentage.
+ *  Overridable per payout on the form; this is only what the field starts at. */
+const DEFAULT_WHT_PCT = Number(process.env.AGENT_COMMISSION_WHT_PCT ?? "10");
 
 export default async function AgentDetailPage({
   params,
@@ -95,11 +114,40 @@ export default async function AgentDetailPage({
     ),
   ]);
 
+  // Billing cut-off. Defaults to now; the accountant sets it to the period end
+  // (e.g. 2026-07-30) so the figure on screen is the figure being billed, not
+  // whatever has accrued by the day they happen to open the page.
+  const asOf = parseAsOf(sp.asOf);
+
   // On-demand commission preview (no DB write). Mirrors the
   // scripts/calc-agent-commissions.ts engine — same numbers in the UI,
   // in the Excel download, and what gets persisted if the admin clicks
   // "Post these to CommissionRun".
-  const preview = await computeAgentCommissionPreview(prisma, agent.id).catch(() => null);
+  const preview = await computeAgentCommissionPreview(prisma, agent.id, asOf).catch(() => null);
+
+  // Payout panel inputs. The billing cut-off defaults to the as-of date so the
+  // accountant accrues exactly the period they just looked at.
+  const billingEnd = new Date(
+    Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate()),
+  );
+  const [payoutState, payments, bankAccounts] = await Promise.all([
+    getPayoutState(agent.id, billingEnd).catch(() => null),
+    prisma.commissionPayment
+      .findMany({ where: { agentId: agent.id }, orderBy: { paidOn: "desc" }, take: 12 })
+      .catch(() => []),
+    prisma.chartOfAccount
+      .findMany({
+        where: { isActive: true, normalBalance: "DEBIT" },
+        orderBy: { sl: "asc" },
+        select: { name: true, category: true },
+      })
+      .then((rows) =>
+        rows.filter(
+          (a) => (a.category && /cash|bank/i.test(a.category)) || BANK_NAME_PATTERN.test(a.name),
+        ),
+      )
+      .catch(() => [] as Array<{ name: string; category: string | null }>),
+  ]);
 
   // Filter the picker to exclude investors already linked to this agent
   const alreadyLinkedSet = new Set(agent.investors.map((i) => `${i.investorCode}|${i.fundCode}`));
@@ -554,7 +602,16 @@ export default async function AgentDetailPage({
 
         <MethodologyPanel />
 
-        <CommissionPreviewPanel agentId={agent.id} preview={preview} />
+        <CommissionPreviewPanel agentId={agent.id} preview={preview} asOfParam={sp.asOf ?? ""} />
+
+        <CommissionPayoutPanel
+          agentId={agent.id}
+          asOfParam={sp.asOf ?? ""}
+          billingEnd={billingEnd.toISOString().slice(0, 10)}
+          state={payoutState}
+          payments={payments}
+          bankAccounts={bankAccounts}
+        />
 
         <Section title={`Recent commissions (${agent.commissionRuns.length})`}>
           {agent.commissionRuns.length === 0 ? (
@@ -951,13 +1008,16 @@ function Method({
 function CommissionPreviewPanel({
   agentId,
   preview,
+  asOfParam,
 }: {
   agentId: string;
   preview: Awaited<ReturnType<typeof computeAgentCommissionPreview>> | null;
+  /** Raw ?asOf= as typed in the URL — "" when the page is on "today". */
+  asOfParam: string;
 }) {
   if (!preview) {
     return (
-      <Section title="Calculate as of today">
+      <Section title="Calculate as of">
         <p className="text-sm text-red-700 dark:text-red-300">
           Preview failed — see server logs. The portal database may be unreachable.
         </p>
@@ -966,7 +1026,7 @@ function CommissionPreviewPanel({
   }
   if (preview.buckets.length === 0) {
     return (
-      <Section title="Calculate as of today">
+      <Section title="Calculate as of">
         <p className="text-sm text-zinc-500">
           No transactions yet for any linked investor. Link investors below — once they
           execute BUYs in the portal, the preview will populate.
@@ -976,8 +1036,43 @@ function CommissionPreviewPanel({
   }
   const partialCount = preview.trailRows.filter((r) => r.partial).length;
   const today = preview.asOf.toISOString().slice(0, 10);
+  // Everything below — the stat cards, the watermark, the trail rows, the Excel
+  // download and both post buttons — is computed at THIS date. Keeping one
+  // variable is what stops the screen and the posted rows from disagreeing.
+  const asOfQs = asOfParam ? `?asOf=${encodeURIComponent(asOfParam)}` : "";
+  const backdated = asOfParam !== "";
   return (
-    <Section title={`Calculate as of today — ${preview.asOf.toISOString().slice(0, 10)}`}>
+    <Section title={`Calculate as of — ${today}`}>
+      <form method="GET" className="mb-4 flex flex-wrap items-end gap-2">
+        <label className="block">
+          <span className="block text-[10px] uppercase tracking-wider text-zinc-500">
+            Billing cut-off
+          </span>
+          <input
+            type="date"
+            name="asOf"
+            defaultValue={asOfParam}
+            max={new Date().toISOString().slice(0, 10)}
+            className="mt-1 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+          />
+        </label>
+        <button className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">
+          Recalculate
+        </button>
+        {backdated && (
+          <a
+            href={`/admin/agents/${agentId}`}
+            className="text-[11px] text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
+          >
+            back to today
+          </a>
+        )}
+        <span className="text-[11px] text-zinc-500">
+          {backdated
+            ? `Every figure below is as of the close of ${today} — trades after that date are excluded, and the Post/Accrue buttons use the same date.`
+            : "Set the period end (e.g. 2026-07-30) to bill a closed month rather than today."}
+        </span>
+      </form>
       <CommissionBreakdown
         preview={preview}
         audience="admin"
@@ -1034,16 +1129,17 @@ function CommissionPreviewPanel({
         actionBar={
           <>
         <a
-          href={`/api/admin/agents/${agentId}/commissions/excel`}
+          href={`/api/admin/agents/${agentId}/commissions/excel${asOfQs}`}
           className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800"
         >
           Download Excel workbook
         </a>
         <form
           action={postAgentUpfront}
-          data-confirm={`Post the watermark upfront as of today (${formatBdt(preview.totals.pendingUpfront)} pending)? Idempotent — re-clicking with no new money posts nothing.`}
+          data-confirm={`Post the watermark upfront as of ${today} (${formatBdt(preview.totals.pendingUpfront)} pending)? Idempotent — re-clicking with no new money posts nothing.`}
         >
           <input type="hidden" name="agentId" value={agentId} />
+          <input type="hidden" name="asOf" value={asOfParam} />
           <button
             type="submit"
             disabled={preview.totals.pendingUpfront <= 0}
@@ -1054,9 +1150,10 @@ function CommissionPreviewPanel({
         </form>
         <form
           action={postAgentCommissions}
-          data-confirm={`Post ${countPostable(preview)} trail row(s) to CommissionRun? Idempotent — duplicates are skipped. Partial periods (cut off at today) are not posted; the cron picks them up at period close.`}
+          data-confirm={`Post ${countPostable(preview)} trail row(s) to CommissionRun as of ${today}? Idempotent — duplicates are skipped. Partial periods (cut off at ${today}) are not posted; the cron picks them up at period close.`}
         >
           <input type="hidden" name="agentId" value={agentId} />
+          <input type="hidden" name="asOf" value={asOfParam} />
           <button
             type="submit"
             className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
@@ -1073,6 +1170,260 @@ function CommissionPreviewPanel({
           </>
         }
       />
+    </Section>
+  );
+}
+
+/**
+ * Commission payout — the step that turns a computed commission into money.
+ *
+ * Two buttons and not one because the billing date and the payment date are
+ * different days: bill to 30 Jul, transfer on 5 Aug. Accruing on the period end
+ * puts the expense in July; paying on the transfer date takes the cash out in
+ * August. A single voucher on the payment date would file July's expense in
+ * August. See src/lib/commission-payout.ts for the vouchers themselves.
+ */
+function CommissionPayoutPanel({
+  agentId,
+  asOfParam,
+  billingEnd,
+  state,
+  payments,
+  bankAccounts,
+}: {
+  agentId: string;
+  asOfParam: string;
+  billingEnd: string;
+  state: Awaited<ReturnType<typeof getPayoutState>> | null;
+  payments: Array<{
+    id: string;
+    periodEnd: Date;
+    paidOn: Date;
+    grossAmount: unknown;
+    withholdingAmount: unknown;
+    netAmount: unknown;
+    bankAccountName: string;
+    accrualBatchId: string | null;
+    paymentBatchId: string;
+  }>;
+  bankAccounts: Array<{ name: string; category: string | null }>;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const unaccrued = state?.unaccrued.amount ?? 0;
+  const unpaid = state?.unpaid.amount ?? 0;
+
+  return (
+    <Section title="Commission payout — accrue, then pay">
+      <p className="text-xs text-zinc-600 dark:text-zinc-400">
+        Billing date and payment date are not the same day. Step 1 books the expense on the
+        period end; step 2 books the cash on the day the transfer actually leaves. Both are
+        idempotent — running either twice does nothing the second time.
+      </p>
+
+      {!state && (
+        <p className="mt-3 text-sm text-red-700 dark:text-red-300">
+          Could not read the payout state — see server logs.
+        </p>
+      )}
+
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        {/* Step 1 — accrual */}
+        <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+            1 · Accrue to the ledger
+          </h3>
+          <p className="mt-1 text-[11px] text-zinc-500">
+            Dr Selling agent fees / Cr Liab-Selling Agent Commission, dated the period end.
+            Sweeps every posted commission run ending on or before that date.
+          </p>
+          <p className="mt-2 text-sm">
+            Waiting to be accrued:{" "}
+            <strong className="tabular-nums">{formatBdt(unaccrued)}</strong>
+            <span className="ml-1 text-[11px] text-zinc-500">
+              ({state?.unaccrued.runs ?? 0} run(s) up to {billingEnd})
+            </span>
+          </p>
+          <form
+            action={accrueAgentCommissionAction}
+            className="mt-3 flex flex-wrap items-end gap-2"
+            data-confirm={`Post the accrual voucher dated the billing period end for ${formatBdt(unaccrued)}? This books the expense in that period, not today.`}
+          >
+            <input type="hidden" name="agentId" value={agentId} />
+            <input type="hidden" name="asOf" value={asOfParam} />
+            <label className="block">
+              <span className="block text-[10px] uppercase tracking-wider text-zinc-500">
+                Billing period end
+              </span>
+              <input
+                type="date"
+                name="billingEnd"
+                required
+                defaultValue={billingEnd}
+                className="mt-1 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={unaccrued <= 0}
+              className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+            >
+              Accrue commission
+            </button>
+          </form>
+          {unaccrued <= 0 && (
+            <p className="mt-2 text-[11px] text-zinc-500">
+              Nothing un-accrued up to {billingEnd}. Post the upfront and trail runs above
+              first if the period has not been computed yet.
+            </p>
+          )}
+        </div>
+
+        {/* Step 2 — payment */}
+        <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+            2 · Pay by bank transfer
+          </h3>
+          <p className="mt-1 text-[11px] text-zinc-500">
+            Dr the payable / Cr bank (net) / Cr AIT &amp; VAT Payble (withheld), dated the day
+            the money left. Only settles what step 1 has already accrued.
+          </p>
+          <p className="mt-2 text-sm">
+            Accrued and unpaid:{" "}
+            <strong className="tabular-nums">{formatBdt(unpaid)}</strong>
+            <span className="ml-1 text-[11px] text-zinc-500">
+              ({state?.unpaid.runs ?? 0} run(s))
+            </span>
+          </p>
+          <form
+            action={payAgentCommissionAction}
+            className="mt-3 space-y-2"
+            data-confirm={`Post the payment voucher for the gross accrued ${formatBdt(unpaid)}, less withholding? This records that the money has left the bank.`}
+          >
+            <input type="hidden" name="agentId" value={agentId} />
+            <input type="hidden" name="asOf" value={asOfParam} />
+            <input type="hidden" name="billingEnd" value={billingEnd} />
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="block">
+                <span className="block text-[10px] uppercase tracking-wider text-zinc-500">
+                  Paid on
+                </span>
+                <input
+                  type="date"
+                  name="paidOn"
+                  required
+                  min={billingEnd}
+                  defaultValue={today}
+                  className="mt-1 rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[10px] uppercase tracking-wider text-zinc-500">
+                  Withholding %
+                </span>
+                <input
+                  type="number"
+                  name="withholdingPct"
+                  step="0.01"
+                  min="0"
+                  max="99.99"
+                  defaultValue={DEFAULT_WHT_PCT}
+                  className="mt-1 w-24 rounded-md border border-zinc-300 px-2 py-1 text-right tabular-nums dark:border-zinc-700 dark:bg-zinc-900"
+                />
+              </label>
+            </div>
+            <label className="block">
+              <span className="block text-[10px] uppercase tracking-wider text-zinc-500">
+                From bank account
+              </span>
+              <select
+                name="bankAccountName"
+                required
+                className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                <option value="">— pick an account —</option>
+                {bankAccounts.map((a) => (
+                  <option key={a.name} value={a.name}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="submit"
+              disabled={unpaid <= 0 || bankAccounts.length === 0}
+              className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 hover:bg-emerald-800"
+            >
+              Record payment
+            </button>
+          </form>
+          {unpaid > 0 && (
+            <p className="mt-2 text-[11px] text-zinc-500">
+              At {DEFAULT_WHT_PCT}% the agent receives{" "}
+              {formatBdt(Math.round(unpaid * (1 - DEFAULT_WHT_PCT / 100) * 100) / 100)} and{" "}
+              {formatBdt(Math.round(unpaid * (DEFAULT_WHT_PCT / 100) * 100) / 100)} is withheld.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* History */}
+      <h3 className="mt-6 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        Payments ({payments.length})
+      </h3>
+      {payments.length === 0 ? (
+        <p className="mt-2 text-sm text-zinc-500">No commission has been paid to this agent yet.</p>
+      ) : (
+        <div className="mt-2 overflow-x-auto">
+          <table className="min-w-full divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
+            <thead className="text-left text-[11px] uppercase tracking-wider text-zinc-500">
+              <tr>
+                <th className="py-2 pr-3">Period to</th>
+                <th className="py-2 pr-3">Paid on</th>
+                <th className="py-2 pr-3 text-right">Gross</th>
+                <th className="py-2 pr-3 text-right">Withheld</th>
+                <th className="py-2 pr-3 text-right">Net paid</th>
+                <th className="py-2 pr-3">Bank</th>
+                <th className="py-2 pr-3">Vouchers</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {payments.map((p) => (
+                <tr key={p.id}>
+                  <td className="py-1.5 pr-3 text-xs">{p.periodEnd.toISOString().slice(0, 10)}</td>
+                  <td className="py-1.5 pr-3 text-xs">{p.paidOn.toISOString().slice(0, 10)}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">
+                    {formatBdt(Number(p.grossAmount))}
+                  </td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">
+                    {formatBdt(Number(p.withholdingAmount))}
+                  </td>
+                  <td className="py-1.5 pr-3 text-right font-semibold tabular-nums">
+                    {formatBdt(Number(p.netAmount))}
+                  </td>
+                  <td className="py-1.5 pr-3 text-xs">{p.bankAccountName}</td>
+                  <td className="py-1.5 pr-3 text-xs">
+                    {p.accrualBatchId && (
+                      <Link
+                        href={`/journals/voucher/${p.accrualBatchId}`}
+                        className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+                      >
+                        accrual
+                      </Link>
+                    )}
+                    {p.accrualBatchId && " · "}
+                    <Link
+                      href={`/journals/voucher/${p.paymentBatchId}`}
+                      className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+                    >
+                      payment
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Section>
   );
 }
