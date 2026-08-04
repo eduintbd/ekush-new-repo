@@ -97,6 +97,23 @@ export function CommissionBreakdown({
   // counts desync.
   const showRowAction = typeof watermarkRowAction === "function";
 
+  // The per-investor upfront figure comes from the watermark's OWN attribution,
+  // keyed the same way the buckets are. Anything else would be a second opinion
+  // on money: a legacy "initial upfront" column used to sit here and billed an
+  // investor whose money arrived while the book was below its peak — it replaced
+  // money that had left, so the watermark pays nothing on it. A bucket with no
+  // slice reads 0.00, which is the correct answer, not missing data.
+  const upfrontByLeg = new Map(
+    (preview.upfrontWatermark?.legs ?? []).map((l) => [
+      `${l.investorCode}|${l.fundCode}`,
+      l.attributedUpfront,
+    ]),
+  );
+  // Suspension forfeits the pending increment (totals.pendingUpfront is already
+  // zeroed for it), so the rows must be zeroed too or they would not sum to it.
+  const upfrontFor = (investorCode: string, fundCode: string): number =>
+    preview.upfrontEntitled ? (upfrontByLeg.get(`${investorCode}|${fundCode}`) ?? 0) : 0;
+
   return (
     <>
       {/* Upfront entitlement */}
@@ -282,11 +299,9 @@ export function CommissionBreakdown({
               <th className="py-2 pr-3">Sourced</th>
               <th className="py-2 pr-3 text-right"># Txns</th>
               <th className="py-2 pr-3 text-right">Inflow</th>
-              {/* "Initial upfront" is a legacy per-investor reference the live
-                  watermark model does not pay on. Kept for admin
-                  reconciliation; showing an agent a figure they are not paid
-                  on only invites a dispute. */}
-              {isAdmin && <th className="py-2 pr-3 text-right">Initial upfront</th>}
+              {/* Shown to BOTH audiences: it is now the watermark's own figure,
+                  the same one the runner posts, so there is nothing to hide. */}
+              <th className="py-2 pr-3 text-right">Upfront</th>
               <th className="py-2 pr-3 text-right">Trail payable</th>
             </tr>
           </thead>
@@ -309,11 +324,9 @@ export function CommissionBreakdown({
                 <td className="py-1.5 pr-3 text-xs">{b.sourcedOn.toISOString().slice(0, 10)}</td>
                 <td className="py-1.5 pr-3 text-right tabular-nums">{b.txCount}</td>
                 <td className="py-1.5 pr-3 text-right tabular-nums">{formatBdt(b.inflowTotal)}</td>
-                {isAdmin && (
-                  <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {formatBdt(b.initialUpfront)}
-                  </td>
-                )}
+                <td className="py-1.5 pr-3 text-right font-semibold tabular-nums">
+                  {formatBdt(upfrontFor(b.investorCode, b.fundCode))}
+                </td>
                 <td className="py-1.5 pr-3 text-right font-semibold tabular-nums">
                   {formatBdt(b.trailTotal)}
                 </td>
@@ -326,11 +339,9 @@ export function CommissionBreakdown({
               <td className="py-1.5 pr-3 text-right tabular-nums">
                 {formatBdt(preview.totals.inflow)}
               </td>
-              {isAdmin && (
-                <td className="py-1.5 pr-3 text-right tabular-nums">
-                  {formatBdt(preview.totals.initialUpfront)}
-                </td>
-              )}
+              <td className="py-1.5 pr-3 text-right tabular-nums">
+                {formatBdt(preview.totals.pendingUpfront)}
+              </td>
               <td className="py-1.5 pr-3 text-right tabular-nums">
                 {formatBdt(preview.totals.trail)}
               </td>
@@ -338,14 +349,16 @@ export function CommissionBreakdown({
           </tbody>
         </table>
       </div>
-      {/* This table is trail only, and the rows sum to their own total. Upfront
-          cannot appear here: the live model is a high-water-mark on the agent's
-          WHOLE book, so there is no such thing as one investor's share of it.
-          It used to show a per-BUY "per-inflow upfront" that nobody is paid on,
-          which made the rows disagree with their own TOTAL row. */}
+      {/* Both columns are the payable figures and both reconcile: Upfront sums
+          to pendingUpfront, Trail payable to trail, and the two totals to
+          TOTAL PAYABLE. Two earlier columns here did not — a per-BUY
+          "per-inflow upfront" and a per-spec "initial upfront" — and both
+          billed money the watermark refuses. */}
       <p className="mt-2 text-[11px] text-zinc-500">
-        Trail only. Upfront is a book-level figure — see the watermark table above.
-        TOTAL PAYABLE ({formatBdt(preview.totals.totalPayable)}) = pending upfront{" "}
+        Upfront is the watermark&apos;s own attribution — the increment each investor × fund
+        actually drove above the book&apos;s previous peak, which is what gets posted. A row
+        reads 0.00 when that money replaced money that had left, so it set no new high.
+        TOTAL PAYABLE ({formatBdt(preview.totals.totalPayable)}) = upfront{" "}
         {formatBdt(preview.totals.pendingUpfront)} + trail {formatBdt(preview.totals.trail)}.
       </p>
 

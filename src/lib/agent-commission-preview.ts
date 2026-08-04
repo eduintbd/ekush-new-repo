@@ -1,11 +1,18 @@
 // Per-agent commission preview — pure server-side computation. Used by:
 //   • /admin/agents/[id] page (renders totals + per-investor breakdown)
-//   • /api/admin/agents/[id]/commissions/excel (returns workbook)
-//   • scripts/calc-agent-commissions.ts (CLI workbook generator)
+//   • /agent/earnings (the same component, audience="agent")
+//   • /api/admin/agents/[id]/commissions/excel + the agent twin (workbooks)
 //   • postAgentCommissions server action (writes CommissionRun rows)
 //
 // Same engine in every place — admin sees in the UI exactly what the
 // Excel and the posted CommissionRun rows reflect.
+//
+// UPFRONT IS NOT COMPUTED HERE. It comes from `upfront-watermark.ts`, the same
+// module `run-upfront.ts` posts from, and reaches the UI as
+// `upfrontWatermark.legs[].attributedUpfront` per (investor, fund). This file
+// used to carry two of its own upfront figures — a per-BUY one and a per-spec
+// "initial" one — and both billed money the watermark refuses. There is now
+// exactly one upfront number in the system; keep it that way.
 
 import type { PrismaClient } from "@/generated/prisma";
 import { categoryForFund, type FundCode } from "@/lib/ekush-web/types";
@@ -15,6 +22,7 @@ import {
   fetchAgentInvestorTxns,
   flattenToAgentSeries,
   isUpfrontEntitled,
+  makeRateResolver,
   principalDelta,
   type FetchWarning,
   type RateResolver,
@@ -113,7 +121,6 @@ export type Bucket = {
   outflowTotal: number;
   unitsBought: number;
   unitsSold: number;
-  initialUpfront: number;
   trailTotal: number;
   txCount: number;
   buys: Array<{ date: Date; units: number }>;
@@ -168,7 +175,6 @@ export type PreviewResult = {
   totals: {
     inflow: number;
     outflow: number;
-    initialUpfront: number;
     /** Watermark upfront not yet posted (Σ pendingUpfront). */
     pendingUpfront: number;
     /** Upfront already posted to CommissionRun (watermark + legacy). */
@@ -303,7 +309,6 @@ export async function computeAgentCommissionPreview(
       totals: {
         inflow: 0,
         outflow: 0,
-        initialUpfront: 0,
         pendingUpfront: 0,
         postedUpfront: 0,
         trail: 0,
@@ -402,7 +407,6 @@ export async function computeAgentCommissionPreview(
         outflowTotal: 0,
         unitsBought: 0,
         unitsSold: 0,
-        initialUpfront: 0,
         trailTotal: 0,
         txCount: 0,
         buys: [],
@@ -428,17 +432,13 @@ export async function computeAgentCommissionPreview(
       b.unitsSold += Math.abs(t.units);
       b.sells.push({ date: t.date, units: Math.abs(t.units) });
     }
-    // Per-spec initial upfront: only on the first BUY at sourcing date.
-    const link = linkByPair.get(key)!;
-    const isInitial =
-      isBuy &&
-      !b.isDirectSubscription &&
-      t.date.toISOString().slice(0, 10) === link.sourcedOn.toISOString().slice(0, 10) &&
-      b.initialUpfront === 0;
-    if (isInitial) {
-      const initialGross = link.initialUnits * link.unitPriceAtSourcing;
-      b.initialUpfront = round2(initialGross * rate);
-    }
+    // No per-investor upfront is accumulated here. It used to be: a "per-spec
+    // initial upfront" of initialUnits × unitPriceAtSourcing × rate on the first
+    // BUY at the sourcing date. That bills an investor whose money arrived while
+    // the book was below its peak — money that merely replaced money that had
+    // left, which the watermark correctly pays nothing on. The per-investor
+    // upfront now comes from `upfrontWatermark.legs[].attributedUpfront` below,
+    // computed by the same function the runner posts from.
   }
 
   const earliestSourced = Array.from(buckets.values()).reduce<Date | null>(
@@ -552,10 +552,9 @@ export async function computeAgentCommissionPreview(
     (acc, b) => ({
       inflow: acc.inflow + b.inflowTotal,
       outflow: acc.outflow + b.outflowTotal,
-      initialUpfront: acc.initialUpfront + b.initialUpfront,
       trail: acc.trail + b.trailTotal,
     }),
-    { inflow: 0, outflow: 0, initialUpfront: 0, trail: 0 },
+    { inflow: 0, outflow: 0, trail: 0 },
   );
 
   // ── Watermark upfront (the live upfront model) ──────────────────
@@ -567,11 +566,11 @@ export async function computeAgentCommissionPreview(
   const stored = wmRow ? Number(wmRow.watermark) : 0;
   const nameByCode = new Map(bucketsSorted.map((b) => [b.investorCode, b.name]));
 
-  const rateFor: RateResolver = (fundCode: string) => {
-    const category = categoryForFund(fundCode as FundCode);
-    const term = termFor(termsActive, category);
-    return term ? { rate: term.upfrontPct, category } : null;
-  };
+  // The SAME resolver the runner posts with, over the full term history and the
+  // billing cut-off — not `termsActive`, which is "latest term per category
+  // applied retroactively" and is right for trail but would quote an upfront
+  // rate the posting run might not use.
+  const rateFor: RateResolver = makeRateResolver(termsAll, asOf);
 
   const { byInvestor: wmTxByInvestor, warnings: wmWarnings } = await fetchAgentInvestorTxns(
     prisma,
@@ -665,7 +664,6 @@ export async function computeAgentCommissionPreview(
     totals: {
       inflow: round2(totals.inflow),
       outflow: round2(totals.outflow),
-      initialUpfront: round2(totals.initialUpfront),
       pendingUpfront: round2(effPendingUpfront),
       postedUpfront: round2(postedUpfront),
       trail: round2(totals.trail),

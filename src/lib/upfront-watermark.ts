@@ -47,6 +47,7 @@
 // Idempotent: re-running a period finds peak ≤ watermark → increment 0.
 
 import type { PrismaClient } from "@/generated/prisma";
+import { categoryForFund, type FundCode } from "@/lib/ekush-web/types";
 
 /**
  * Which dividend figure was ploughed back as a purchase under CIP. The
@@ -185,6 +186,44 @@ const iso = (d: Date) => new Date(d).toISOString().slice(0, 10);
  */
 export function principalDelta(t: { direction: "BUY" | "SELL"; amount: number }): number {
   return t.direction === "BUY" ? t.amount : -Math.abs(t.amount);
+}
+
+/** The slice of an AgentTerm the upfront rate depends on. Structurally
+ *  satisfied by both `run-upfront`'s query and the preview's `Term`. */
+export type TermLite = {
+  fundCategory: "equity" | "fixed_income";
+  upfrontPct: number;
+  effectiveFrom: Date;
+  effectiveTo: Date | null;
+};
+
+/**
+ * Upfront rate from the term in force for this fund's category AT `asOf`.
+ *
+ * Shared by the runner (`run-upfront.ts`), the preview (`agent-commission-
+ * preview.ts`) and the agent calculator, deliberately: the preview used to
+ * resolve the rate as "latest term, applied retroactively" while the runner
+ * used "term in force at the period end". Those agree only while every category
+ * has exactly one open term — add a term with a future `effectiveFrom` or close
+ * one with an `effectiveTo` and the screen would quote a rate the posting run
+ * would not use. One function means that can no longer happen.
+ *
+ * Ties on `effectiveFrom` resolve to the most recently starting row.
+ */
+export function makeRateResolver(terms: TermLite[], asOf: Date): RateResolver {
+  return (fundCode: string) => {
+    const category = categoryForFund(fundCode as FundCode);
+    const active = terms
+      .filter(
+        (t) =>
+          t.fundCategory === category &&
+          t.effectiveFrom <= asOf &&
+          (t.effectiveTo === null || t.effectiveTo > asOf),
+      )
+      .sort((a, b) => +b.effectiveFrom - +a.effectiveFrom);
+    const t = active[0];
+    return t ? { rate: t.upfrontPct, category } : null;
+  };
 }
 
 export type SuspensionEvent = { action: string; effectiveFrom: Date; createdAt?: Date };
@@ -613,6 +652,55 @@ export async function fetchAgentInvestorTxns(
   }
 
   return { byInvestor, warnings, cipOffsetTotal: r2(cipOffsetTotal) };
+}
+
+export type BookShortfall = {
+  /** Highest the book has ever been, or the watermark already paid on — whichever is higher. */
+  peak: number;
+  /** Where the book sits now, after redemptions. */
+  netPrincipal: number;
+  /**
+   * How much new money must arrive before ANY of it earns upfront. Zero when
+   * the book is at its peak.
+   */
+  shortfall: number;
+};
+
+/**
+ * How far the agent's book is below the level upfront is next payable from.
+ *
+ * Exists for the commission calculator, which projected `amount × rate`
+ * unconditionally and so told an agent sitting below their peak that bringing
+ * ৳10,00,000 would earn them upfront when the true answer is nothing — that
+ * money replaces money that has left. Cheaper than a full commission preview:
+ * no NAV history, no trail periods, just the replay.
+ */
+export async function getAgentBookShortfall(
+  prisma: PrismaClient,
+  agentId: string,
+  asOf: Date = new Date(),
+): Promise<BookShortfall> {
+  const [wmRow, { byInvestor }] = await Promise.all([
+    prisma.agentBookWatermark.findUnique({ where: { agentId } }),
+    fetchAgentInvestorTxns(prisma, agentId, asOf),
+  ]);
+  const stored = wmRow ? Number(wmRow.watermark) : 0;
+  const txns = flattenToAgentSeries(byInvestor);
+  if (txns.length === 0) {
+    return { peak: stored, netPrincipal: 0, shortfall: r2(stored) };
+  }
+  // The rate is irrelevant here — only peak and net principal are read — so a
+  // resolver that always answers keeps `unratedFunds` from suppressing them.
+  const res = computeCombinedWatermarkUpfront(txns, stored, () => ({
+    rate: 0,
+    category: "equity",
+  }));
+  const from = Math.max(stored, res.peak);
+  return {
+    peak: r2(from),
+    netPrincipal: r2(res.netPrincipal),
+    shortfall: r2(Math.max(0, from - res.netPrincipal)),
+  };
 }
 
 // ─── Legacy per-fund model ───────────────────────────────────────

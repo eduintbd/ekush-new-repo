@@ -33,9 +33,13 @@ async function main(): Promise<void> {
     console.log(
       `  trail rows        ${String(atCut.trailRows.length).padStart(14)} ${String(atNow.trailRows.length).padStart(14)}   (partial: ${atCut.trailRows.filter((r) => r.partial).length} / ${atNow.trailRows.filter((r) => r.partial).length})`,
     );
-    // The removed column must be gone from the shape, not merely hidden.
-    const leaked = "perInflowUpfront" in (atNow.totals as Record<string, unknown>);
-    if (leaked) console.log("  !! totals still carries perInflowUpfront");
+    // The retired upfront bases must be gone from the shape, not merely hidden
+    // — a field that still exists is a field something will render again.
+    for (const gone of ["perInflowUpfront", "initialUpfront"]) {
+      if (gone in (atNow.totals as Record<string, unknown>)) {
+        console.log(`  !! totals still carries ${gone}`);
+      }
+    }
     console.log("");
   }
 }

@@ -22,7 +22,15 @@ export interface CalcFund {
 const ORANGE = "#F27023";
 const AMOUNT_CHIPS = [100000, 500000, 1000000, 2500000, 5000000];
 
-export default function CalculatorClient({ funds }: { funds: CalcFund[] }) {
+export default function CalculatorClient({
+  funds,
+  bookShortfall = 0,
+}: {
+  funds: CalcFund[];
+  /** How far the agent's book is below its peak; new money earns upfront only
+   *  above that line. 0 when the book is at its peak. */
+  bookShortfall?: number;
+}) {
   const [amount, setAmount] = useState(1000000);
   const [tenor, setTenor] = useState(2);
   const [fundCode, setFundCode] = useState(funds[0]?.code ?? "");
@@ -41,9 +49,13 @@ export default function CalculatorClient({ funds }: { funds: CalcFund[] }) {
         upfrontRate: fund.upfrontRate,
         trailY1Rate: fund.trailY1Rate,
         trailY2Rate: fund.trailY2Rate,
+        bookShortfall,
       }),
-    [amount, tenor, cagrPct, fund.upfrontRate, fund.trailY1Rate, fund.trailY2Rate],
+    [amount, tenor, cagrPct, fund.upfrontRate, fund.trailY1Rate, fund.trailY2Rate, bookShortfall],
   );
+
+  // Only worth saying when it actually bites this amount.
+  const shortfallBites = bookShortfall > 0;
 
   const trailPctLabel = `${(fund.trailY1Rate * 100).toFixed(2)}%${
     fund.trailY2Rate !== fund.trailY1Rate ? ` → ${(fund.trailY2Rate * 100).toFixed(2)}%` : ""
@@ -126,9 +138,39 @@ export default function CalculatorClient({ funds }: { funds: CalcFund[] }) {
         <Stat label="Your trail rate" value={trailPctLabel} hint="per year (Y1 → Y2+)" />
       </div>
 
+      {/* Below-peak notice. Without this the upfront figure below silently
+          promises money the office will not pay: while the book sits under its
+          previous peak, new money is replacing money that has already left. */}
+      {shortfallBites && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <p className="font-semibold">
+            Your book is ৳{bdt(bookShortfall)} below its peak.
+          </p>
+          <p className="mt-1 text-[13px] leading-relaxed">
+            Upfront is paid on new money only. The next ৳{bdt(bookShortfall)} you bring replaces
+            money that has already been redeemed, so it earns no upfront — only the amount above
+            that does.{" "}
+            {result.upfrontEligibleAmount > 0 ? (
+              <>
+                Of the ৳{bdt(amount)} below, ৳{bdt(result.upfrontEligibleAmount)} would earn
+                upfront.
+              </>
+            ) : (
+              <>At ৳{bdt(amount)}, none of it would earn upfront yet.</>
+            )}{" "}
+            Trail is unaffected — it accrues on the holding either way.
+          </p>
+        </div>
+      )}
+
       {/* Headline results */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Upfront (one time)" value={`৳${bdt(result.upfront, 2)}`} muted />
+        <Stat
+          label="Upfront (one time)"
+          value={`৳${bdt(result.upfront, 2)}`}
+          hint={shortfallBites ? `on ৳${bdt(result.upfrontEligibleAmount)} of new money` : undefined}
+          muted
+        />
         <Stat label={`Trail over ${tenor}y`} value={`৳${bdt(result.totalTrail, 2)}`} />
         <Stat label="First month's trail" value={`৳${bdt(result.firstMonthTrail, 2)}`} hint="the monthly forecast" muted />
         <Stat label="Total commission" value={`৳${bdt(result.totalCommission, 2)}`} emphasis />
@@ -147,9 +189,11 @@ export default function CalculatorClient({ funds }: { funds: CalcFund[] }) {
         <CommissionChart series={result.series} tenorYears={tenor} />
         <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
           The investor&apos;s money is projected to grow at the fund&apos;s CAGR, and your monthly
-          trail grows with it. Upfront is paid once at the start. This is an estimate for
-          guidance — actual commission is confirmed when the office posts each run, and past
-          performance does not guarantee future returns.
+          trail grows with it. Upfront is paid once, and only on money that lifts your whole book
+          — every investor you have sourced, all funds combined — above its previous peak;
+          redemptions elsewhere in your book must be replaced before new money earns it again.
+          This is an estimate for guidance — actual commission is confirmed when the office posts
+          each run, and past performance does not guarantee future returns.
         </p>
       </div>
     </div>

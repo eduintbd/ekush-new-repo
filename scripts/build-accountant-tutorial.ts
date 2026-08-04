@@ -947,37 +947,58 @@ function buildDoc(): Document {
   blocks.push(numbered("Inserts a new row with the new percentages and your effective_from date."));
   blocks.push(numbered("Older commissions already calculated against the old term are unaffected — the engine always looks up the term by date."));
   blocks.push(h3("Calculation methodology — read carefully"));
-  blocks.push(p("Three components — implemented in src/lib/commission-engine.ts:"));
+  blocks.push(p("Two components. Upfront is implemented in src/lib/upfront-watermark.ts and posted by src/lib/run-upfront.ts; trail is computed in src/lib/agent-commission-preview.ts and posted by src/lib/post-trail.ts. (src/lib/commission-engine.ts is the pre-2026 model and is no longer called.)"));
 
-  blocks.push(h4("Upfront — paid once at investor sourcing"));
+  blocks.push(h4("Upfront — paid on NEW MONEY only, against the agent's whole book"));
   blocks.push(mockup([
-    "  amount = initial_units × unit_price_at_sourcing × upfront_pct",
+    "  net_principal = Σ over EVERY investor the agent sourced, ALL funds, of",
+    "                  (BUY − SELL) cash, EXCLUDING CIP reinvestment",
+    "  watermark     = the running peak of net_principal (it never falls)",
+    "  increment     = max(0, new_peak − stored_watermark)",
+    "  upfront       = increment × upfront_pct of the fund that RECEIVED the money",
     "",
-    "  Example: 10,000 units × BDT 10.50 × 0.0020 (= 0.20%)  =  BDT 210.00",
+    "  Example: book peak 5,00,000, already commissioned. An investor redeems",
+    "  2,00,000 (book → 3,00,000; peak stays 5,00,000). A different investor then",
+    "  brings 2,50,000 (book → 5,50,000). Only 50,000 is above the peak, so:",
+    "     50,000 × 0.0010 (= 0.10%)  =  BDT 50.00",
+    "  The other 2,00,000 earned nothing — it replaced money that had left.",
   ]));
-  blocks.push(bullet("Term in effect on sourced_on is locked in."));
-  blocks.push(bullet("Skipped if is_direct_subscription = true."));
-  blocks.push(bullet("Posted as a single CommissionRun, type = upfront."));
+  blocks.push(bullet("This is per AGENT, not per investor. Money moved between two of the agent's own clients, or between funds, nets to nothing and earns nothing."));
+  blocks.push(bullet("The rate is the term in force on the billing date, not the date the investor was sourced."));
+  blocks.push(bullet("A redemption never produces a negative row; it lowers the book below its peak, and the agent must replace that money before earning upfront again."));
+  blocks.push(bullet("Skipped if is_direct_subscription = true (clause 6.5)."));
+  blocks.push(bullet("Posted as one CommissionRun per driving investor × fund, type = upfront."));
+  blocks.push(bullet("The commission workbook's \"Upfront payable\" column shows this split per investor. A row reading 0.00 is not an error — that investor's money set no new high."));
 
-  blocks.push(h4("Trail — paid quarterly on weekly average holding value"));
+  blocks.push(h4("Trail — paid monthly (default) or quarterly on average holding value"));
   blocks.push(mockup([
     "  weekly_value(week) = units_outstanding_at_week × unit_nav_at_week",
-    "  avg = mean( weekly_value over the quarter )",
-    "  amount = avg × ( rate_pa ÷ 4 )",
+    "  avg    = mean( weekly_value over the period )",
+    "  amount = avg × ( rate_pa ÷ periods_per_year )   // 12 monthly, 4 quarterly",
   ]));
-  blocks.push(bullet("Tier switch at exactly sourced_on + 12 months. Quarter uses Y1 if its midpoint is before, Y2+ if after."));
+  blocks.push(bullet("Cadence is set per term (Trail frequency); monthly is the default. Quarterly terms are still supported."));
+  blocks.push(bullet("Tier switch at exactly sourced_on + 12 months. A period uses Y1 if its midpoint is before, Y2+ if after."));
   blocks.push(bullet("Redeemed units stop earning trail from redemption date (clause 6.3)."));
-  blocks.push(bullet("Cron runs 03:00 UTC on the 1st of Jan/Apr/Jul/Oct, computing the just-completed quarter."));
+  blocks.push(bullet("Cron runs 03:00 UTC on the 1st of every month, computing the just-completed period; a quarterly term simply stays 'partial' until its quarter closes."));
 
-  blocks.push(h4("Clawback — recovered if investor redeems early"));
+  blocks.push(h4("Clawback — not implemented"));
+  blocks.push(p("The clawback_months and clawback_pct fields on a term are stored and editable for the agreement's paper trail, but no code writes a clawback row. Under the high-water-mark model the recovery is automatic: a redemption drops the book below its peak, suppressing future upfront until the money is replaced. That is why the model is deliberately conservative — with no clawback, underpaying can be corrected later, overpaying cannot."));
+
+  blocks.push(h3("Paying the agent — accrue, then pay"));
+  blocks.push(p("Commission reaches the ledger in two dated vouchers, because the billing date and the payment date are not the same day (bill to 30 July, transfer on 5 August):"));
   blocks.push(mockup([
-    "  applies when: redemption_date  ≤  sourced_on + clawback_months",
-    "  ratio  = redeemed_units ÷ initial_units",
-    "  amount = − upfront_paid × ratio × clawback_pct",
+    "  1. Accrue, dated the billing period end:",
+    "       Dr  Selling agent fees",
+    "         Cr  Liab-Selling Agent Commission",
+    "",
+    "  2. Pay, dated the day the transfer left the bank:",
+    "       Dr  Liab-Selling Agent Commission   (gross)",
+    "         Cr  <bank account>                (net)",
+    "         Cr  AIT & VAT Payble              (tax withheld)",
   ]));
-  blocks.push(bullet("Negative-amount CommissionRun, type = clawback — reduces what the AMC owes the agent."));
-  blocks.push(bullet("Multiple redemptions inside the window each generate their own clawback row."));
-  blocks.push(bullet("Skipped if is_direct_subscription = true."));
+  blocks.push(bullet("Set the billing cut-off at the top of the agent page first — every figure, the Excel download and both post buttons use that date."));
+  blocks.push(bullet("Both steps are idempotent: running either twice does nothing the second time."));
+  blocks.push(bullet("The expense lands in the billing period and the cash in the payment period, even across a fiscal-year boundary."));
 
   // ─────────────────────────────────────────────────────────────
   // PART 9 — UTILITIES

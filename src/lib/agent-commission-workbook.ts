@@ -402,18 +402,19 @@ function buildSummarySheet(
     },
     { header: "Units bought", key: "ub", width: 16, style: { numFmt: "#,##0.00" } },
     { header: "Units sold", key: "us", width: 16, style: { numFmt: "#,##0.00" } },
+    // Upfront is the WATERMARK's own per-(investor, fund) attribution — the
+    // same figure the UPFRONT WATERMARK block below bills, and the same one the
+    // runner posts. Two earlier columns here billed on other bases and had to
+    // go: "Per-inflow upfront (every BUY)" and "Per-spec upfront (initial
+    // only)". The latter charged for an investor whose money arrived while the
+    // book was below its peak — it replaced money that had left, so it set no
+    // new high and earns nothing.
     {
-      header: "Per-spec upfront (initial only)",
-      key: "initU",
-      width: 28,
+      header: "Upfront payable (BDT)",
+      key: "upfront",
+      width: 22,
       style: { numFmt: "#,##0.00" },
     },
-    // Trail is the only per-investor payable there is. The two columns that
-    // used to follow — "Per-inflow upfront (every BUY)" and a "Total payable"
-    // built on it — were removed: upfront is a high-water-mark on the whole
-    // book, so it has no per-investor share, and carrying one meant these rows
-    // never summed to their own TOTAL row. The book-level upfront is in the
-    // UPFRONT WATERMARK block below.
     {
       header: "Trail payable (BDT)",
       key: "trail",
@@ -421,6 +422,14 @@ function buildSummarySheet(
       style: { numFmt: "#,##0.00" },
     },
   ];
+  // Attribution by (investor, fund), zeroed when upfront is suspended so the
+  // column still sums to totals.pendingUpfront.
+  const upfrontByLeg = new Map(
+    (p.upfrontWatermark?.legs ?? []).map((l) => [
+      `${l.investorCode}|${l.fundCode}`,
+      p.upfrontEntitled ? l.attributedUpfront : 0,
+    ]),
+  );
   s.getRow(1).font = { bold: true };
   s.views = [{ state: "frozen", ySplit: 1 }];
 
@@ -437,7 +446,7 @@ function buildSummarySheet(
       net: Math.round((b.inflowTotal - b.outflowTotal) * 100) / 100,
       ub: b.unitsBought,
       us: b.unitsSold,
-      initU: b.initialUpfront,
+      upfront: upfrontByLeg.get(`${b.investorCode}|${b.fundCode}`) ?? 0,
       trail: Math.round(b.trailTotal * 100) / 100,
     });
   }
@@ -446,7 +455,7 @@ function buildSummarySheet(
     inflow: p.totals.inflow,
     outflow: p.totals.outflow,
     net: Math.round((p.totals.inflow - p.totals.outflow) * 100) / 100,
-    initU: p.totals.initialUpfront,
+    upfront: p.totals.pendingUpfront,
     trail: p.totals.trail,
   });
   totRow.font = { bold: true };
@@ -460,26 +469,30 @@ function buildSummarySheet(
     s.addRow({});
     const wmHead = s.addRow({ inv: "UPFRONT WATERMARK (whole book — every investor, all funds combined)" });
     wmHead.font = { bold: true };
-    // These rows borrow the sheet's columns for their own layout — `ub` carries
-    // pending new money and `trail` the pending upfront. Each block prints its
-    // own header row directly above, so the borrowed columns are labelled.
-    s.addRow({ inv: "Book", name: "Investors", inflow: "Net principal now", net: peakLabel, initU: "Rate", ub: "Pending new money", trail: "Pending upfront" });
+    // These rows borrow the sheet's columns for their own layout: `ub` carries
+    // new money, `us` the rate, and upfront amounts land in the `upfront`
+    // column itself — so the per-leg figures below sit directly under the same
+    // per-investor column they populate above, and the two must agree. Each
+    // block prints its own header row, so the borrowed columns are labelled.
+    s.addRow({ inv: "Book", name: "Investors", inflow: "Net principal now", net: peakLabel, us: "Rate", ub: "Pending new money", upfront: "Pending upfront" });
     const wmRow = s.addRow({
       inv: p.agentCode,
       name: new Set(wm.legs.map((l) => l.investorCode)).size,
       inflow: Math.round(wm.currentNetPrincipal * 100) / 100,
       net: Math.round(Math.max(wm.storedWatermark, wm.peak) * 100) / 100,
-      initU: wm.mixedRate ? `${(wm.blendedPct * 100).toFixed(4)}% blended` : `${(wm.blendedPct * 100).toFixed(4)}%`,
+      us: wm.mixedRate ? `${(wm.blendedPct * 100).toFixed(4)}% blended` : `${(wm.blendedPct * 100).toFixed(4)}%`,
       ub: Math.round(wm.pendingIncrement * 100) / 100,
-      trail: Math.round(p.totals.pendingUpfront * 100) / 100,
+      upfront: Math.round(p.totals.pendingUpfront * 100) / 100,
     });
     wmRow.font = { bold: true };
 
     // Attribution — the audit trail for which investor and fund earned what.
+    // This is the SAME number the per-investor rows above carry; it is repeated
+    // here with the new money and rate that produced it.
     s.addRow({});
     const legHead = s.addRow({ inv: "UPFRONT WATERMARK — by investor × fund" });
     legHead.font = { bold: true };
-    s.addRow({ inv: "Investor", name: "Fund", cat: "Category", inflow: "Net principal", ub: "New money", initU: "Rate", trail: "Upfront" });
+    s.addRow({ inv: "Investor", name: "Fund", cat: "Category", inflow: "Net principal", ub: "New money", us: "Rate", upfront: "Upfront" });
     for (const leg of wm.legs) {
       s.addRow({
         inv: leg.investorName ? `${leg.investorCode} ${leg.investorName}` : leg.investorCode,
@@ -487,8 +500,8 @@ function buildSummarySheet(
         cat: leg.category,
         inflow: Math.round(leg.netPrincipal * 100) / 100,
         ub: Math.round(leg.attributedIncrement * 100) / 100,
-        initU: `${(leg.upfrontPct * 100).toFixed(4)}%`,
-        trail: Math.round(leg.attributedUpfront * 100) / 100,
+        us: `${(leg.upfrontPct * 100).toFixed(4)}%`,
+        upfront: Math.round(leg.attributedUpfront * 100) / 100,
       });
     }
   }
@@ -500,7 +513,10 @@ function buildSummarySheet(
           [`Status: ${p.agentStatus}`],
           [`As-of date: ${p.asOf.toISOString().slice(0, 10)}`],
           [
-            `Rate rule: LATEST effective term per category applied to ALL transactions (older term rows treated as superseded).`,
+            `Rate rule — TRAIL: latest effective term per category applied to all periods (older term rows treated as superseded).`,
+          ],
+          [
+            `Rate rule — UPFRONT: the term in force ON the as-of date above. This is the same resolver the posting run uses, so the rate quoted here is the rate that gets posted.`,
           ],
           [`Upfront commission: per-agent BOOK HIGH-WATER-MARK — every investor sourced, all funds, one series (see the Upfront Watermark block below).`],
           [
@@ -513,10 +529,10 @@ function buildSummarySheet(
             `  • CIP dividend reinvestment is EXCLUDED — a reinvested dividend is not new money and does not lift the watermark.`,
           ],
           [
-            `  • upfront = max(0, new peak − stored watermark) × the upfront % of the fund that received the money setting the new high; a split increment is pro-rated across funds at each fund's own rate. The "Per-spec upfront (initial only)" column is a legacy reference, not payable.`,
+            `  • upfront = max(0, new peak − stored watermark) × the upfront % of the fund that received the money setting the new high; a split increment is pro-rated across funds at each fund's own rate.`,
           ],
           [
-            `Summary sheet: the per-investor rows are TRAIL ONLY and sum to their own TOTAL. Upfront has no per-investor share — see the UPFRONT WATERMARK block. Total payable = pending upfront + trail.`,
+            `Summary sheet: "Upfront payable" is the watermark's own per-investor × fund attribution — identical to the UPFRONT WATERMARK block below, and to what the run posts. A row reads 0.00 where that investor's money replaced money that had left, setting no new high. Rows sum to their TOTAL; total payable = upfront + trail.`,
           ],
           [
             `Trail commission: computed from public.nav_records (daily NAV snapshots per fund). Per period (monthly or quarterly, per the term's Trail frequency):`,
@@ -534,6 +550,7 @@ function buildSummarySheet(
           [`Upfront: paid on new money only — on the amount by which the total principal you have brought in rises above its previous peak, counting every investor and all three funds together.`],
           [`  • Redemptions do not lower that peak. Moving money between funds, or between two of your own investors, is not new money — so the same money never earns upfront twice.`],
           [`  • Dividends reinvested under CIP are not counted as new money. The rate applied is that of the fund the new money went into.`],
+          [`  • Summary sheet, "Upfront payable": your upfront split across the investors and funds that actually pushed the book above its previous peak. A row reads 0.00 where that money replaced money that had left — it set no new high, so no upfront is due on it. The same figures appear in the UPFRONT WATERMARK block, movement by movement.`],
           [`Trail: accrues each period on the average value of units held, at the rate per annum for the applicable year band, and is paid after the period closes.`],
           [`  • Rows marked partial are still accruing and have not been posted.`],
           [`This is an as-of-today estimate for your information, not a statement of account. The amount payable is confirmed when the office posts the run.`],

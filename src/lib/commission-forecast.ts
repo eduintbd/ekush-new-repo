@@ -2,7 +2,8 @@
 //
 // Given an investment amount, a tenor, a fund's CAGR and the agent's rates,
 // project the commission the agent would earn:
-//   - upfront: one-time, on the amount put in
+//   - upfront: one-time, and ONLY on the part of the amount that lifts the
+//              agent's book above its previous peak (see `bookShortfall`)
 //   - trail:   every month, on the MARKET VALUE (which grows at the fund's
 //              CAGR), at the Year-1 rate for the first 12 months and the
 //              Year-2+ rate after that
@@ -20,6 +21,12 @@ export interface ForecastInput {
   upfrontRate: number;
   trailY1Rate: number;
   trailY2Rate: number;
+  /**
+   * How far the agent's book currently sits below its all-time peak. New money
+   * only earns upfront above that line — below it, it is replacing money that
+   * has already left and no new high is set. Defaults to 0 (book at its peak).
+   */
+  bookShortfall?: number;
 }
 
 export interface ForecastPoint {
@@ -34,6 +41,10 @@ export interface ForecastPoint {
 
 export interface ForecastResult {
   upfront: number;
+  /** The shortfall that was applied — echoed back so the UI can explain a zero. */
+  bookShortfall: number;
+  /** The part of `amount` that actually earned upfront. */
+  upfrontEligibleAmount: number;
   totalTrail: number;
   totalCommission: number;
   /** Fund value at the end of the tenor. */
@@ -50,7 +61,13 @@ export function forecastCommission(input: ForecastInput): ForecastResult {
   // Monthly growth that compounds to the annual CAGR.
   const monthlyGrowth = Math.pow(1 + cagrPct / 100, 1 / 12) - 1;
 
-  const upfront = round2(amount * upfrontRate);
+  // Upfront is paid on new money only — the amount by which the agent's whole
+  // book rises above its previous peak. Money that merely refills a shortfall
+  // left by earlier redemptions sets no new high and earns nothing, so it is
+  // subtracted before the rate is applied.
+  const bookShortfall = Math.max(0, input.bookShortfall ?? 0);
+  const upfrontEligibleAmount = round2(Math.max(0, amount - bookShortfall));
+  const upfront = round2(upfrontEligibleAmount * upfrontRate);
 
   const series: ForecastPoint[] = [
     { month: 0, value: round2(amount), monthlyTrail: 0, cumulativeCommission: upfront },
@@ -79,6 +96,8 @@ export function forecastCommission(input: ForecastInput): ForecastResult {
 
   return {
     upfront,
+    bookShortfall: round2(bookShortfall),
+    upfrontEligibleAmount,
     totalTrail: round2(totalTrail),
     totalCommission: round2(upfront + totalTrail),
     projectedValue,

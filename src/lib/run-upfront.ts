@@ -19,14 +19,14 @@
 // nothing and the index would go dormant again.
 
 import { prisma, withActor } from "@/lib/prisma";
-import { categoryForFund, type FundCode } from "@/lib/ekush-web/types";
 import {
   fetchAgentInvestorTxns,
   flattenToAgentSeries,
   computeCombinedWatermarkUpfront,
   isUpfrontEntitled,
-  type RateResolver,
+  makeRateResolver,
   type FetchWarning,
+  type TermLite,
 } from "@/lib/upfront-watermark";
 
 export type UpfrontBlocked = {
@@ -54,29 +54,11 @@ export type UpfrontRunResult = {
   notApproved: string[];
 };
 
-type TermLite = {
-  fundCategory: "equity" | "fixed_income";
-  upfrontPct: number;
-  effectiveFrom: Date;
-  effectiveTo: Date | null;
-};
-
-/** Upfront rate from the term active for this fund's category at `asOf`. */
-function makeRateResolver(terms: TermLite[], asOf: Date): RateResolver {
-  return (fundCode: string) => {
-    const category = categoryForFund(fundCode as FundCode);
-    const active = terms
-      .filter(
-        (t) =>
-          t.fundCategory === category &&
-          t.effectiveFrom <= asOf &&
-          (t.effectiveTo === null || t.effectiveTo > asOf),
-      )
-      .sort((a, b) => +b.effectiveFrom - +a.effectiveFrom);
-    const t = active[0];
-    return t ? { rate: t.upfrontPct, category } : null;
-  };
-}
+// `makeRateResolver` lives in upfront-watermark.ts so the preview and the agent
+// calculator resolve the rate exactly the way this runner does. It used to be
+// private here, and the preview had its own "latest term, applied
+// retroactively" copy — a divergence waiting for the first term with a future
+// start date.
 
 export async function runUpfront(
   periodStart: Date,

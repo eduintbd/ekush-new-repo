@@ -11,6 +11,7 @@ import { getAgentScope } from "@/lib/agent-scope";
 import { prisma } from "@/lib/prisma";
 import { getFundsWithCagr } from "@/lib/portal-funds";
 import { categoryForFund, type FundCode } from "@/lib/ekush-web/types";
+import { getAgentBookShortfall, makeRateResolver } from "@/lib/upfront-watermark";
 import CalculatorClient, { type CalcFund } from "./CalculatorClient";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +27,19 @@ export default async function AgentCalculatorPage() {
       })
     : [];
   const today = new Date();
-  const rateFor = (category: "equity" | "fixed_income") => {
+
+  // The upfront rate comes from the same resolver the posting run uses, so the
+  // calculator cannot quote a rate the office would not pay.
+  const upfrontResolver = makeRateResolver(
+    terms.map((t) => ({
+      fundCategory: t.fundCategory,
+      upfrontPct: Number(t.upfrontPct),
+      effectiveFrom: t.effectiveFrom,
+      effectiveTo: t.effectiveTo,
+    })),
+    today,
+  );
+  const trailFor = (category: "equity" | "fixed_income") => {
     const t = terms.find(
       (x) =>
         x.fundCategory === category &&
@@ -34,16 +47,22 @@ export default async function AgentCalculatorPage() {
         (x.effectiveTo === null || x.effectiveTo > today),
     );
     return {
-      upfront: t ? Number(t.upfrontPct) : 0,
       trailY1: t ? Number(t.trailY1PctPa) : 0,
       trailY2: t ? Number(t.trailY2PlusPctPa) : 0,
     };
   };
 
+  // How far this agent's book sits below its peak. New money only earns upfront
+  // above that line; without this the calculator promises upfront on money that
+  // is merely replacing earlier redemptions.
+  const shortfall = scope.agentId
+    ? await getAgentBookShortfall(prisma, scope.agentId, today).catch(() => null)
+    : null;
+
   const funds = await getFundsWithCagr().catch(() => []);
   const calcFunds: CalcFund[] = funds.map((f) => {
     const category = categoryForFund(f.code as FundCode);
-    const r = rateFor(category);
+    const r = trailFor(category);
     return {
       code: f.code,
       name: f.name,
@@ -51,7 +70,7 @@ export default async function AgentCalculatorPage() {
       cagr: f.cagr,
       cagrYears: f.cagrYears,
       currentNav: f.currentNav,
-      upfrontRate: r.upfront,
+      upfrontRate: upfrontResolver(f.code)?.rate ?? 0,
       trailY1Rate: r.trailY1,
       trailY2Rate: r.trailY2,
     };
@@ -76,7 +95,7 @@ export default async function AgentCalculatorPage() {
             Fund data isn&apos;t available right now. Try again shortly.
           </p>
         ) : (
-          <CalculatorClient funds={calcFunds} />
+          <CalculatorClient funds={calcFunds} bookShortfall={shortfall?.shortfall ?? 0} />
         )}
       </div>
     </main>

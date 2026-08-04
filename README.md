@@ -4,7 +4,7 @@ Back-office accounting + selling-agent commission portal for **Ekush Wealth Mana
 
 Replaces `F.S March 2026.xlsx` as the day-to-day book of account. Accountants enter journals through a UI; the system auto-derives Trial Balance, Income Statement, Balance Sheet, Statement of Changes in Equity, Notes, and Annexures. Year-end exports a `.xlsx` that mirrors the original workbook so auditors cannot tell it was DB-generated.
 
-A separate selling-agent portal computes upfront, quarterly trail, and clawback commissions per the Selling Agent Agreement.
+A separate selling-agent portal computes commission per the Selling Agent Agreement: upfront on a per-agent book high-water-mark (new money only), and monthly or quarterly trail. It accrues each billing period to the ledger and records the bank transfer that settles it.
 
 > Standalone repo. **Not** linked to `eduintbd/ekush` or its Vercel projects. Investor data for the agent portal is mocked against the future Ekush Web API contract until the integration is wired in a later phase.
 
@@ -15,7 +15,7 @@ A separate selling-agent portal computes upfront, quarterly trail, and clawback 
 - Prisma 5 + Postgres
 - Supabase Auth (staff `/login` + selling agents `/agent/login`)
 - exceljs for the year-end workbook export
-- Vercel Cron for the daily accrual + quarterly trail jobs
+- Vercel Cron for the daily accrual, monthly upfront and monthly trail jobs
 
 ## Getting started
 
@@ -64,7 +64,7 @@ docs/
 | 8a. /changes-in-equity UI | done (paid-up capital / fair-value reserve / retained-earnings rollforward; reconciles against BS equity total) |
 | 9. Agent admin (`/admin/agents`) | done (list, invite, detail, approve/suspend/reinstate, terms history) |
 | 10. Ekush Web investor API mock | done (deterministic mock; SB0001 = canonical demo cohort) |
-| 11. Agent portal + commission engine | done (engine: upfront/trail/clawback per spec §8; agent UI; quarterly cron) |
+| 11. Agent portal + commission engine | done (upfront = per-agent book high-water-mark, `src/lib/upfront-watermark.ts`; trail monthly by default, `src/lib/post-trail.ts`; no clawback — a redemption suppresses future upfront instead; agent UI; monthly crons; accrue→pay to the GL via `src/lib/commission-payout.ts`) |
 | 12. MFA, backups, log drains | done (TOTP MFA + recovery codes; `/api/health` for monitoring; three Vercel-scheduled crons — tb-check / daily-accrual / quarterly-trail — wired in `vercel.json`; backups + log-drain procedures documented in `OPERATIONS.md`) |
 
 See `docs/X_System_Claude_Code_Prompt.docx` for the full brief; do not paraphrase — replicate the workbook line-by-line.
