@@ -69,8 +69,13 @@ export default async function AgentDetailPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<Search>;
 }) {
-  const me = await requireRole(["admin", "checker"]);
+  // Accountant can view and can post commission runs; everything else on this
+  // page (approve/suspend/delete, terms, investor links) stays admin/checker
+  // and is gated per-action in actions.ts.
+  const me = await requireRole(["admin", "checker", "accountant"]);
   const isAdmin = me.role === UserRole.admin;
+  /** Posting a commission run creates the obligation — accountant only. */
+  const canPost = me.role === UserRole.accountant;
   const { id } = await params;
   const sp = await searchParams;
 
@@ -601,7 +606,12 @@ export default async function AgentDetailPage({
 
         <MethodologyPanel />
 
-        <CommissionPreviewPanel agentId={agent.id} preview={preview} asOfParam={sp.asOf ?? ""} />
+        <CommissionPreviewPanel
+          agentId={agent.id}
+          preview={preview}
+          asOfParam={sp.asOf ?? ""}
+          canPost={canPost}
+        />
 
         <CommissionPayoutPanel
           agentId={agent.id}
@@ -919,7 +929,7 @@ function MethodologyPanel() {
             "The watermark ratchets up only; redemptions/NAV moves never reduce it and never earn upfront — only net-new principal above the prior peak does.",
             "Skipped if `is_direct_subscription = true` (clause 6.5 — no agent commission on direct subscriptions).",
             "A blocking data warning, or a fund with no active term, now blocks the WHOLE agent rather than one investor — the book is a single series, so dropping one investor's rows would stop their SELLs cancelling and overstate everyone else.",
-            "Evaluated monthly by `/api/cron/monthly-upfront` (1st of month); admin can post early with 'Post upfront now'. Posted as one CommissionRun per driving investor × fund (type=upfront, fund_code = the fund whose rate applied, agent_investor_id set).",
+            "WHO POSTS: the accountant, and only the accountant. `/api/cron/monthly-upfront` evaluates on the 1st and REPORTS what is due — it does not write. The accountant sets the billing cut-off above and clicks 'Post upfront now', which attributes the rows to them in the audit log. Posted as one CommissionRun per driving investor × fund (type=upfront, fund_code = the fund whose rate applied, agent_investor_id set).",
             "Changed 2026-08 from a per-(agent, investor) watermark, which was itself a 2026-07 change from per-(agent, fund). Posted upfront exists under the previous model and was restated by scripts/restate-global-watermark.ts.",
           ]}
         />
@@ -938,11 +948,11 @@ function MethodologyPanel() {
             "Trail = 1,200,000 × 0.000333 ≈ BDT 400 (≈ BDT 1,200 over the quarter, same as the quarterly cadence)."
           }
           notes={[
-            "Cadence per term via Trail frequency (monthly default / quarterly). The two crons never double-pay: each pays only the terms set to its cadence.",
+            "Cadence per term via Trail frequency (monthly default / quarterly). One monthly evaluation serves both: a quarterly term stays 'partial' until its quarter closes, so it cannot be paid twice.",
             "Rate tier switches at exactly `sourced_on + 12 months`. Periods straddling the boundary use Y1 if the midpoint is before, Y2+ if after.",
             "Redeemed units stop earning trail from the redemption date (clause 6.3) — `units_at_week` re-computes per week.",
             "Monthly = strict calendar month; quarterly = strict 3-calendar-month window (Jul-Sep, Oct-Dec, Jan-Mar, Apr-Jun).",
-            "Cron `/api/cron/monthly-trail` runs 03:00 UTC on the 1st of every month; `/api/cron/quarterly-trail` on the 1st of Jan/Apr/Jul/Oct — each computes the just-completed period.",
+            "WHO POSTS: the accountant. `/api/cron/monthly-trail` runs 03:00 UTC on the 1st and REPORTS every completed, unposted period — it does not write. Nothing is lost if a month is missed; the next report still shows it.",
             "If no weekly NAV snapshots exist for the fund in the period, the run is skipped (cannot compute average).",
             "When switching a term's cadence, change it at a period boundary — a mid-quarter switch can pay both the quarter and its months.",
           ]}
@@ -1018,11 +1028,15 @@ function CommissionPreviewPanel({
   agentId,
   preview,
   asOfParam,
+  canPost,
 }: {
   agentId: string;
   preview: Awaited<ReturnType<typeof computeAgentCommissionPreview>> | null;
   /** Raw ?asOf= as typed in the URL — "" when the page is on "today". */
   asOfParam: string;
+  /** Viewer is the accountant. The server action refuses anyone else anyway;
+   *  hiding the buttons stops the rest of the office trying. */
+  canPost: boolean;
 }) {
   if (!preview) {
     return (
@@ -1143,6 +1157,7 @@ function CommissionPreviewPanel({
         >
           Download Excel workbook
         </a>
+        {canPost && (
         <form
           action={postAgentUpfront}
           data-confirm={`Post the watermark upfront as of ${today} (${formatBdt(preview.totals.pendingUpfront)} pending)? Idempotent — re-clicking with no new money posts nothing.`}
@@ -1157,9 +1172,11 @@ function CommissionPreviewPanel({
             Post upfront now
           </button>
         </form>
+        )}
+        {canPost && (
         <form
           action={postAgentCommissions}
-          data-confirm={`Post ${countPostable(preview)} trail row(s) to CommissionRun as of ${today}? Idempotent — duplicates are skipped. Partial periods (cut off at ${today}) are not posted; the cron picks them up at period close.`}
+          data-confirm={`Post ${countPostable(preview)} trail row(s) to CommissionRun as of ${today}? Idempotent — duplicates are skipped. Partial periods (cut off at ${today}) are not posted; post again once they close.`}
         >
           <input type="hidden" name="agentId" value={agentId} />
           <input type="hidden" name="asOf" value={asOfParam} />
@@ -1170,10 +1187,17 @@ function CommissionPreviewPanel({
             Post trail to CommissionRun
           </button>
         </form>
+        )}
+        {!canPost && (
+          <span className="rounded-md border border-zinc-300 px-3 py-1.5 text-[11px] text-zinc-500 dark:border-zinc-700">
+            Posting commission runs is the accountant&apos;s to do — the figures above are
+            read-only for you.
+          </span>
+        )}
         {partialCount > 0 && (
           <span className="text-[11px] text-zinc-500">
-            {partialCount} partial quarter row(s) shown but not posted yet (cron picks up at
-            close).
+            {partialCount} partial period row(s) shown but not posted yet — post again once
+            they close.
           </span>
         )}
           </>

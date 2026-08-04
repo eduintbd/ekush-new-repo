@@ -979,7 +979,14 @@ function buildDoc(): Document {
   blocks.push(bullet("Cadence is set per term (Trail frequency); monthly is the default. Quarterly terms are still supported."));
   blocks.push(bullet("Tier switch at exactly sourced_on + 12 months. A period uses Y1 if its midpoint is before, Y2+ if after."));
   blocks.push(bullet("Redeemed units stop earning trail from redemption date (clause 6.3)."));
-  blocks.push(bullet("Cron runs 03:00 UTC on the 1st of every month, computing the just-completed period; a quarterly term simply stays 'partial' until its quarter closes."));
+  blocks.push(bullet("A cron runs 03:00 UTC on the 1st of every month and REPORTS what is due; a quarterly term simply stays 'partial' until its quarter closes."));
+
+  blocks.push(h4("Who posts — you do"));
+  blocks.push(p("Posting a commission run is what creates the obligation to pay an agent, so it is yours alone. Neither the crons nor an admin can do it: the crons compute and report but never write, and the two Post buttons are visible only to the accountant role. Every row you post is stamped with your user id in the audit log."));
+  blocks.push(bullet("Set the billing cut-off at the top of the agent page FIRST — every figure, the Excel download and both Post buttons use that date."));
+  blocks.push(bullet("Post upfront now — writes the watermark upfront for the period."));
+  blocks.push(bullet("Post trail to CommissionRun — writes every completed, unposted period."));
+  blocks.push(bullet("Both are idempotent: clicking twice posts nothing the second time. If you miss a month, the next month's report still shows it and you can post it then."));
 
   blocks.push(h4("Clawback — not implemented"));
   blocks.push(p("The clawback_months and clawback_pct fields on a term are stored and editable for the agreement's paper trail, but no code writes a clawback row. Under the high-water-mark model the recovery is automatic: a redemption drops the book below its peak, suppressing future upfront until the money is replaced. That is why the model is deliberately conservative — with no clawback, underpaying can be corrected later, overpaying cannot."));

@@ -512,17 +512,22 @@ export async function unlinkInvestor(formData: FormData): Promise<void> {
 /**
  * Post the previewed trail lines to xsystem.commission_runs.
  *
- * Thin wrapper over `postTrailFromPreview` — the SAME function the monthly
- * cron runs, so clicking this button and letting the cron fire produce
- * identical rows. Posts every completed period (skipping partials, which the
- * next run picks up once they close) and is idempotent via the
+ * Thin wrapper over `postTrailFromPreview` — the same function the monthly cron
+ * evaluates with, so what the accountant posts matches what the cron reported.
+ * Posts every completed period (skipping partials, which the next run picks up
+ * once they close) and is idempotent via the
  * (agent_investor_id, type, period_start, period_end) unique index.
  *
- * Upfront is not posted here — that's the per-(agent,investor) watermark model,
- * posted by the monthly cron or "Post upfront now" (postAgentUpfront).
+ * Upfront is not posted here — that is the watermark model, posted by
+ * "Post upfront now" (postAgentUpfront).
+ *
+ * ACCOUNTANT ONLY. Posting a commission run is the act that creates the
+ * obligation, so it belongs to one role and is attributed to one person. Every
+ * run in the system before this was written by an unattended cron with a NULL
+ * actor; the crons now compute and report but never write.
  */
 export async function postAgentCommissions(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin", "checker"]);
+  const me = await requireRole(["accountant"]);
   const agentId = String(formData.get("agentId") ?? "").trim();
   if (!agentId) return;
 
@@ -573,7 +578,8 @@ export async function postAgentCommissions(formData: FormData): Promise<void> {
  * with no new money posts nothing).
  */
 export async function postAgentUpfront(formData: FormData): Promise<void> {
-  const me = await requireRole(["admin", "checker"]);
+  // ACCOUNTANT ONLY — see postAgentCommissions.
+  const me = await requireRole(["accountant"]);
   const agentId = String(formData.get("agentId") ?? "").trim();
   if (!agentId) return;
 
@@ -584,7 +590,7 @@ export async function postAgentUpfront(formData: FormData): Promise<void> {
   const cut = parseAsOf(asOfRaw);
   const through = new Date(Date.UTC(cut.getUTCFullYear(), cut.getUTCMonth(), cut.getUTCDate()));
   const monthStart = new Date(Date.UTC(cut.getUTCFullYear(), cut.getUTCMonth(), 1));
-  const res = await runUpfront(monthStart, through, through, { agentId });
+  const res = await runUpfront(monthStart, through, through, { agentId, actorId: me.id });
 
   revalidatePath(`/admin/agents/${agentId}`);
   // "Nothing to post" is only true if the agent was actually evaluated. It used

@@ -64,7 +64,17 @@ export async function runUpfront(
   periodStart: Date,
   periodEnd: Date,
   throughDate: Date = periodEnd,
-  opts: { agentId?: string; dryRun?: boolean } = {},
+  opts: {
+    agentId?: string;
+    dryRun?: boolean;
+    /**
+     * Who is posting, recorded on every audit_log row this run writes. The
+     * accountant's id when posted from the agent page; null only for an
+     * unattended run. This used to be hardcoded null, so every upfront row
+     * ever written was unattributable — 299 of them.
+     */
+    actorId?: string | null;
+  } = {},
 ): Promise<UpfrontRunResult> {
   const dryRun = opts.dryRun === true;
   const agents = await prisma.sellingAgent.findMany({
@@ -192,7 +202,7 @@ export async function runUpfront(
       continue;
     }
 
-    await withActor(null, async (tx) => {
+    await withActor(opts.actorId ?? null, async (tx) => {
       for (const slice of res.slices) {
         if (slice.upfront <= 0) continue;
         // The slice carries its own investor, so the link still resolves even

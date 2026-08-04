@@ -15,7 +15,7 @@ A separate selling-agent portal computes commission per the Selling Agent Agreem
 - Prisma 5 + Postgres
 - Supabase Auth (staff `/login` + selling agents `/agent/login`)
 - exceljs for the year-end workbook export
-- Vercel Cron for the daily accrual, monthly upfront and monthly trail jobs
+- Vercel Cron for the daily accrual, plus monthly upfront/trail jobs that report what is due (the accountant posts it)
 
 ## Getting started
 
@@ -64,7 +64,7 @@ docs/
 | 8a. /changes-in-equity UI | done (paid-up capital / fair-value reserve / retained-earnings rollforward; reconciles against BS equity total) |
 | 9. Agent admin (`/admin/agents`) | done (list, invite, detail, approve/suspend/reinstate, terms history) |
 | 10. Ekush Web investor API mock | done (deterministic mock; SB0001 = canonical demo cohort) |
-| 11. Agent portal + commission engine | done (upfront = per-agent book high-water-mark, `src/lib/upfront-watermark.ts`; trail monthly by default, `src/lib/post-trail.ts`; no clawback — a redemption suppresses future upfront instead; agent UI; monthly crons; accrue→pay to the GL via `src/lib/commission-payout.ts`) |
+| 11. Agent portal + commission engine | done (upfront = per-agent book high-water-mark, `src/lib/upfront-watermark.ts`; trail monthly by default, `src/lib/post-trail.ts`; no clawback — a redemption suppresses future upfront instead; agent UI; monthly crons **report only, never write**; the accountant alone posts runs, then accrues → pays to the GL via `src/lib/commission-payout.ts`) |
 | 12. MFA, backups, log drains | done (TOTP MFA + recovery codes; `/api/health` for monitoring; three Vercel-scheduled crons — tb-check / daily-accrual / quarterly-trail — wired in `vercel.json`; backups + log-drain procedures documented in `OPERATIONS.md`) |
 
 See `docs/X_System_Claude_Code_Prompt.docx` for the full brief; do not paraphrase — replicate the workbook line-by-line.

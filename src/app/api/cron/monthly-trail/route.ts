@@ -1,25 +1,28 @@
 // GET / POST /api/cron/monthly-trail
 //
-// Posts trail CommissionRun rows for every approved agent, from the SAME
-// preview engine behind /agent/earnings and /admin/agents/[id] — so what this
-// writes is what the agent already saw on screen.
+// REPORTS ONLY — THIS CRON NEVER WRITES.
 //
-// It posts EVERY completed period, not just last month's. That is deliberate:
-//   - the preview marks the in-flight period `partial` and this skips it, so a
-//     quarterly-cadence term is simply left alone until its quarter closes —
-//     one monthly job correctly serves both cadences (quarterly-trail is now a
-//     no-op);
-//   - a missed, failed or unauthorised run self-heals on the next fire instead
-//     of losing that period forever;
-//   - re-posting is free — the (agent_investor_id, type, period_start,
-//     period_end) unique index absorbs anything already written.
+// Computes trail for every approved agent from the SAME preview engine behind
+// /agent/earnings and /admin/agents/[id], and reports what is due. Posting is
+// the accountant's act: they set the billing cut-off on /admin/agents/[id] and
+// click "Post trail to CommissionRun", which attributes the rows to them.
 //
-// No period parameters: both callers let the preview default to `now`, which
-// is what keeps cron output identical to the admin button.
+// It used to post, and on 2026-08-01 at 03:01 UTC it wrote 189 rows
+// (BDT 3,078.93) unattended with a NULL actor. `dryRun` is now hardcoded true
+// rather than read from `?dryRun=1`, so the writing path cannot be reached by
+// changing a query string.
+//
+// It still evaluates EVERY completed period, not just last month's, which is
+// what makes the report self-healing: a month nobody acted on still shows up
+// in the next report rather than disappearing. The preview marks the in-flight
+// period `partial` and it is skipped, so one monthly job serves both the
+// monthly and quarterly cadences.
+//
+// The schedule stays so an unbilled month is visible in the log drain as
+// `commission.trail.preview` with a non-zero figure.
 //
 // Auth: `Authorization: Bearer $CRON_SECRET` (Vercel Cron) or
 // `x-cron-secret: $CRON_SECRET` (manual / external scheduler).
-// Add `?dryRun=1` to compute and report without writing.
 //
 // Schedule: 03:00 UTC on the 1st of every month via vercel.json.
 
@@ -36,13 +39,15 @@ async function handle(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const dryRun = new URL(req.url).searchParams.get("dryRun") === "1";
-  const result = await postTrailFromPreview({ actorId: null, dryRun });
+  // Hardcoded, not from `?dryRun=`. No request can make this job write.
+  const result = await postTrailFromPreview({ actorId: null, dryRun: true });
 
   console.log(
     JSON.stringify({
-      event: "commission.trail.post",
+      event: "commission.trail.preview",
       source: "cron/monthly-trail",
+      posted: false,
+      note: "reported only — the accountant posts from /admin/agents/[id]",
       ...result,
       at: new Date().toISOString(),
     }),

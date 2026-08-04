@@ -1,12 +1,21 @@
 // GET / POST /api/cron/monthly-upfront
-// Evaluates the per-(agent, INVESTOR) combined-fund upfront high-water-mark for
-// the just-completed month and posts upfront CommissionRun rows on any new-
-// money increment above each investor's watermark. Idempotent via the watermark
-// itself (re-running a period yields increment 0) and now also via the
-// (agent_investor_id, type, period_start, period_end) unique index.
 //
-// GATED: this cron will not post until UPFRONT_POSTING_ENABLED=true — see the
-// safety gate in handle(). "Post upfront now" in the admin UI is not gated.
+// REPORTS ONLY — THIS CRON NEVER WRITES.
+//
+// Evaluates the per-agent BOOK upfront high-water-mark for the just-completed
+// month and reports what is due. It does not post. Posting a commission run
+// creates an obligation, and that is the accountant's act alone: they set the
+// billing cut-off on /admin/agents/[id] and click "Post upfront now", which
+// attributes the rows to them in the audit log.
+//
+// It used to post, behind an UPFRONT_POSTING_ENABLED env gate that was set to
+// true in production. On 2026-08-01 at 04:00 UTC it wrote the first five real
+// upfront rows unattended, with a NULL actor — nobody chose to pay that money.
+// The gate is gone; `dryRun` is now unconditional, so there is no env var that
+// can turn writing back on by accident.
+//
+// The schedule stays so a month that should have been billed still shows up in
+// the log drain as `commission.upfront.preview` with a non-zero figure.
 //
 // Auth: `Authorization: Bearer $CRON_SECRET` (Vercel Cron) or
 // `x-cron-secret: $CRON_SECRET` (manual / external scheduler).
@@ -15,7 +24,7 @@
 //   - GET with no params → just-completed calendar month (Vercel Cron, 1st).
 //   - POST `{ monthStart, monthEnd }` body or GET query params → explicit.
 //
-// Schedule: 03:00 UTC on the 1st of every month via vercel.json.
+// Schedule: 04:00 UTC on the 1st of every month via vercel.json.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { runUpfront } from "@/lib/run-upfront";
@@ -63,33 +72,21 @@ async function handle(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // SAFETY GATE. No upfront has ever been posted (commission_runs is empty),
-  // and the watermark model is mid-change from per-fund to per-investor. An
-  // unattended 1st-of-month run would post the first-ever real upfront —
-  // against the OLD model — with nobody having reviewed a screen.
-  //
-  // The gate is on the CRON only. "Post upfront now" in the admin UI stays
-  // available, because that is a deliberate human action against a preview
-  // they are looking at; this is about the 03:00 UTC job nobody is watching.
-  //
-  // Set UPFRONT_POSTING_ENABLED=true once the combined-watermark model is
-  // signed off and the baseline has been seeded.
-  if (process.env.UPFRONT_POSTING_ENABLED !== "true") {
-    const msg =
-      "Upfront posting is gated: set UPFRONT_POSTING_ENABLED=true once the combined-watermark model is signed off and seeded. Nothing was posted.";
-    console.warn(JSON.stringify({ event: "commission.upfront.gated", at: new Date().toISOString() }));
-    return NextResponse.json({ gated: true, created: 0, evaluated: 0, note: msg });
-  }
-
   const { mStart, mEnd, monthStart, monthEnd } = await resolveMonth(req);
-  const dryRun = new URL(req.url).searchParams.get("dryRun") === "1";
 
-  const result = await runUpfront(mStart, mEnd, mEnd, { dryRun });
+  // `dryRun: true` is hardcoded, not read from a query param or an env var.
+  // The whole point is that no configuration change can make this job write —
+  // the previous env gate was flipped on and posted BDT 2,494.96 unattended.
+  // runUpfront computes everything either way and reports `created` /
+  // `totalUpfront` as what WOULD post, so the figure below is unchanged.
+  const result = await runUpfront(mStart, mEnd, mEnd, { dryRun: true, actorId: null });
 
   console.log(
     JSON.stringify({
-      event: "commission.run",
+      event: "commission.upfront.preview",
       type: "monthly-upfront",
+      posted: false,
+      note: "reported only — the accountant posts from /admin/agents/[id]",
       monthStart,
       monthEnd,
       ...result,

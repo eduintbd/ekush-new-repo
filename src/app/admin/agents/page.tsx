@@ -13,7 +13,9 @@ export default async function AdminAgentsPage({
 }: {
   searchParams: Promise<{ ok?: string; error?: string }>;
 }) {
-  const me = await requireRole(["admin", "checker"]);
+  // Accountant reads this list to reach an agent's commission panel — posting
+  // commission runs is theirs alone. Agent management stays admin/checker.
+  const me = await requireRole(["admin", "checker", "accountant"]);
   const isAdmin = me.role === UserRole.admin;
   const sp = await searchParams;
 

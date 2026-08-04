@@ -15,7 +15,8 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
-  await requireRole(["admin", "checker"]);
+  // Accountant needs the workbook to check a period before posting it.
+  await requireRole(["admin", "checker", "accountant"]);
   const { id } = await params;
 
   // ?asOf=YYYY-MM-DD mirrors the billing cut-off on /admin/agents/[id]. The
