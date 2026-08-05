@@ -5,6 +5,8 @@
 
 import ExcelJS from "exceljs";
 import type { PreviewResult, Term } from "@/lib/agent-commission-preview";
+import type { AgentPaymentRow } from "@/lib/commission-payout";
+import { isBlockingWarning } from "@/lib/upfront-watermark";
 
 /**
  * Who the file is for. The agent variant drops internal detail: the Terms
@@ -16,9 +18,10 @@ export type CommissionAudience = "admin" | "agent";
 
 export async function buildAgentCommissionWorkbook(
   preview: PreviewResult,
-  opts: { audience?: CommissionAudience } = {},
+  opts: { audience?: CommissionAudience; payments?: AgentPaymentRow[] } = {},
 ): Promise<Buffer> {
   const audience = opts.audience ?? "admin";
+  const payments = opts.payments ?? [];
   const wb = new ExcelJS.Workbook();
   wb.creator = "X-System";
   wb.created = new Date();
@@ -27,10 +30,77 @@ export async function buildAgentCommissionWorkbook(
   buildTxSheet(wb, preview);
   buildWatermarkSheet(wb, preview, audience);
   buildTrailSheet(wb, preview);
+  buildPaymentsSheet(wb, payments);
   buildSummarySheet(wb, preview, audience);
 
   const buffer = await wb.xlsx.writeBuffer();
   return Buffer.from(buffer);
+}
+
+/**
+ * What has actually been transferred, and for which period. Built for both
+ * audiences from the same `listAgentPayments` helper the screens use, so the
+ * agent's copy and the office copy cannot say different things.
+ *
+ * Before this existed an agent could see everything they had earned and
+ * nothing about what they had been paid — no amount, no period, no tax
+ * deducted — which is an impossible position to reconcile from.
+ */
+function buildPaymentsSheet(wb: ExcelJS.Workbook, payments: AgentPaymentRow[]): void {
+  const s = wb.addWorksheet("Payments");
+  const money = "#,##0.00";
+  s.columns = [
+    { header: "Commission earned up to", key: "periodEnd", width: 24 },
+    { header: "Paid on", key: "paidOn", width: 14 },
+    { header: "Upfront (BDT)", key: "upfront", width: 18, style: { numFmt: money } },
+    { header: "Trail (BDT)", key: "trail", width: 18, style: { numFmt: money } },
+    { header: "Gross (BDT)", key: "gross", width: 18, style: { numFmt: money } },
+    { header: "Tax deducted (BDT)", key: "wht", width: 20, style: { numFmt: money } },
+    { header: "Tax rate", key: "whtPct", width: 10, style: { numFmt: "0.00%" } },
+    { header: "Net received (BDT)", key: "net", width: 20, style: { numFmt: money } },
+    { header: "Bank", key: "bank", width: 34 },
+    { header: "# runs settled", key: "runs", width: 14, style: { numFmt: "#,##0" } },
+  ];
+  s.getRow(1).font = { bold: true };
+  s.views = [{ state: "frozen", ySplit: 1 }];
+
+  if (payments.length === 0) {
+    s.addRow({ periodEnd: "No commission has been paid yet." });
+    return;
+  }
+  for (const p of payments) {
+    s.addRow({
+      periodEnd: p.periodEnd,
+      paidOn: p.paidOn,
+      upfront: p.upfront,
+      trail: p.trail,
+      gross: p.gross,
+      wht: p.withholding,
+      whtPct: p.withholdingPct,
+      net: p.net,
+      bank: p.bankAccountName,
+      runs: p.runs,
+    });
+  }
+  const first = 2;
+  const last = payments.length + 1;
+  const tot = s.addRow({ periodEnd: "TOTAL" });
+  for (const [key, col] of [
+    ["upfront", "C"],
+    ["trail", "D"],
+    ["gross", "E"],
+    ["wht", "F"],
+    ["net", "H"],
+  ] as const) {
+    tot.getCell(key).value = { formula: `SUM(${col}${first}:${col}${last})`, result: undefined };
+  }
+  tot.font = { bold: true };
+  tot.border = { top: { style: "thin" } };
+  s.addRow({});
+  s.addRow({
+    periodEnd:
+      "Anything listed here has been settled and is no longer payable. Tax deducted at source is remitted to the NBR.",
+  });
 }
 
 function buildTermsSheet(
@@ -44,11 +114,16 @@ function buildTermsSheet(
     { header: "Fund category", key: "cat", width: 16 },
     { header: "Effective from", key: "from", width: 14 },
     { header: "Effective to", key: "to", width: 14 },
-    { header: "Upfront %", key: "up", width: 12 },
-    { header: "Trail Y1 % p.a.", key: "y1", width: 14 },
-    { header: "Trail Y2+ % p.a.", key: "y2", width: 16 },
+    // Percent-formatted, not raw decimals. These printed `0.001` while the
+    // Watermark and Transactions sheets printed `0.1000%` for the same number.
+    { header: "Upfront %", key: "up", width: 12, style: { numFmt: "0.0000%" } },
+    { header: "Trail Y1 % p.a.", key: "y1", width: 14, style: { numFmt: "0.0000%" } },
+    { header: "Trail Y2+ % p.a.", key: "y2", width: 16, style: { numFmt: "0.0000%" } },
+    // Without the cadence the reader cannot tell whether the p.a. rate above is
+    // divided by 12 or by 4 to get the per-period figure on the Trail sheet.
+    { header: "Trail paid", key: "freq", width: 12 },
     { header: "Clawback months", key: "cm", width: 16 },
-    { header: "Clawback %", key: "cp", width: 12 },
+    { header: "Clawback %", key: "cp", width: 12, style: { numFmt: "0.00%" } },
     // Internal data-quality warnings — admin only.
     ...(isAdmin ? [{ header: "Flag", key: "flag", width: 50 }] : []),
   ];
@@ -74,11 +149,16 @@ function buildTermsSheet(
       up: t.upfrontPct,
       y1: t.trailY1PctPa,
       y2: t.trailY2PlusPctPa,
+      freq: t.trailFrequency,
       cm: t.clawbackMonths,
       cp: t.clawbackPct,
       ...(isAdmin ? { flag: flags.join("; ") } : {}),
     });
   }
+  s.addRow({});
+  s.addRow({
+    cat: "Clawback is recorded from the agreement but is NOT applied — a redemption instead lowers the book below its peak, so the money must be brought back before upfront is earned again.",
+  });
 }
 
 function buildTxSheet(wb: ExcelJS.Workbook, p: PreviewResult): void {
@@ -431,7 +511,9 @@ function buildSummarySheet(
     ]),
   );
   s.getRow(1).font = { bold: true };
-  s.views = [{ state: "frozen", ySplit: 1 }];
+  // NB: no `s.views` here. The freeze is set at the very end of this function,
+  // after spliceRows inserts the header block — pinning row 1 up front froze a
+  // line that ends up 16 rows above the column headers, so scrolling lost them.
 
   for (const b of p.buckets) {
     s.addRow({
@@ -480,10 +562,17 @@ function buildSummarySheet(
       name: new Set(wm.legs.map((l) => l.investorCode)).size,
       inflow: Math.round(wm.currentNetPrincipal * 100) / 100,
       net: Math.round(Math.max(wm.storedWatermark, wm.peak) * 100) / 100,
-      us: wm.mixedRate ? `${(wm.blendedPct * 100).toFixed(4)}% blended` : `${(wm.blendedPct * 100).toFixed(4)}%`,
+      // A NUMBER in a percent-formatted cell, not the string "0.1000%". The
+      // string version sat in a money-formatted column: left-aligned, unsummable
+      // and #VALUE! in any formula referencing it.
+      us: wm.blendedPct,
       ub: Math.round(wm.pendingIncrement * 100) / 100,
       upfront: Math.round(p.totals.pendingUpfront * 100) / 100,
     });
+    wmRow.getCell("us").numFmt = wm.mixedRate ? '0.0000%" blended"' : "0.0000%";
+    // Suspension forfeits the increment: show WHY the upfront cell reads zero
+    // against a non-zero new-money figure, as the screen does.
+    if (!p.upfrontEntitled) wmRow.getCell("ub").note = "Forfeited — upfront suspended";
     wmRow.font = { bold: true };
 
     // Attribution — the audit trail for which investor and fund earned what.
@@ -494,14 +583,76 @@ function buildSummarySheet(
     legHead.font = { bold: true };
     s.addRow({ inv: "Investor", name: "Fund", cat: "Category", inflow: "Net principal", ub: "New money", us: "Rate", upfront: "Upfront" });
     for (const leg of wm.legs) {
-      s.addRow({
+      const legRow = s.addRow({
         inv: leg.investorName ? `${leg.investorCode} ${leg.investorName}` : leg.investorCode,
         name: leg.fundCode,
         cat: leg.category,
         inflow: Math.round(leg.netPrincipal * 100) / 100,
         ub: Math.round(leg.attributedIncrement * 100) / 100,
-        us: `${(leg.upfrontPct * 100).toFixed(4)}%`,
-        upfront: Math.round(leg.attributedUpfront * 100) / 100,
+        us: leg.upfrontPct,
+        // Zeroed under suspension, exactly like the per-investor column above.
+        // These are the same quantity in the same column; printing the full
+        // amount here while the rows above read 0.00 made column L contradict
+        // itself twenty rows apart.
+        upfront: p.upfrontEntitled ? Math.round(leg.attributedUpfront * 100) / 100 : 0,
+      });
+      legRow.getCell("us").numFmt = "0.0000%";
+    }
+  }
+
+  // POSITION — the headline figures, none of which existed anywhere in either
+  // workbook before. Without them the file could not answer the two questions
+  // it is downloaded to answer: what is still owed, and what has been paid.
+  s.addRow({});
+  const posHead = s.addRow({ inv: "POSITION — what is still owed" });
+  posHead.font = { bold: true };
+  const t = p.totals;
+  const posRow = (label: string, value: number, note: string, bold = false) => {
+    const r = s.addRow({ inv: label, name: note, upfront: Math.round(value * 100) / 100 });
+    if (bold) r.font = { bold: true };
+    return r;
+  };
+  posRow("Upfront earned", t.upfrontEarned, "pending + already posted");
+  posRow("Upfront paid", t.paidUpfront, "settled by bank transfer");
+  posRow("Upfront outstanding", t.upfrontOutstanding, "earned less paid", true);
+  posRow("Trail earned", t.trail, "all periods since sourcing");
+  posRow("Trail paid", t.paidTrail, "settled by bank transfer");
+  posRow("Trail outstanding", t.trailOutstanding, "earned less paid", true);
+  posRow("Paid to date", t.paidToDate, "gross transferred, before tax deducted");
+  const payableRow = posRow(
+    "TOTAL PAYABLE",
+    t.totalPayable,
+    "still owed — everything earned, less everything paid",
+    true,
+  );
+  payableRow.border = { top: { style: "thin" } };
+  if (wm && wm.cipOffset > 0) {
+    posRow("CIP dividend excluded", wm.cipOffset, "reinvested dividend is not new money");
+  }
+  if (!p.upfrontEntitled) {
+    const susp = s.addRow({
+      inv: `Upfront SUSPENDED from ${p.upfrontSuspendedFrom ?? "—"} — pending upfront is forfeited, not deferred.`,
+    });
+    susp.font = { bold: true };
+  }
+
+  // Data problems that stop a posting. `unratedFunds` was already surfaced on
+  // the watermark sheet; these were computed and shown nowhere, so a file could
+  // print a confident pending figure for an agent whose run posts nothing.
+  const blocking = p.upfrontWarnings.filter(isBlockingWarning);
+  if (blocking.length > 0) {
+    s.addRow({});
+    const wHead = s.addRow({
+      inv:
+        audience === "agent"
+          ? "ON HOLD — some transaction data could not be read, so upfront is not payable yet. The office has the detail."
+          : "BLOCKED — the posting run will refuse this agent until these are fixed:",
+    });
+    wHead.font = { bold: true };
+    for (const w of blocking) {
+      s.addRow({
+        inv: `${w.investorCode}${w.fundCode ? ` · ${w.fundCode}` : ""}`,
+        name: audience === "agent" ? "data could not be read" : `${w.detail} [${w.kind}]`,
       });
     }
   }
@@ -553,9 +704,13 @@ function buildSummarySheet(
           [`  • Summary sheet, "Upfront payable": your upfront split across the investors and funds that actually pushed the book above its previous peak. A row reads 0.00 where that money replaced money that had left — it set no new high, so no upfront is due on it. The same figures appear in the UPFRONT WATERMARK block, movement by movement.`],
           [`Trail: accrues each period on the average value of units held, at the rate per annum for the applicable year band, and is paid after the period closes.`],
           [`  • Rows marked partial are still accruing and have not been posted.`],
-          [`This is an as-of-today estimate for your information, not a statement of account. The amount payable is confirmed when the office posts the run.`],
+          [`POSITION block below: "Total payable" is what is STILL OWED — everything earned to the as-of date, less everything already transferred to you. See the Payments sheet for what has been paid and the tax deducted.`],
+          [`This is an estimate for your information, not a statement of account. The amount payable is confirmed when the office posts the run.`],
           [],
         ];
 
   s.spliceRows(1, 0, ...header);
+  // Freeze AFTER the splice, so the frozen line is the column-header row rather
+  // than whatever prose ends up on row 1.
+  s.views = [{ state: "frozen", ySplit: header.length + 1 }];
 }

@@ -85,6 +85,23 @@ export type FetchWarning = {
   detail: string;
 };
 
+/**
+ * Warning kinds that make `runUpfront` refuse to post for the WHOLE agent —
+ * the data could not be interpreted, so no figure derived from it is safe.
+ *
+ * Exported so the runner and the screen share one definition. They used to be
+ * an inline filter inside run-upfront.ts and were rendered nowhere, so the
+ * accountant saw a pending figure, clicked Post, and got silence.
+ */
+export const BLOCKING_WARNING_KINDS: ReadonlyArray<FetchWarning["kind"]> = [
+  "unknown_direction",
+  "cip_no_candidate_buy",
+];
+
+export function isBlockingWarning(w: FetchWarning): boolean {
+  return BLOCKING_WARNING_KINDS.includes(w.kind);
+}
+
 export type AgentTxnSet = {
   /** investorCode → movements across ALL funds (unordered; replay sorts). */
   byInvestor: Map<string, WmTxn[]>;

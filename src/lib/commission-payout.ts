@@ -51,10 +51,31 @@ export type AccrualResult = {
   batchId: string;
   amount: number;
   runs: number;
+  /** What the one voucher covered. `type` was already selected and never read,
+   *  so the accountant could not see that upfront was inside the figure. */
+  byType: { upfront: number; trail: number; clawback: number };
   /** Period the accrual covers, for the confirmation message. */
   periodStart: string | null;
   periodEnd: string;
 };
+
+/** "upfront 2,400.00 · trail 182.93" — zero types omitted. */
+export function describeSplit(byType: {
+  upfront: number;
+  trail: number;
+  clawback: number;
+}): string {
+  return (
+    [
+      ["upfront", byType.upfront],
+      ["trail", byType.trail],
+      ["clawback", byType.clawback],
+    ] as const
+  )
+    .filter(([, v]) => v !== 0)
+    .map(([k, v]) => `${k} ${v.toFixed(2)}`)
+    .join(" · ");
+}
 
 export type PaymentResult = {
   /** Nothing accrued-and-unpaid up to the billing end. */
@@ -149,17 +170,28 @@ export async function accrueAgentCommission(opts: {
     orderBy: { periodEnd: "asc" },
   });
 
+  const zeroSplit = { upfront: 0, trail: 0, clawback: 0 };
   const empty: AccrualResult = {
     noop: true,
     voucherNo: "",
     batchId: "",
     amount: 0,
     runs: 0,
+    byType: zeroSplit,
     periodStart: null,
     periodEnd: ymd(billingEnd),
   };
   if (runs.length === 0) return empty;
 
+  const byType = {
+    upfront: round2(
+      runs.filter((r) => r.type === "upfront").reduce((s, r) => s + Number(r.amount), 0),
+    ),
+    trail: round2(runs.filter((r) => r.type === "trail").reduce((s, r) => s + Number(r.amount), 0)),
+    clawback: round2(
+      runs.filter((r) => r.type === "clawback").reduce((s, r) => s + Number(r.amount), 0),
+    ),
+  };
   const gross = round2(runs.reduce((s, r) => s + Number(r.amount), 0));
   if (gross <= 0) {
     // Only reachable once clawbacks exist and outweigh the period's earnings.
@@ -185,6 +217,7 @@ export async function accrueAgentCommission(opts: {
       batchId: "",
       amount: gross,
       runs: runs.length,
+      byType,
       periodStart: earliest ? ymd(earliest) : null,
       periodEnd: ymd(billingEnd),
     };
@@ -241,6 +274,7 @@ export async function accrueAgentCommission(opts: {
     batchId,
     amount: gross,
     runs: runs.length,
+    byType,
     periodStart: earliest ? ymd(earliest) : null,
     periodEnd: ymd(billingEnd),
   };
@@ -423,18 +457,83 @@ export async function payAgentCommission(opts: {
   };
 }
 
+/** One settled transfer, with the split of what it actually paid for. */
+export type AgentPaymentRow = {
+  id: string;
+  periodStart: string | null;
+  /** The billing cut-off this payment settled — "commission earned up to". */
+  periodEnd: string;
+  paidOn: string;
+  upfront: number;
+  trail: number;
+  gross: number;
+  withholding: number;
+  net: number;
+  withholdingPct: number;
+  bankAccountName: string;
+  accrualBatchId: string | null;
+  paymentBatchId: string;
+  runs: number;
+};
+
+/**
+ * Every transfer made to an agent, newest first, with each one broken into the
+ * upfront and trail it settled.
+ *
+ * The split is derived from the settled runs themselves (`CommissionRun.
+ * paymentId`), not stored separately, so it cannot drift from the rows it
+ * describes. Shared by the admin payout panel, the agent's earnings page and
+ * both workbooks — the agent must be able to see what was paid, for which
+ * period, and how much tax was deducted, and the office copy has to say the
+ * same thing.
+ */
+export async function listAgentPayments(agentId: string): Promise<AgentPaymentRow[]> {
+  const rows = await prisma.commissionPayment.findMany({
+    where: { agentId },
+    orderBy: [{ paidOn: "desc" }, { createdAt: "desc" }],
+    include: { runs: { select: { type: true, amount: true } } },
+  });
+  return rows.map((p) => {
+    const sum = (t: "upfront" | "trail") =>
+      round2(
+        p.runs.filter((r) => r.type === t).reduce((s, r) => s + Number(r.amount), 0),
+      );
+    return {
+      id: p.id,
+      periodStart: p.periodStart ? ymd(p.periodStart) : null,
+      periodEnd: ymd(p.periodEnd),
+      paidOn: ymd(p.paidOn),
+      upfront: sum("upfront"),
+      trail: sum("trail"),
+      gross: round2(Number(p.grossAmount)),
+      withholding: round2(Number(p.withholdingAmount)),
+      net: round2(Number(p.netAmount)),
+      withholdingPct: Number(p.withholdingPct),
+      bankAccountName: p.bankAccountName,
+      accrualBatchId: p.accrualBatchId,
+      paymentBatchId: p.paymentBatchId,
+      runs: p.runs.length,
+    };
+  });
+}
+
 /**
  * What the payout panel needs to render, without duplicating the selection
  * logic above: how much is waiting to be accrued, and how much is accrued and
- * waiting to be paid, as of a billing cut-off.
+ * waiting to be paid, as of a billing cut-off — each split by commission type,
+ * because one Accrue button sweeps upfront and trail into a single voucher and
+ * the accountant could not otherwise see what was inside the figure.
  */
+export type PayoutBucket = {
+  runs: number;
+  amount: number;
+  byType: { upfront: number; trail: number; clawback: number };
+};
+
 export async function getPayoutState(
   agentId: string,
   billingEnd: Date,
-): Promise<{
-  unaccrued: { runs: number; amount: number };
-  unpaid: { runs: number; amount: number };
-}> {
+): Promise<{ unaccrued: PayoutBucket; unpaid: PayoutBucket }> {
   const [unaccruedRows, unpaidRows] = await Promise.all([
     prisma.commissionRun.findMany({
       where: {
@@ -443,7 +542,7 @@ export async function getPayoutState(
         status: "accrued",
         periodEnd: { not: null, lte: billingEnd },
       },
-      select: { amount: true },
+      select: { amount: true, type: true },
     }),
     prisma.commissionRun.findMany({
       where: {
@@ -454,13 +553,20 @@ export async function getPayoutState(
         journalBatchId: { not: null },
         periodEnd: { not: null, lte: billingEnd },
       },
-      select: { amount: true },
+      select: { amount: true, type: true },
     }),
   ]);
-  const sum = (rows: Array<{ amount: unknown }>) =>
-    round2(rows.reduce((s, r) => s + Number(r.amount), 0));
-  return {
-    unaccrued: { runs: unaccruedRows.length, amount: sum(unaccruedRows) },
-    unpaid: { runs: unpaidRows.length, amount: sum(unpaidRows) },
+  // These `where` clauses are verbatim copies of the selections in
+  // accrueAgentCommission / payAgentCommission — the card must describe exactly
+  // what the button will act on.
+  const bucket = (rows: Array<{ amount: unknown; type: string }>): PayoutBucket => {
+    const of = (t: string) =>
+      round2(rows.filter((r) => r.type === t).reduce((s, r) => s + Number(r.amount), 0));
+    return {
+      runs: rows.length,
+      amount: round2(rows.reduce((s, r) => s + Number(r.amount), 0)),
+      byType: { upfront: of("upfront"), trail: of("trail"), clawback: of("clawback") },
+    };
   };
+  return { unaccrued: bucket(unaccruedRows), unpaid: bucket(unpaidRows) };
 }

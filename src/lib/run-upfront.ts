@@ -23,6 +23,7 @@ import {
   fetchAgentInvestorTxns,
   flattenToAgentSeries,
   computeCombinedWatermarkUpfront,
+  isBlockingWarning,
   isUpfrontEntitled,
   makeRateResolver,
   type FetchWarning,
@@ -130,9 +131,12 @@ export async function runUpfront(
     // Same reasoning as the unrated-fund block below. `direct_mixed` and
     // `same_day_buy_sell` stay advisory: they need a human eye but do not
     // corrupt the arithmetic.
-    const blockingWarnings = warnings.filter(
-      (w) => w.kind === "unknown_direction" || w.kind === "cip_no_candidate_buy",
-    );
+    //
+    // The predicate lives in upfront-watermark.ts so the agent screen can show
+    // exactly what this runner will refuse. Inlining it here again would let
+    // the two drift, which is how the screen came to promise a posting that
+    // silently did nothing.
+    const blockingWarnings = warnings.filter(isBlockingWarning);
 
     // (investorCode, fundCode) → AgentInvestor link id, earliest sourcedOn.
     const linkByPair = new Map<string, { id: string; sourcedOn: Date }>();

@@ -184,11 +184,27 @@ export type PreviewResult = {
   totals: {
     inflow: number;
     outflow: number;
-    /** Watermark upfront not yet posted (Σ pendingUpfront). */
+    /** Watermark upfront not yet posted. Zeroed while upfront is suspended. */
     pendingUpfront: number;
-    /** Upfront already posted to CommissionRun (watermark + legacy). */
+    /** Upfront in CommissionRun, excluding reversals. Paid or not. */
     postedUpfront: number;
+    /** Upfront settled by a bank transfer (status = paid). */
+    paidUpfront: number;
+    /** pendingUpfront + postedUpfront — everything the agent has earned. */
+    upfrontEarned: number;
+    /** upfrontEarned − paidUpfront. Negative = overpaid; deliberately not clamped. */
+    upfrontOutstanding: number;
+    /** Trail in CommissionRun, excluding reversals. Paid or not. */
+    postedTrail: number;
+    /** Trail settled by a bank transfer. */
+    paidTrail: number;
+    /** Trail EARNED to date from NAV — not reduced by posting or payment. */
     trail: number;
+    /** trail − paidTrail. */
+    trailOutstanding: number;
+    /** paidUpfront + paidTrail — gross transferred, before withholding. */
+    paidToDate: number;
+    /** What is STILL OWED: upfrontOutstanding + trailOutstanding. */
     totalPayable: number;
   };
 };
@@ -320,7 +336,14 @@ export async function computeAgentCommissionPreview(
         outflow: 0,
         pendingUpfront: 0,
         postedUpfront: 0,
+        paidUpfront: 0,
+        upfrontEarned: 0,
+        upfrontOutstanding: 0,
+        postedTrail: 0,
+        paidTrail: 0,
         trail: 0,
+        trailOutstanding: 0,
+        paidToDate: 0,
         totalPayable: 0,
       },
     };
@@ -352,14 +375,23 @@ export async function computeAgentCommissionPreview(
       channel: string;
     }>
   >(
+    // `orderDate <= asOf` is what makes the billing cut-off mean the same thing
+    // everywhere. Without it this query returned every executed trade to the
+    // present day while upfront (fetchAgentInvestorTxns, already bounded) and
+    // trail (periods capped at asOf) stopped at the cut-off — so one workbook
+    // carried commission columns for July beside an inflow column running to
+    // today. Proof of the old behaviour: S00003's first trade is 2026-07-21,
+    // yet a preview at 2026-03-31 reported his full 2,400,000 of inflow.
     `SELECT "investorId", "fundId", "orderDate" AS date, direction, units, amount, nav, channel
      FROM public.transactions
      WHERE "investorId" = ANY($1::text[])
        AND "fundId" = ANY($2::text[])
        AND status = 'EXECUTED'
+       AND "orderDate" <= $3
      ORDER BY "orderDate" ASC, "createdAt" ASC`,
     portalInvestors.map((i) => i.id),
     portalFunds.map((f) => f.id),
+    asOf,
   );
 
   const linkByPair = new Map<string, InvestorLink>();
@@ -642,17 +674,49 @@ export async function computeAgentCommissionPreview(
   }
   const upfrontWarnings = wmWarnings;
 
-  // Reversed rows are corrections, not payments — counting them as "posted"
-  // would make a restated run look like it had already paid what it withdrew.
-  const postedAgg = await prisma.commissionRun.aggregate({
-    where: { agentId, type: "upfront", status: { not: "reversed" } },
+  // What has reached commission_runs, split by type and by whether it has
+  // actually been paid. Reversed rows are corrections, not payments — counting
+  // them as "posted" would make a restated run look like it had already paid
+  // what it withdrew.
+  // Bounded by `asOf` on the same basis as everything else on this preview: a
+  // run whose period ends after the cut-off is not part of the as-at picture.
+  // Unbounded, a March cut-off reported July's posted upfront as payable.
+  const runAgg = await prisma.commissionRun.groupBy({
+    by: ["type", "status"],
+    where: {
+      agentId,
+      status: { not: "reversed" },
+      periodEnd: { not: null, lte: asOf },
+    },
     _sum: { amount: true },
   });
-  const postedUpfront = Number(postedAgg._sum.amount ?? 0);
+  const sumWhere = (type: "upfront" | "trail", paidOnly: boolean): number =>
+    round2(
+      runAgg
+        .filter((r) => r.type === type && (!paidOnly || r.status === "paid"))
+        .reduce((s, r) => s + Number(r._sum.amount ?? 0), 0),
+    );
+  const postedUpfront = sumWhere("upfront", false);
+  const paidUpfront = sumWhere("upfront", true);
+  const postedTrail = sumWhere("trail", false);
+  const paidTrail = sumWhere("trail", true);
 
   // Suspended agents earn no upfront — the pending increment is forfeited
   // (the watermark stays put; accountant resets it at re-instatement).
   const effPendingUpfront = upfrontEntitled ? pendingUpfront : 0;
+
+  // PAYABLE MEANS STILL OWED: earned − paid. It used to be
+  // `pendingUpfront + trail`, which derived payable from processing STAGE and
+  // was wrong in both directions — it never added posted-but-unpaid upfront
+  // (understating by the whole of it: S00003 read 383.18 when he was owed
+  // 2,783.18) and it never deducted paid trail, so the figure would not fall
+  // when a transfer went out. Not clamped at zero: a negative means the agent
+  // has been overpaid, and that must be visible rather than hidden.
+  const upfrontEarned = round2(effPendingUpfront + postedUpfront);
+  const upfrontOutstanding = round2(upfrontEarned - paidUpfront);
+  const trailEarned = round2(totals.trail);
+  const trailOutstanding = round2(trailEarned - paidTrail);
+  const paidToDate = round2(paidUpfront + paidTrail);
 
   return {
     agentCode: agent.code,
@@ -672,9 +736,16 @@ export async function computeAgentCommissionPreview(
       inflow: round2(totals.inflow),
       outflow: round2(totals.outflow),
       pendingUpfront: round2(effPendingUpfront),
-      postedUpfront: round2(postedUpfront),
-      trail: round2(totals.trail),
-      totalPayable: round2(effPendingUpfront + totals.trail),
+      postedUpfront,
+      paidUpfront,
+      upfrontEarned,
+      upfrontOutstanding,
+      postedTrail,
+      paidTrail,
+      trail: trailEarned,
+      trailOutstanding,
+      paidToDate,
+      totalPayable: round2(upfrontOutstanding + trailOutstanding),
     },
   };
 }

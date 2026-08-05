@@ -1,11 +1,13 @@
 // GET /api/admin/agents/[id]/commissions/excel
-// Returns the multi-sheet workbook with Summary / Transactions / Trail
-// / Terms-used for one agent. Admin or checker only.
+// The multi-sheet workbook for one agent: Terms used / Transactions / Upfront
+// watermark / Trail commissions / Payments / Summary. Admin, checker or
+// accountant.
 
 import { type NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { computeAgentCommissionPreview, parseAsOf } from "@/lib/agent-commission-preview";
+import { listAgentPayments } from "@/lib/commission-payout";
 import { buildAgentCommissionWorkbook } from "@/lib/agent-commission-workbook";
 
 export const dynamic = "force-dynamic";
@@ -24,8 +26,11 @@ export async function GET(
   // never disagree with the screen it was downloaded from. Absent → today.
   const asOf = parseAsOf(req.nextUrl.searchParams.get("asOf"));
 
-  const preview = await computeAgentCommissionPreview(prisma, id, asOf);
-  const buf = await buildAgentCommissionWorkbook(preview);
+  const [preview, payments] = await Promise.all([
+    computeAgentCommissionPreview(prisma, id, asOf),
+    listAgentPayments(id),
+  ]);
+  const buf = await buildAgentCommissionWorkbook(preview, { payments });
   const filename = `agent-commissions-${preview.agentCode}-${preview.asOf.toISOString().slice(0, 10)}.xlsx`;
 
   return new NextResponse(new Uint8Array(buf), {

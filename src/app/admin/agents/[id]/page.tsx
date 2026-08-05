@@ -27,7 +27,8 @@ import {
   updateAgentTerm,
 } from "@/app/admin/agents/actions";
 import { computeAgentCommissionPreview, parseAsOf } from "@/lib/agent-commission-preview";
-import { getPayoutState } from "@/lib/commission-payout";
+import { getPayoutState, listAgentPayments } from "@/lib/commission-payout";
+import { isBlockingWarning } from "@/lib/upfront-watermark";
 import { CommissionBreakdown } from "@/components/commission-breakdown";
 import { formatBdt } from "@/lib/format";
 import {
@@ -136,9 +137,7 @@ export default async function AgentDetailPage({
   );
   const [payoutState, payments, bankAccounts] = await Promise.all([
     getPayoutState(agent.id, billingEnd).catch(() => null),
-    prisma.commissionPayment
-      .findMany({ where: { agentId: agent.id }, orderBy: { paidOn: "desc" }, take: 12 })
-      .catch(() => []),
+    listAgentPayments(agent.id).catch(() => []),
     prisma.chartOfAccount
       .findMany({
         where: { isActive: true, normalBalance: "DEBIT" },
@@ -891,7 +890,7 @@ function PctInput({
 
 function MethodologyPanel() {
   return (
-    <Section title="How agent commissions are calculated">
+    <Section title="How agent commissions are calculated" collapsible>
       <p className="text-xs text-zinc-600 dark:text-zinc-400">
         Per the Selling Agent Agreement clause 6. Upfront is implemented in{" "}
         <code className="font-mono">src/lib/upfront-watermark.ts</code> and posted by{" "}
@@ -1064,6 +1063,11 @@ function CommissionPreviewPanel({
   // variable is what stops the screen and the posted rows from disagreeing.
   const asOfQs = asOfParam ? `?asOf=${encodeURIComponent(asOfParam)}` : "";
   const backdated = asOfParam !== "";
+  // runUpfront refuses to post for the whole agent on these, so the button must
+  // refuse too — clicking into a silent no-op is how an accountant comes to
+  // believe an agent was paid when nothing happened.
+  const blockingWarnings = preview.upfrontWarnings.filter(isBlockingWarning);
+  const upfrontBlocked = blockingWarnings.length > 0;
   return (
     <Section title={`Calculate as of — ${today}`}>
       <form method="GET" className="mb-4 flex flex-wrap items-end gap-2">
@@ -1166,7 +1170,14 @@ function CommissionPreviewPanel({
           <input type="hidden" name="asOf" value={asOfParam} />
           <button
             type="submit"
-            disabled={preview.totals.pendingUpfront <= 0}
+            disabled={preview.totals.pendingUpfront <= 0 || upfrontBlocked}
+            title={
+              upfrontBlocked
+                ? `Blocked by ${blockingWarnings.length} data warning(s): ${blockingWarnings
+                    .map((w) => `${w.investorCode} ${w.kind}`)
+                    .join("; ")}. The posting run would refuse this too.`
+                : undefined
+            }
             className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
           >
             Post upfront now
@@ -1228,22 +1239,24 @@ function CommissionPayoutPanel({
   asOfParam: string;
   billingEnd: string;
   state: Awaited<ReturnType<typeof getPayoutState>> | null;
-  payments: Array<{
-    id: string;
-    periodEnd: Date;
-    paidOn: Date;
-    grossAmount: unknown;
-    withholdingAmount: unknown;
-    netAmount: unknown;
-    bankAccountName: string;
-    accrualBatchId: string | null;
-    paymentBatchId: string;
-  }>;
+  payments: Awaited<ReturnType<typeof listAgentPayments>>;
   bankAccounts: Array<{ name: string; category: string | null }>;
 }) {
   const today = new Date().toISOString().slice(0, 10);
   const unaccrued = state?.unaccrued.amount ?? 0;
   const unpaid = state?.unpaid.amount ?? 0;
+  /** "upfront 2,400.00 · trail 182.93", zero types omitted. */
+  const splitOf = (b: { byType: { upfront: number; trail: number; clawback: number } } | undefined) =>
+    (
+      [
+        ["upfront", b?.byType.upfront ?? 0],
+        ["trail", b?.byType.trail ?? 0],
+        ["clawback", b?.byType.clawback ?? 0],
+      ] as const
+    )
+      .filter(([, v]) => v !== 0)
+      .map(([k, v]) => `${k} ${formatBdt(v)}`)
+      .join(" · ");
 
   return (
     <Section title="Commission payout — accrue, then pay">
@@ -1267,7 +1280,9 @@ function CommissionPayoutPanel({
           </h3>
           <p className="mt-1 text-[11px] text-zinc-500">
             Dr Selling agent fees / Cr Liab-Selling Agent Commission, dated the period end.
-            Sweeps every posted commission run ending on or before that date.
+            Sweeps every posted commission run ending on or before that date —{" "}
+            <strong>upfront and trail together, in one voucher</strong>. There is no separate
+            upfront button; one period is one obligation.
           </p>
           <p className="mt-2 text-sm">
             Waiting to be accrued:{" "}
@@ -1276,10 +1291,13 @@ function CommissionPayoutPanel({
               ({state?.unaccrued.runs ?? 0} run(s) up to {billingEnd})
             </span>
           </p>
+          {unaccrued !== 0 && (
+            <p className="text-[11px] text-zinc-500">{splitOf(state?.unaccrued)}</p>
+          )}
           <form
             action={accrueAgentCommissionAction}
             className="mt-3 flex flex-wrap items-end gap-2"
-            data-confirm={`Post the accrual voucher dated the billing period end for ${formatBdt(unaccrued)}? This books the expense in that period, not today.`}
+            data-confirm={`Post the accrual voucher dated the billing period end for ${formatBdt(unaccrued)} (${splitOf(state?.unaccrued) || "nothing"})? One voucher covers upfront and trail together. This books the expense in that period, not today.`}
           >
             <input type="hidden" name="agentId" value={agentId} />
             <input type="hidden" name="asOf" value={asOfParam} />
@@ -1327,6 +1345,7 @@ function CommissionPayoutPanel({
               ({state?.unpaid.runs ?? 0} run(s))
             </span>
           </p>
+          {unpaid !== 0 && <p className="text-[11px] text-zinc-500">{splitOf(state?.unpaid)}</p>}
           <form
             action={payAgentCommissionAction}
             className="mt-3 space-y-2"
@@ -1412,6 +1431,8 @@ function CommissionPayoutPanel({
               <tr>
                 <th className="py-2 pr-3">Period to</th>
                 <th className="py-2 pr-3">Paid on</th>
+                <th className="py-2 pr-3 text-right">Upfront</th>
+                <th className="py-2 pr-3 text-right">Trail</th>
                 <th className="py-2 pr-3 text-right">Gross</th>
                 <th className="py-2 pr-3 text-right">Withheld</th>
                 <th className="py-2 pr-3 text-right">Net paid</th>
@@ -1422,16 +1443,16 @@ function CommissionPayoutPanel({
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {payments.map((p) => (
                 <tr key={p.id}>
-                  <td className="py-1.5 pr-3 text-xs">{p.periodEnd.toISOString().slice(0, 10)}</td>
-                  <td className="py-1.5 pr-3 text-xs">{p.paidOn.toISOString().slice(0, 10)}</td>
+                  <td className="py-1.5 pr-3 text-xs">{p.periodEnd}</td>
+                  <td className="py-1.5 pr-3 text-xs">{p.paidOn}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{formatBdt(p.upfront)}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{formatBdt(p.trail)}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{formatBdt(p.gross)}</td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {formatBdt(Number(p.grossAmount))}
-                  </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {formatBdt(Number(p.withholdingAmount))}
+                    {formatBdt(p.withholding)}
                   </td>
                   <td className="py-1.5 pr-3 text-right font-semibold tabular-nums">
-                    {formatBdt(Number(p.netAmount))}
+                    {formatBdt(p.net)}
                   </td>
                   <td className="py-1.5 pr-3 text-xs">{p.bankAccountName}</td>
                   <td className="py-1.5 pr-3 text-xs">
@@ -1468,7 +1489,35 @@ function countPostable(
   return preview.trailRows.filter((r) => !r.partial).length;
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+  collapsible = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  /** Render closed, opening on click. Uses <details> rather than useState so
+   *  this stays a server component — and because globals.css force-expands
+   *  <details> when printing, so collapsed content still appears on paper. */
+  collapsible?: boolean;
+}) {
+  if (collapsible) {
+    return (
+      <section>
+        <details className="group">
+          <summary className="mb-3 flex cursor-pointer list-none items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 [&::-webkit-details-marker]:hidden">
+            <span className="inline-block w-3 text-[11px] transition-transform group-open:rotate-45">
+              +
+            </span>
+            {title}
+          </summary>
+          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            {children}
+          </div>
+        </details>
+      </section>
+    );
+  }
   return (
     <section>
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-zinc-500">{title}</h2>

@@ -10,6 +10,7 @@
 // three optional slots, which the agent page simply does not pass.
 
 import type { PreviewResult, UpfrontWatermarkView } from "@/lib/agent-commission-preview";
+import { isBlockingWarning } from "@/lib/upfront-watermark";
 import { formatBdt } from "@/lib/format";
 
 /**
@@ -26,6 +27,7 @@ export type CommissionBreakdownData = Pick<
   | "buckets"
   | "trailRows"
   | "upfrontWatermark"
+  | "upfrontWarnings"
   | "upfrontEntitled"
   | "upfrontSuspendedFrom"
 >;
@@ -114,8 +116,53 @@ export function CommissionBreakdown({
   const upfrontFor = (investorCode: string, fundCode: string): number =>
     preview.upfrontEntitled ? (upfrontByLeg.get(`${investorCode}|${fundCode}`) ?? 0) : 0;
 
+  // Data problems found while replaying the book. The blocking ones make
+  // runUpfront refuse to post for the whole agent — same predicate, imported
+  // rather than re-written, so this cannot promise a posting the runner will
+  // reject. Until now these were computed and thrown away.
+  const blocking = preview.upfrontWarnings.filter(isBlockingWarning);
+  const advisory = preview.upfrontWarnings.filter((w) => !isBlockingWarning(w));
+
   return (
     <>
+      {blocking.length > 0 && (
+        <div className="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-xs dark:border-red-900 dark:bg-red-950/40">
+          <p className="font-semibold uppercase tracking-wider text-red-800 dark:text-red-300">
+            Upfront cannot be posted for this agent
+          </p>
+          <p className="mt-1 text-red-800 dark:text-red-200">
+            {isAdmin
+              ? "The replay found transaction data it cannot interpret. Posting is refused for the WHOLE agent — under the book model every investor shares one series, so skipping the bad rows would corrupt everyone else's figure. Fix the source data, then post."
+              : "Some of your transaction data could not be read, so upfront is on hold. The office has been shown the detail and will sort it out — nothing is lost."}
+          </p>
+          <ul className="mt-2 list-inside list-disc space-y-0.5 text-red-700 dark:text-red-300">
+            {blocking.map((w, i) => (
+              <li key={i}>
+                <span className="font-mono">{w.investorCode}</span>
+                {w.fundCode ? ` · ${w.fundCode}` : ""} — {isAdmin ? w.detail : "data could not be read"}
+                {isAdmin && <span className="ml-1 text-red-500">[{w.kind}]</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {isAdmin && advisory.length > 0 && (
+        <details className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/30">
+          <summary className="cursor-pointer font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+            {advisory.length} advisory data warning(s) — a human should look, posting is not blocked
+          </summary>
+          <ul className="mt-2 list-inside list-disc space-y-0.5 text-amber-800 dark:text-amber-200">
+            {advisory.map((w, i) => (
+              <li key={i}>
+                <span className="font-mono">{w.investorCode}</span>
+                {w.fundCode ? ` · ${w.fundCode}` : ""} — {w.detail}{" "}
+                <span className="text-amber-600">[{w.kind}]</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       {/* Upfront entitlement */}
       <div
         className={`mb-4 rounded-md border p-3 text-xs ${
@@ -144,28 +191,48 @@ export function CommissionBreakdown({
         )}
       </div>
 
-      {/* Totals strip */}
+      {/* Totals strip. Every figure here is EARNED − PAID, so a transfer that
+          has gone out reduces it. The old strip showed processing stage instead
+          and was wrong twice over: it never counted posted-but-unpaid upfront
+          as payable, and it never removed trail once paid. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Stat label="Total inflow" value={formatBdt(preview.totals.inflow)} muted />
         <Stat
-          label="Upfront posted"
-          value={formatBdt(preview.totals.postedUpfront)}
-          muted
-          hint={isAdmin ? "watermark upfront already in CommissionRun" : "already posted by the office"}
+          label="Upfront outstanding"
+          value={formatBdt(preview.totals.upfrontOutstanding)}
+          hint={`earned ${formatBdt(preview.totals.upfrontEarned)} · paid ${formatBdt(preview.totals.paidUpfront)}`}
         />
         <Stat
-          label="Upfront pending"
-          value={formatBdt(preview.totals.pendingUpfront)}
-          hint="new money above the watermark, not yet posted"
+          label="Trail outstanding"
+          value={formatBdt(preview.totals.trailOutstanding)}
+          hint={`earned ${formatBdt(preview.totals.trail)} · paid ${formatBdt(preview.totals.paidTrail)}`}
         />
-        <Stat label="Trail (to date)" value={formatBdt(preview.totals.trail)} />
+        <Stat
+          label="Paid to date"
+          value={formatBdt(preview.totals.paidToDate)}
+          muted
+          hint={isAdmin ? "gross transferred, before withholding" : "gross — tax deducted shown below"}
+        />
         <Stat
           label="Total payable"
           value={formatBdt(preview.totals.totalPayable)}
           emphasis
-          hint="pending watermark upfront + trail"
+          hint="still owed — everything earned, less what has been paid"
         />
       </div>
+      {preview.totals.totalPayable < 0 && (
+        <p className="mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+          Total payable is negative — more has been paid than earned to this date. Check the
+          payments below against the posted runs before paying anything further.
+        </p>
+      )}
+      <p className="mt-2 text-[11px] text-zinc-500">
+        Upfront pending (not yet posted):{" "}
+        <strong className="tabular-nums">{formatBdt(preview.totals.pendingUpfront)}</strong> · already
+        posted: <strong className="tabular-nums">{formatBdt(preview.totals.postedUpfront)}</strong>.
+        Trail posted:{" "}
+        <strong className="tabular-nums">{formatBdt(preview.totals.postedTrail)}</strong>.
+      </p>
 
       {/* Book-level high-water-mark. One row — the agent's whole book — with
           the investor × fund legs showing where that principal actually sits.
@@ -358,8 +425,13 @@ export function CommissionBreakdown({
         Upfront is the watermark&apos;s own attribution — the increment each investor × fund
         actually drove above the book&apos;s previous peak, which is what gets posted. A row
         reads 0.00 when that money replaced money that had left, so it set no new high.
-        TOTAL PAYABLE ({formatBdt(preview.totals.totalPayable)}) = upfront{" "}
-        {formatBdt(preview.totals.pendingUpfront)} + trail {formatBdt(preview.totals.trail)}.
+        <br />
+        <strong>These rows do not sum to TOTAL PAYABLE, deliberately.</strong> The Upfront column
+        totals {formatBdt(preview.totals.pendingUpfront)} — the increment still to be posted — and
+        Trail payable totals {formatBdt(preview.totals.trail)} — everything earned since sourcing.
+        TOTAL PAYABLE ({formatBdt(preview.totals.totalPayable)}) additionally counts upfront
+        already posted but not yet paid, and deducts everything already transferred. This table is
+        the per-investor view; the payout panel is what to accrue and pay now.
       </p>
 
       {/* Trail per-period detail */}

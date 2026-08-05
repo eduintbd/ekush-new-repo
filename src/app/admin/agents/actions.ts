@@ -9,6 +9,7 @@ import { postTrailFromPreview } from "@/lib/post-trail";
 import { parseAsOf } from "@/lib/agent-commission-preview";
 import {
   accrueAgentCommission,
+  describeSplit,
   parseDateOnly,
   payAgentCommission,
   PayoutError,
@@ -755,7 +756,7 @@ export async function accrueAgentCommissionAction(formData: FormData): Promise<v
     agentId,
     asOfRaw,
     "ok",
-    `Accrued BDT ${res.amount.toFixed(2)} across ${res.runs} run(s) — voucher ${res.voucherNo} dated ${res.periodEnd}. Dr Selling agent fees / Cr Liab-Selling Agent Commission.`,
+    `Accrued BDT ${res.amount.toFixed(2)} (${describeSplit(res.byType)}) across ${res.runs} run(s) — voucher ${res.voucherNo} dated ${res.periodEnd}. One voucher covers upfront and trail together: Dr Selling agent fees / Cr Liab-Selling Agent Commission.`,
   );
 }
 
