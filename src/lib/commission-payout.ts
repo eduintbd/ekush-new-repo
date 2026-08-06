@@ -280,6 +280,174 @@ export async function accrueAgentCommission(opts: {
   };
 }
 
+export type ReversalResult = {
+  /** Set when the run had never reached the GL, so no contra was needed. */
+  journalOnly: false | true;
+  voucherNo: string | null;
+  batchId: string | null;
+  amount: number;
+  type: string;
+  periodEnd: string | null;
+};
+
+/**
+ * Reverse one commission run — the restatement path.
+ *
+ * `reversed` existed in the schema and both readers already excluded it
+ * (`accrueAgentCommission` selects `status: "accrued"`, the payout selection
+ * likewise), but nothing ever WROTE it. So a run posted in error — against an
+ * investor who turned out not to be the agent's, say — could not be taken back
+ * except by editing the database by hand. This closes that.
+ *
+ * Deliberately NOT a delete. The run is the evidence that commission was
+ * computed for a period, and if it reached the GL the ledger has to show the
+ * correction rather than lose the original. Unlinking the investor does not
+ * remove runs either (see unlinkInvestor) — this is the supported way.
+ *
+ * Two cases, decided by whether the run ever reached the ledger:
+ *
+ *   journalBatchId IS NULL   Never accrued. Nothing in the GL to undo, so the
+ *                            row is simply marked `reversed` and drops out of
+ *                            the next accrual sweep. No voucher.
+ *
+ *   journalBatchId present   Already accrued by an AC voucher. Post the mirror
+ *                            image of that voucher so the payable comes back
+ *                            down and the expense is taken off the IS:
+ *                              Dr Liab-Selling Agent Commission   amount
+ *                              Cr Selling agent fees                    amount
+ *
+ * A `paid` run is refused outright: the money has left the bank, and taking it
+ * back is a refund or a credit note against the next payout, not a restatement.
+ *
+ * Idempotent through the data like its neighbours — an already-`reversed` row
+ * is refused rather than double-posted.
+ */
+export async function reverseCommissionRun(opts: {
+  runId: string;
+  /** Shown on the voucher and kept on the row. Required — a reversal with no
+   *  stated cause is indistinguishable from a mistake when audited later. */
+  reason: string;
+  /** Date for the contra voucher. Defaults to the run's own period end so the
+   *  correction lands in the period it belongs to; if that year is closed,
+   *  fiscalYearFor refuses and the caller can pass an open date instead. */
+  on?: Date;
+  actorId: string;
+}): Promise<ReversalResult> {
+  const { runId, actorId } = opts;
+  const reason = opts.reason.trim();
+  if (!reason) throw new PayoutError("A reason is required to reverse a commission run.");
+
+  const run = await prisma.commissionRun.findUnique({
+    where: { id: runId },
+    select: {
+      id: true,
+      agentId: true,
+      type: true,
+      amount: true,
+      status: true,
+      periodEnd: true,
+      journalBatchId: true,
+      notes: true,
+      agent: { select: { code: true, fullName: true } },
+    },
+  });
+  if (!run) throw new PayoutError("Commission run not found.");
+
+  if (run.status === "reversed") {
+    throw new PayoutError("This run has already been reversed.");
+  }
+  if (run.status === "paid") {
+    throw new PayoutError(
+      "This run has already been paid — the money has left the bank. Raise a refund or offset it against the next payout instead of reversing it.",
+    );
+  }
+
+  const amount = round2(Number(run.amount));
+  const stamp = `Reversed ${ymd(new Date())}: ${reason}`;
+  const notes = run.notes ? `${run.notes}\n${stamp}` : stamp;
+
+  // Never reached the GL — nothing to contra.
+  if (!run.journalBatchId) {
+    await withActor(actorId, async (tx) => {
+      await tx.commissionRun.update({
+        where: { id: run.id },
+        data: { status: "reversed", notes },
+      });
+    });
+    return {
+      journalOnly: false,
+      voucherNo: null,
+      batchId: null,
+      amount,
+      type: run.type,
+      periodEnd: run.periodEnd ? ymd(run.periodEnd) : null,
+    };
+  }
+
+  // Accrued to the GL — post the mirror voucher.
+  const on = opts.on ?? run.periodEnd ?? new Date();
+  const fy = await fiscalYearFor(on, "reversal voucher");
+  const desc = `Selling agent commission reversed — ${run.agent.code} ${run.agent.fullName} (${run.type}${
+    run.periodEnd ? ` to ${ymd(run.periodEnd)}` : ""
+  }): ${reason}`;
+
+  const batchId = randomUUID();
+  let voucherNo = "";
+
+  await withActor(actorId, async (tx) => {
+    voucherNo = await allocateVoucherNo(tx, fy.id, fy.label, "AC");
+
+    await tx.journal.createMany({
+      data: [
+        {
+          entryDate: on,
+          description: desc,
+          txnType: "AC",
+          voucherNo,
+          accountName: PAYABLE_ACCOUNT,
+          debit: amount,
+          credit: 0,
+          fiscalYearId: fy.id,
+          batchId,
+          agentId: run.agentId,
+          createdBy: actorId,
+        },
+        {
+          entryDate: on,
+          description: desc,
+          txnType: "AC",
+          voucherNo,
+          accountName: EXPENSE_ACCOUNT,
+          debit: 0,
+          credit: amount,
+          fiscalYearId: fy.id,
+          batchId,
+          agentId: run.agentId,
+          createdBy: actorId,
+        },
+      ],
+    });
+
+    // journalBatchId is left pointing at the ORIGINAL accrual batch. It is the
+    // idempotency lock for accrueAgentCommission (which only picks up nulls),
+    // so clearing it here would make a reversed run eligible to be accrued all
+    // over again. `status: reversed` is what takes it out of every sweep.
+    await tx.commissionRun.update({
+      where: { id: run.id },
+      data: { status: "reversed", notes },
+    });
+  });
+
+  return {
+    journalOnly: true,
+    voucherNo,
+    batchId,
+    amount,
+    type: run.type,
+    periodEnd: run.periodEnd ? ymd(run.periodEnd) : null,
+  };
+}
+
 /**
  * Post the payment voucher — the bank transfer that settles everything accrued
  * up to `billingEnd`, dated the day the money actually left.

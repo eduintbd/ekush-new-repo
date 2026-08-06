@@ -23,6 +23,7 @@ import {
   setAgentWatermark,
   suspendAgentUpfront,
   suspendAgent,
+  reverseCommissionRunAction,
   unlinkInvestor,
   updateAgentTerm,
 } from "@/app/admin/agents/actions";
@@ -625,20 +626,83 @@ export default async function AgentDetailPage({
           {agent.commissionRuns.length === 0 ? (
             <p className="text-sm text-zinc-500">No runs yet.</p>
           ) : (
-            <table className="min-w-full text-sm">
-              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                {agent.commissionRuns.map((r) => (
-                  <tr key={r.id}>
-                    <td className="py-1.5 pr-4 text-xs uppercase">{r.type}</td>
-                    <td className="py-1.5 pr-4">
-                      {r.periodEnd ? r.periodEnd.toISOString().slice(0, 10) : "—"}
-                    </td>
-                    <td className="py-1.5 pr-4 text-right tabular-nums">{formatBdt(Number(r.amount))}</td>
-                    <td className="py-1.5 pr-4 text-xs">{r.status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <p className="mb-3 text-xs text-zinc-500">
+                These are posted records, not a live calculation. Unlinking an investor stops
+                future accruals but deliberately leaves earlier runs standing — reverse one here
+                if it should not have been posted. A reversal keeps the row and, if it already
+                reached the ledger, posts the contra voucher.
+              </p>
+              <table className="min-w-full text-sm">
+                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {agent.commissionRuns.map((r) => {
+                    // `paid` is out: the money has left the bank, so that is a
+                    // refund, not a restatement. `reversed` is already done.
+                    const reversible = r.status !== "paid" && r.status !== "reversed";
+                    return (
+                      <tr key={r.id}>
+                        <td className="py-1.5 pr-4 text-xs uppercase">{r.type}</td>
+                        <td className="py-1.5 pr-4">
+                          {r.periodEnd ? r.periodEnd.toISOString().slice(0, 10) : "—"}
+                        </td>
+                        <td className="py-1.5 pr-4 text-right tabular-nums">{formatBdt(Number(r.amount))}</td>
+                        <td className="py-1.5 pr-4 text-xs">
+                          <span className={r.status === "reversed" ? "text-zinc-400 line-through" : ""}>
+                            {r.status}
+                          </span>
+                          {r.journalBatchId ? (
+                            <span className="ml-1.5 text-[10px] text-zinc-500">on ledger</span>
+                          ) : null}
+                        </td>
+                        <td className="py-1.5 text-right">
+                          {reversible ? (
+                            <form
+                              action={reverseCommissionRunAction}
+                              className="flex items-center justify-end gap-1.5"
+                              data-confirm={`Reverse this ${r.type} of ${formatBdt(Number(r.amount))}?${
+                                r.journalBatchId
+                                  ? " It is already on the ledger, so a contra voucher will be posted."
+                                  : " It never reached the ledger, so no voucher is needed."
+                              }`}
+                            >
+                              <input type="hidden" name="runId" value={r.id} />
+                              <input type="hidden" name="agentId" value={agent.id} />
+                              <input type="hidden" name="asOf" value={sp.asOf ?? ""} />
+                              <input
+                                type="text"
+                                name="reason"
+                                required
+                                placeholder="reason (required)"
+                                className="w-44 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-[11px] dark:border-zinc-700 dark:bg-zinc-950"
+                              />
+                              {/* Only needed when the run's own fiscal year has
+                                  been closed; blank dates the contra on the
+                                  period end, where the correction belongs. */}
+                              <input
+                                type="date"
+                                name="on"
+                                title="Contra voucher date — leave blank to use the period end"
+                                className="rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-[11px] dark:border-zinc-700 dark:bg-zinc-950"
+                              />
+                              <button
+                                type="submit"
+                                className="text-[10px] text-red-600 hover:underline dark:text-red-400"
+                              >
+                                reverse
+                              </button>
+                            </form>
+                          ) : (
+                            <span className="text-[10px] text-zinc-400">
+                              {r.status === "paid" ? "paid — refund instead" : "reversed"}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </>
           )}
         </Section>
 

@@ -12,6 +12,7 @@ import {
   describeSplit,
   parseDateOnly,
   payAgentCommission,
+  reverseCommissionRun,
   PayoutError,
 } from "@/lib/commission-payout";
 import { runUpfront } from "@/lib/run-upfront";
@@ -858,4 +859,64 @@ export async function createAgent(formData: FormData): Promise<void> {
   }
   revalidatePath("/admin/agents");
   redirect(`/admin/agents/${created.id}`);
+}
+
+/**
+ * Reverse one commission run — the restatement path.
+ *
+ * Needed because unlinking an investor deliberately preserves historical runs
+ * (see unlinkInvestor), so a run posted in error had no way back short of
+ * editing the database. `reversed` was already excluded by every reader; this
+ * is what finally writes it.
+ *
+ * Refused for a `paid` run: the money has left, so that is a refund, not a
+ * restatement. See reverseCommissionRun for the accounting.
+ */
+export async function reverseCommissionRunAction(formData: FormData): Promise<void> {
+  const me = await requireRole(["admin", "checker", "accountant"]);
+  const agentId = String(formData.get("agentId") ?? "").trim();
+  if (!agentId) redirect("/admin/agents?error=Missing+agent");
+
+  const runId = String(formData.get("runId") ?? "").trim();
+  const asOfRaw = String(formData.get("asOf") ?? "").trim();
+  const reason = String(formData.get("reason") ?? "").trim();
+
+  if (!runId) payoutBack(agentId, asOfRaw, "error", "Missing commission run.");
+  if (!reason) {
+    payoutBack(
+      agentId,
+      asOfRaw,
+      "error",
+      "A reason is required to reverse a commission run — it is what the audit trail shows later.",
+    );
+  }
+
+  // Optional override for the contra voucher's date. Left blank the reversal
+  // is dated the run's own period end, which is where the correction belongs;
+  // it is only needed when that fiscal year has since been closed.
+  const onRaw = String(formData.get("on") ?? "").trim();
+  const on = onRaw ? parseDateOnly(onRaw) : undefined;
+  if (onRaw && !on) {
+    payoutBack(agentId, asOfRaw, "error", "Reversal date must be YYYY-MM-DD.");
+  }
+
+  let res;
+  try {
+    res = await reverseCommissionRun({ runId, reason, on: on ?? undefined, actorId: me.id });
+  } catch (err) {
+    if (err instanceof PayoutError) payoutBack(agentId, asOfRaw, "error", err.message);
+    throw err;
+  }
+
+  revalidatePath(`/admin/agents/${agentId}`);
+  for (const p of STATEMENT_PATHS) revalidatePath(p);
+
+  payoutBack(
+    agentId,
+    asOfRaw,
+    "ok",
+    res.journalOnly
+      ? `Reversed ${res.type} of BDT ${res.amount.toFixed(2)} — contra voucher ${res.voucherNo} posted (Dr Liab-Selling Agent Commission / Cr Selling agent fees). The run stays on record as reversed.`
+      : `Reversed ${res.type} of BDT ${res.amount.toFixed(2)}. It had not been accrued to the ledger, so no voucher was needed — it simply drops out of the next accrual.`,
+  );
 }
