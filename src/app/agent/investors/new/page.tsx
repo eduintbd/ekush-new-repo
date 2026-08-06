@@ -32,7 +32,9 @@ export default function NewInvestorPage() {
       setError(data.error ?? "Could not submit the registration.");
       return;
     }
-    setDoneCode(data.tempCode ?? "");
+    // Prefer the bare reference (S00001-260806-K3F9); fall back to the temp
+    // code for a server that predates it.
+    setDoneCode(data.reference ?? data.tempCode ?? "");
   }
 
   if (doneCode !== null) {
@@ -45,6 +47,23 @@ export default function NewInvestorPage() {
             dashboard tagged with your agent code. The admin will assign the investor code and
             send the welcome email.
           </p>
+
+          {/* The reference was previously captured and then never shown, so the
+              agent had nothing to quote when following the form up. */}
+          {doneCode ? (
+            <div className="mt-4 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 dark:border-emerald-800 dark:bg-emerald-950/40">
+              <div className="text-[11px] uppercase tracking-wider text-emerald-800 dark:text-emerald-400">
+                Reference number
+              </div>
+              <div className="mt-0.5 font-mono text-lg font-semibold text-emerald-900 dark:text-emerald-200">
+                {doneCode}
+              </div>
+              <p className="mt-1 text-xs text-emerald-800/80 dark:text-emerald-300/80">
+                Quote this when you follow the registration up. Accounts can see it against the
+                pending registration, so they know the form came from you.
+              </p>
+            </div>
+          ) : null}
           <div className="mt-5 flex gap-3">
             <button
               onClick={() => { setDoneCode(null); router.refresh(); }}

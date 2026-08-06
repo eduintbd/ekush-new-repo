@@ -54,7 +54,50 @@ export async function POST(req: NextRequest) {
 
   const userId = randomUUID();
   const investorId = randomUUID();
-  const tempCode = `PENDING-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+  // Reference number the accountant can trace back to the agent who filled the
+  // form, e.g. PENDING-S00001-260806-K3F9.
+  //
+  // The "PENDING-" prefix is NOT decoration and must stay first: the portal
+  // treats it as the marker for "no real investor code yet" in at least eight
+  // places — assigning the real code on approval, locking KYC fields on
+  // /profile, suppressing the welcome WhatsApp so it never quotes a
+  // placeholder, the pending banner on the investor dashboard, and the xlsx
+  // import's code matching. This repo relies on it too (agent-sourced.ts
+  // filters `code NOT LIKE 'PENDING-%'`). Embedding the agent code INSIDE the
+  // prefix gives the accountant a readable reference without disturbing any of
+  // that.
+  //
+  // Replaced `PENDING-<base36 ts><3 random>`, which was unreadable and said
+  // nothing about who submitted it.
+  //
+  // The suffix is drawn from a 32-symbol alphabet with the ambiguous glyphs
+  // (0/O, 1/I) removed, since this is a number people read down a phone. That
+  // is 32^5 ≈ 33.5M per agent per day against the unique constraint on
+  // investors.investorCode. Filtering base64 down to alphanumerics was tried
+  // first and rejected: the filter plus the padding it needed cost enough
+  // entropy to produce collisions in a 20k sample.
+  const refDate = new Date().toISOString().slice(2, 10).replace(/-/g, ""); // yymmdd
+  const ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const newRef = () =>
+    `${scope.agentCode}-${refDate}-${Array.from(randomBytes(5))
+      .map((b) => ALPHABET[b % ALPHABET.length])
+      .join("")}`;
+
+  // Confirm the code is free before doing anything else. The odds of a clash
+  // are tiny, but the cost is not: file uploads happen below, so an unchecked
+  // collision would fail the insert only after the agent had waited through
+  // nine uploads, with everything to re-enter. Checking here is one indexed
+  // lookup on a unique column.
+  let reference = newRef();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const clash = await prisma.$queryRawUnsafe<Array<{ one: number }>>(
+      `SELECT 1 AS one FROM public.investors WHERE "investorCode" = $1 LIMIT 1`,
+      `PENDING-${reference}`,
+    );
+    if (clash.length === 0) break;
+    reference = newRef();
+  }
+  const tempCode = `PENDING-${reference}`;
 
   // 1. Upload KYC files first (need investorId for the storage key). Any bad
   //    file aborts before we write DB rows (orphan uploads are harmless).
@@ -81,6 +124,10 @@ export async function POST(req: NextRequest) {
   const snapshot = {
     source: "AGENT_CREATED",
     sourcingAgentCode: scope.agentCode,
+    // Kept here as well as in the temp code, because the temp code is
+    // overwritten with the real A00xxx the moment the admin approves. The
+    // snapshot is permanent, so the reference stays traceable afterwards.
+    agentReference: reference,
     permanentAddress: s(form, "permanentAddress") || null,
     applicant: {
       name,
@@ -159,5 +206,5 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return Response.json({ ok: true, tempCode });
+  return Response.json({ ok: true, tempCode, reference, agentCode: scope.agentCode });
 }
