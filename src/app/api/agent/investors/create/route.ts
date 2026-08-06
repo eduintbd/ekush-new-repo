@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
   const userId = randomUUID();
   const investorId = randomUUID();
   // Reference number the accountant can trace back to the agent who filled the
-  // form, e.g. PENDING-S00001-260806-K3F9.
+  // form, e.g. PENDING-S00001-PNZXP.
   //
   // The "PENDING-" prefix is NOT decoration and must stay first: the portal
   // treats it as the marker for "no real investor code yet" in at least eight
@@ -70,16 +70,20 @@ export async function POST(req: NextRequest) {
   // Replaced `PENDING-<base36 ts><3 random>`, which was unreadable and said
   // nothing about who submitted it.
   //
-  // The suffix is drawn from a 32-symbol alphabet with the ambiguous glyphs
-  // (0/O, 1/I) removed, since this is a number people read down a phone. That
-  // is 32^5 ≈ 33.5M per agent per day against the unique constraint on
-  // investors.investorCode. Filtering base64 down to alphanumerics was tried
-  // first and rejected: the filter plus the padding it needed cost enough
-  // entropy to produce collisions in a 20k sample.
-  const refDate = new Date().toISOString().slice(2, 10).replace(/-/g, ""); // yymmdd
+  // Deliberately just the agent code plus the shortest discriminator that keeps
+  // it unique. A yymmdd segment was tried and dropped: it lengthened the code
+  // without telling the accountant anything the "Registered" column does not
+  // already show. The trailing group cannot go as well — investors.investorCode
+  // is unique, so a second registration by the same agent would collide on a
+  // bare PENDING-S00001.
+  //
+  // The suffix uses a 32-symbol alphabet with the ambiguous glyphs (0/O, 1/I)
+  // removed, since this gets read down a phone. Filtering base64 to
+  // alphanumerics was tried first and rejected: the filter plus the padding it
+  // needed cost enough entropy to collide in a 20k sample.
   const ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
   const newRef = () =>
-    `${scope.agentCode}-${refDate}-${Array.from(randomBytes(5))
+    `${scope.agentCode}-${Array.from(randomBytes(5))
       .map((b) => ALPHABET[b % ALPHABET.length])
       .join("")}`;
 
