@@ -194,12 +194,19 @@ function Select({
   return (
     <label className="block text-sm">
       <span className="mb-1 block text-zinc-600 dark:text-zinc-400">{label}</span>
+      {/* The dark styling has to reach the options as well. Chrome paints the
+          popup list from the option's own colours, so a dark select with bare
+          options renders near-white text on the default white — the list looks
+          empty and there is no visible way to pick CIP over Cash. color-scheme
+          tells the browser to draw the native chrome dark to match. */}
       <select
         name={name}
-        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
+        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:[color-scheme:dark]"
       >
         {options.map(([v, l]) => (
-          <option key={v} value={v}>{l}</option>
+          <option key={v} value={v} className="bg-white text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100">
+            {l}
+          </option>
         ))}
       </select>
     </label>
