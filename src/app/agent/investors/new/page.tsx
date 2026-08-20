@@ -101,7 +101,7 @@ export default function NewInvestorPage() {
             <Field name="tinNumber" label="e-TIN" />
             <Field name="fatherName" label="Father's name" />
             <Field name="motherName" label="Mother's name" />
-            <Select name="dividendOption" label="Dividend option" options={[["CASH", "Cash"], ["CIP", "Reinvest (CIP)"]]} />
+            <Select name="dividendOption" label="Dividend option" options={[["CASH", "Cash"], ["CIP", "CIP"]]} />
           </Section>
 
           <Section title="Contact">
