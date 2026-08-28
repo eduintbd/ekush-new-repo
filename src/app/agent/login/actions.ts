@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { getMfaStatus, hasVerifiedFactor, isStepped } from "@/lib/mfa";
+import { isAuthUnavailable, AUTH_UNAVAILABLE_MESSAGE } from "@/lib/supabase/resilience";
 
 function back(error: string, next?: string): never {
   const params = new URLSearchParams({ error });
@@ -27,6 +28,13 @@ export async function signInAgent(formData: FormData): Promise<void> {
 
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  // An unreachable auth service is not a bad password. Telling an agent their
+  // credentials are wrong during a GoTrue outage sends them off resetting a
+  // password that was never the problem (2026-08-28).
+  if (error && isAuthUnavailable(error)) {
+    console.error("[agent/login] Supabase Auth unreachable:", error.message);
+    back(AUTH_UNAVAILABLE_MESSAGE, next);
+  }
   if (error || !data.user) {
     back("Invalid email or password.", next);
   }

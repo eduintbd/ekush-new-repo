@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { authTimeoutFetch } from "./resilience";
 
 export async function createSupabaseServerClient() {
   const cookieStore = await cookies();
@@ -7,6 +8,9 @@ export async function createSupabaseServerClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      // Auth calls get a deadline — a hung GoTrue must not hold the request
+      // open until the gateway 504s. See ./resilience.ts.
+      global: { fetch: authTimeoutFetch() },
       cookies: {
         getAll() {
           return cookieStore.getAll();

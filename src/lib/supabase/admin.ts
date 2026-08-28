@@ -8,6 +8,7 @@
 // than crash.
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { authTimeoutFetch, AUTH_ADMIN_TIMEOUT_MS } from "./resilience";
 
 let cached: SupabaseClient | null = null;
 
@@ -18,6 +19,9 @@ export function createSupabaseAdminClient(): SupabaseClient | null {
   if (!url || !serviceKey) return null;
   cached = createClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    // Deadline on /auth/v1/* only (invite links, listUsers, MFA admin), so a
+    // wedged GoTrue can't park an admin action. Storage/REST stay untimed.
+    global: { fetch: authTimeoutFetch(AUTH_ADMIN_TIMEOUT_MS) },
   });
   return cached;
 }

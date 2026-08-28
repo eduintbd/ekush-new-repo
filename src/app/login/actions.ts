@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { getMfaStatus, hasVerifiedFactor, isStepped } from "@/lib/mfa";
+import { isAuthUnavailable, AUTH_UNAVAILABLE_MESSAGE } from "@/lib/supabase/resilience";
 import type { UserRole } from "@/generated/prisma";
 
 const STAFF_ROLES: ReadonlyArray<UserRole> = ["admin", "checker", "accountant", "auditor"];
@@ -32,6 +33,11 @@ export async function signInStaff(formData: FormData): Promise<void> {
 
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  // Auth service down ≠ wrong password. See the agent action for the rationale.
+  if (error && isAuthUnavailable(error)) {
+    console.error("[login] Supabase Auth unreachable:", error.message);
+    back("/login", AUTH_UNAVAILABLE_MESSAGE, next);
+  }
   if (error || !data.user) {
     back("/login", "Invalid email or password.", next);
   }

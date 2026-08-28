@@ -29,6 +29,9 @@ function isPublic(pathname: string): boolean {
     // hash before the client can read it).
     pathname === "/agent/set-password" ||
     pathname === "/agent/forgot-password" ||
+    // The auth-outage page. Public by necessity: during an outage nobody can
+    // be identified, and it must render for a direct visit too.
+    pathname === "/service-unavailable" ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api/health") ||
     // Cron routes carry no Supabase session — Vercel Cron calls them with
@@ -42,8 +45,26 @@ function isPublic(pathname: string): boolean {
 }
 
 export async function middleware(req: NextRequest) {
-  const { res, user } = await updateSupabaseSession(req);
+  const { res, user, authUnavailable } = await updateSupabaseSession(req);
   const { pathname } = req.nextUrl;
+
+  // Auth service unreachable (2026-08-28 GoTrue outage). We cannot tell a
+  // valid session from an expired one, so redirecting to a login page would
+  // both lie ("your session ended") and send the user at a sign-in that
+  // can't work either. Answer honestly and fast instead — public pages are
+  // unaffected, so /, /login and /agent/login still render.
+  if (authUnavailable && !isPublic(pathname)) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        { error: "auth_unavailable" },
+        { status: 503, headers: { "Retry-After": "60" } },
+      );
+    }
+    return NextResponse.rewrite(new URL("/service-unavailable", req.url), {
+      status: 503,
+      headers: { "Retry-After": "60", "Cache-Control": "no-store" },
+    });
+  }
 
   if (isPublic(pathname)) return res;
 

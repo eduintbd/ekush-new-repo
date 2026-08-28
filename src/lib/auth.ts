@@ -12,32 +12,60 @@ import {
   isStepped,
   mfaRequiredForRole,
 } from "@/lib/mfa";
+import { isAuthUnavailable, withAuthDeadline } from "@/lib/supabase/resilience";
 
 export type CurrentProfile = Profile;
+
+/** Where the guards send someone when GoTrue itself is wedged. */
+const AUTH_OUTAGE_PATH = "/service-unavailable";
 
 /**
  * Returns the signed-in user's Profile, or null if unauthenticated /
  * profile missing / Supabase or DB not configured.
  */
 export async function getCurrentProfile(): Promise<CurrentProfile | null> {
+  const outcome = await getProfileOutcome();
+  return outcome.status === "ok" ? outcome.profile : null;
+}
+
+/**
+ * Three-way version of getCurrentProfile(). "Not signed in" and "the auth
+ * service is down" are different facts: the first means "go to /login", the
+ * second means "come back in a few minutes". Collapsing them bounces a
+ * validly signed-in user to a login form that cannot work either.
+ */
+export type ProfileOutcome =
+  | { status: "ok"; profile: CurrentProfile }
+  | { status: "anonymous" }
+  | { status: "auth_unavailable" };
+
+export async function getProfileOutcome(): Promise<ProfileOutcome> {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    return null;
+    return { status: "anonymous" };
   }
   let supabase;
   try {
     supabase = await createSupabaseServerClient();
   } catch {
-    return null;
+    return { status: "anonymous" };
   }
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
+
+  const result = await withAuthDeadline(supabase.auth.getUser());
+  if (result.status === "timeout") return { status: "auth_unavailable" };
+  if (result.status === "error") {
+    if (isAuthUnavailable(result.error)) return { status: "auth_unavailable" };
+    throw result.error;
+  }
+
+  const { data, error } = result.value;
+  if (error && isAuthUnavailable(error)) return { status: "auth_unavailable" };
+  if (!data.user) return { status: "anonymous" };
 
   try {
-    return await prisma.profile.findUnique({ where: { id: user.id } });
+    const profile = await prisma.profile.findUnique({ where: { id: data.user.id } });
+    return profile ? { status: "ok", profile } : { status: "anonymous" };
   } catch {
-    return null;
+    return { status: "anonymous" };
   }
 }
 
@@ -49,11 +77,23 @@ const STAFF_ROLES: ReadonlyArray<UserRole> = ["admin", "checker", "accountant", 
  * possible session check. Redirects to /login if not signed in.
  */
 export async function requireAuthenticated(): Promise<CurrentProfile> {
-  const p = await getCurrentProfile();
-  if (!p || !p.isActive) {
+  const p = await profileOrBounce("/login");
+  if (!p.isActive) {
     redirect("/login");
   }
   return p;
+}
+
+/**
+ * Shared front half of every guard: resolve the profile, or leave via a
+ * redirect. An auth outage goes to the 503 page, not to `signedOutPath` —
+ * the user is probably signed in and the login page can't help them.
+ */
+async function profileOrBounce(signedOutPath: string): Promise<CurrentProfile> {
+  const outcome = await getProfileOutcome();
+  if (outcome.status === "auth_unavailable") redirect(AUTH_OUTAGE_PATH);
+  if (outcome.status === "anonymous") redirect(signedOutPath);
+  return outcome.profile;
 }
 
 /**
@@ -63,8 +103,8 @@ export async function requireAuthenticated(): Promise<CurrentProfile> {
  *   - if has factor but session is AAL1 → /login/mfa?next=<current>
  */
 export async function requireStaff(): Promise<CurrentProfile> {
-  const p = await getCurrentProfile();
-  if (!p || !p.isActive || !STAFF_ROLES.includes(p.role)) {
+  const p = await profileOrBounce("/login");
+  if (!p.isActive || !STAFF_ROLES.includes(p.role)) {
     redirect("/login");
   }
   if (mfaRequiredForRole(p.role)) {
@@ -75,8 +115,8 @@ export async function requireStaff(): Promise<CurrentProfile> {
 
 /** Page guard. Redirects to /agent/login if not signed in as active agent. */
 export async function requireAgent(): Promise<CurrentProfile> {
-  const p = await getCurrentProfile();
-  if (!p || !p.isActive || p.role !== "selling_agent") {
+  const p = await profileOrBounce("/agent/login");
+  if (!p.isActive || p.role !== "selling_agent") {
     redirect("/agent/login");
   }
   // MFA is optional for selling agents — if they have a factor, still
@@ -88,8 +128,8 @@ export async function requireAgent(): Promise<CurrentProfile> {
 
 /** Page guard. Restrict to a specific subset of roles. */
 export async function requireRole(roles: ReadonlyArray<UserRole>): Promise<CurrentProfile> {
-  const p = await getCurrentProfile();
-  if (!p || !p.isActive || !roles.includes(p.role)) {
+  const p = await profileOrBounce("/login");
+  if (!p.isActive || !roles.includes(p.role)) {
     redirect("/login");
   }
   if (mfaRequiredForRole(p.role)) {
