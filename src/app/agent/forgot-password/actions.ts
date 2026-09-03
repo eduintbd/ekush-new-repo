@@ -24,7 +24,7 @@ export async function requestAgentReset(email: string): Promise<ResetOutcome> {
   if (!agent) return { status: "no_agent" };
 
   const res = await mintAndSendAgentInvite(
-    { email: agent.email, fullName: agent.fullName, code: agent.code },
+    { id: agent.id, email: agent.email, fullName: agent.fullName, code: agent.code },
     await requestBaseUrl(),
   );
   if (!res.ok) return { status: "failed", error: res.error ?? "Could not create the link." };

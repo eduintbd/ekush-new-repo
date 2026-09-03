@@ -20,6 +20,7 @@ import {
   reinstateAgent,
   reinstateAgentUpfront,
   resendAgentInvite,
+  setAgentTemporaryPassword,
   setAgentWatermark,
   suspendAgentUpfront,
   suspendAgent,
@@ -49,6 +50,8 @@ type Search = {
   error?: string;
   editTerm?: string;
   link?: string;
+  /** Break-glass credential, shown once — see setAgentTemporaryPassword. */
+  tempPassword?: string;
   /** Billing cut-off (YYYY-MM-DD) the whole commission panel is computed at. */
   asOf?: string;
 };
@@ -160,6 +163,7 @@ export default async function AgentDetailPage({
   const suspend = suspendAgent.bind(null, agent.id);
   const reinstate = reinstateAgent.bind(null, agent.id);
   const resend = resendAgentInvite.bind(null, agent.id);
+  const tempPw = setAgentTemporaryPassword.bind(null, agent.id);
   const del = deleteAgent.bind(null, agent.id);
 
   // Resolve the current (open) term per category for inline edit
@@ -211,6 +215,16 @@ export default async function AgentDetailPage({
                       Resend invite
                     </button>
                   </form>
+                  {isAdmin && (
+                    <form
+                      action={tempPw}
+                      data-confirm={`Set a temporary password for ${agent.email}? Use this only when email cannot reach them — you will read the password out over the phone, and any set-password link already sent stops working.`}
+                    >
+                      <button className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800">
+                        Temporary password
+                      </button>
+                    </form>
+                  )}
                   <form action={suspend}>
                     <button className="rounded-md bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-700">
                       Suspend
@@ -253,6 +267,23 @@ export default async function AgentDetailPage({
             {sp.error}
           </div>
         )}
+        {sp.tempPassword && (
+          <div className="rounded-md border border-amber-400 bg-amber-50 px-3 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+            <p className="mb-2 font-medium">
+              Temporary password — shown once. Read it to {agent.fullName} over the phone.
+            </p>
+            <input
+              readOnly
+              value={sp.tempPassword}
+              className="w-full select-all rounded border border-amber-400 bg-white px-2 py-1.5 font-mono text-sm tracking-wider text-zinc-900 dark:border-amber-700 dark:bg-zinc-900 dark:text-zinc-100"
+            />
+            <p className="mt-1.5 text-[11px] text-amber-800/80 dark:text-amber-200/70">
+              It is not stored anywhere you can look up again — reloading this page loses it.
+              Tell the agent to change it from “Forgot password” on the sign-in page once
+              they are in.
+            </p>
+          </div>
+        )}
         {sp.link && (
           <div className="rounded-md border border-sky-300 bg-sky-50 px-3 py-3 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-100">
             <p className="mb-2 font-medium">
@@ -264,8 +295,10 @@ export default async function AgentDetailPage({
               className="w-full select-all rounded border border-sky-300 bg-white px-2 py-1.5 font-mono text-xs text-zinc-800 dark:border-sky-800 dark:bg-zinc-900 dark:text-zinc-200"
             />
             <p className="mt-1.5 text-[11px] text-sky-800/80 dark:text-sky-200/70">
-              Click the field to select, then copy. The link is one-time and expires; use
-              “Resend invite” to generate a fresh one.
+              Click the field to select, then copy. Safe to send over WhatsApp or Teams —
+              opening it does nothing until the agent presses “Continue”, so link scanners
+              and preview crawlers can no longer burn it. It works once and then expires;
+              use “Resend invite” for a fresh one, which voids this one.
             </p>
           </div>
         )}

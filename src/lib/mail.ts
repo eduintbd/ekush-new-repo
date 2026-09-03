@@ -102,13 +102,13 @@ export function agentInviteEmail(opts: {
         <h1 style="margin:0 0 12px;font-size:18px">${heading}</h1>
         <p style="margin:0 0 20px;font-size:14px;line-height:1.6">${intro}</p>
         <p style="margin:0 0 8px"><a href="${opts.actionUrl}" style="display:inline-block;background:${BRAND};color:#fafaf9;text-decoration:none;padding:12px 22px;border-radius:8px;font-size:14px;font-weight:600">${opts.isReset ? "Reset password" : "Set your password"}</a></p>
-        <p style="margin:16px 0 0;font-size:12px;color:#78716c">This link is valid for a limited time. If it expires, use “Forgot password” on the sign-in page.</p>
+        <p style="margin:16px 0 0;font-size:12px;color:#78716c">Opening the page is safe — nothing happens until you press “Continue” there. The link works once and is valid for a limited time; if it expires, use “Forgot password” on the sign-in page.</p>
         ${loginLineHtml}
       </td></tr>
     </table>
   </td></tr></table></body></html>`;
 
-  const text = `${heading}\n\n${opts.isReset ? "Reset your password" : `Your selling-agent account (code ${opts.code}) has been approved.`}\nSet your password: ${opts.actionUrl}\nIf the link has expired, use "Forgot password" on the sign-in page.${loginLineText}`;
+  const text = `${heading}\n\n${opts.isReset ? "Reset your password" : `Your selling-agent account (code ${opts.code}) has been approved.`}\nSet your password: ${opts.actionUrl}\nOpening the page is safe — nothing happens until you press "Continue" there.\nIf the link has expired, use "Forgot password" on the sign-in page.${loginLineText}`;
 
   return { subject, html, text };
 }

@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { signInAgent } from "./actions";
 
-type Search = { next?: string; error?: string };
+type Search = { next?: string; error?: string; ok?: string };
 
 export const metadata = { title: "Agent sign-in — Ekush ERP" };
 
@@ -42,6 +42,12 @@ export default async function AgentLoginPage({
         </p>
 
         {!authConfigured && <AuthNotConfigured />}
+
+        {sp.ok && (
+          <p className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+            {sp.ok}
+          </p>
+        )}
 
         <form action={signInAgent} className="mt-8 space-y-4">
           <input type="hidden" name="next" value={sp.next ?? "/agent"} />

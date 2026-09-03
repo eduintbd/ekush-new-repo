@@ -52,6 +52,41 @@ model Profile {
   @@schema("xsystem")
 }
 
+/// One-time ticket that fronts an agent's set-password link.
+///
+/// WHY THIS EXISTS. We used to email Supabase's own
+/// `…/auth/v1/verify?token=…` URL. GoTrue burns that token on the FIRST GET,
+/// and corporate mail gateways (Defender SafeLinks, Proofpoint URL Defense)
+/// plus chat link-preview crawlers fetch every URL they see. Fintra's gateway
+/// spent the token 17 seconds after the invite left and 19 seconds after the
+/// resend — before the agent ever clicked — so every click landed on
+/// `error_code=otp_expired` and the agent could never sign in.
+///
+/// A ticket URL on our own domain fixes that: a GET only renders a page. The
+/// Supabase link is minted and redeemed by the POST behind a button, which no
+/// prefetcher issues. The Supabase token therefore exists for milliseconds,
+/// server-side, and never travels through email at all.
+///
+/// No bearer secret is stored: the ticket records only WHICH email may set a
+/// password and until when, and we hold a SHA-256 of the ticket token so a
+/// database leak cannot be replayed against the flow.
+model AgentPasswordTicket {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// SHA-256 (hex) of the token in the emailed URL. Never the token itself.
+  tokenHash String  @unique @map("token_hash")
+  email     String
+  agentId   String? @map("agent_id") @db.Uuid
+  /// Reset vs first-time onboarding — only affects the email wording.
+  isReset    Boolean   @default(false) @map("is_reset")
+  expiresAt  DateTime  @map("expires_at")
+  redeemedAt DateTime? @map("redeemed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([email])
+  @@map("agent_password_tickets")
+  @@schema("xsystem")
+}
+
 // ─── Accounting (back-office) ────────────────────────────────────
 
 // Account groups (Tally-style): hierarchical buckets that classify

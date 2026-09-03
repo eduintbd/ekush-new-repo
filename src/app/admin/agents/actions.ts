@@ -1,5 +1,6 @@
 "use server";
 
+import { randomInt } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma, UserRole } from "@/generated/prisma";
@@ -91,7 +92,7 @@ export async function approveAgent(id: string): Promise<void> {
 
   // Provision the login + email the set-password link.
   const invite = await mintAndSendAgentInvite(
-    { email: agent!.email, fullName: agent!.fullName, code: agent!.code },
+    { id, email: agent!.email, fullName: agent!.fullName, code: agent!.code },
     await requestBaseUrl(),
   );
   if (!invite.ok || !invite.userId) {
@@ -164,7 +165,7 @@ export async function resendAgentInvite(id: string): Promise<void> {
   if (!agent) redirect("/admin/agents?error=Agent+not+found");
 
   const invite = await mintAndSendAgentInvite(
-    { email: agent!.email, fullName: agent!.fullName, code: agent!.code },
+    { id, email: agent!.email, fullName: agent!.fullName, code: agent!.code },
     await requestBaseUrl(),
   );
   if (!invite.ok || !invite.userId) {
@@ -233,6 +234,80 @@ export async function resendAgentInvite(id: string): Promise<void> {
   params.set(invite.emailSent ? "ok" : "error", note);
   if (invite.actionUrl) params.set("link", invite.actionUrl);
   redirect(`/admin/agents/${id}?${params.toString()}`);
+}
+
+/**
+ * Break-glass: set a temporary password on the agent's login and show it to
+ * the admin once, to be read out over the phone.
+ *
+ * For when email is the problem and not the link — a bounced address, a
+ * gateway that quarantines the message outright, an agent who cannot receive
+ * mail today. The normal path is "Resend invite"; this exists so nobody is
+ * ever stuck.
+ *
+ * `email_confirm` is forced because an agent who never opened their invite is
+ * still unconfirmed, and GoTrue refuses a password sign-in for an unconfirmed
+ * address — the password would be set and still not work.
+ *
+ * Admin-only: it hands one person another person's credentials.
+ */
+export async function setAgentTemporaryPassword(id: string): Promise<void> {
+  await requireRole(["admin"]);
+  const agent = await prisma.sellingAgent.findUnique({ where: { id } });
+  if (!agent) redirect("/admin/agents?error=Agent+not+found");
+  if (!agent!.userId) {
+    redirect(
+      `/admin/agents/${id}?error=${encodeURIComponent("This agent has no login yet — approve them first.")}`,
+    );
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    redirect(`/admin/agents/${id}?error=${encodeURIComponent("SUPABASE_SERVICE_ROLE_KEY is not configured.")}`);
+  }
+
+  const password = generateTemporaryPassword();
+  const { error } = await admin!.auth.admin.updateUserById(agent!.userId!, {
+    password,
+    email_confirm: true,
+  });
+  if (error) {
+    redirect(`/admin/agents/${id}?error=${encodeURIComponent(`Could not set a password: ${error.message}`)}`);
+  }
+
+  // Any outstanding emailed ticket is now stale — void it so two different
+  // credentials aren't live at once.
+  await prisma.agentPasswordTicket.updateMany({
+    where: { email: agent!.email, redeemedAt: null },
+    data: { redeemedAt: new Date() },
+  });
+
+  revalidatePath(`/admin/agents/${id}`);
+  redirect(
+    `/admin/agents/${id}?${new URLSearchParams({
+      ok: `Temporary password set for ${agent!.email}. Read it to them over the phone — it is shown once and is not stored anywhere you can look it up again.`,
+      tempPassword: password,
+    }).toString()}`,
+  );
+}
+
+/** A temp password that satisfies src/lib/password-rules.ts by construction,
+ *  and stays readable over a phone line (no lookalike glyphs). */
+function generateTemporaryPassword(): string {
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const lower = "abcdefghijkmnpqrstuvwxyz";
+  const digit = "23456789";
+  const symbol = "!@#$%*?";
+  const all = upper + lower + digit + symbol;
+  const pick = (set: string) => set[randomInt(set.length)];
+  const chars = [pick(upper), pick(lower), pick(digit), pick(symbol)];
+  while (chars.length < 14) chars.push(pick(all));
+  // Fisher-Yates, so the guaranteed classes aren't always in slots 0-3.
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
 }
 
 /**
