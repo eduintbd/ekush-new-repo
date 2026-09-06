@@ -15,17 +15,20 @@ import { uploadKycFile, KycUploadError } from "@/lib/kyc-upload";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// (form field name → Document.type). Only these files are accepted.
-const FILE_FIELDS: Array<[string, string]> = [
-  ["photo", "PHOTO"],
-  ["signature", "SIGNATURE"],
-  ["nidFront", "NID_FRONT"],
-  ["nidBack", "NID_BACK"],
-  ["tinCert", "TIN_CERT"],
-  ["chequeLeafPhoto", "CHEQUE_LEAF_PHOTO"],
-  ["nomineePhoto", "NOMINEE_PHOTO"],
-  ["nomineeNidFront", "NOMINEE_NID_FRONT"],
-  ["nomineeNidBack", "NOMINEE_NID_BACK"],
+// (form field name → Document.type, on-screen label). Only these files are
+// accepted. The label is what a rejection quotes back: "Nominee NID — front:
+// File is too large (7.4 MB)". Without it the agent got the reason but not the
+// slot, and had to guess which of nine uploads to fix.
+const FILE_FIELDS: Array<[string, string, string]> = [
+  ["photo", "PHOTO", "Photograph"],
+  ["signature", "SIGNATURE", "Signature"],
+  ["nidFront", "NID_FRONT", "NID — front"],
+  ["nidBack", "NID_BACK", "NID — back"],
+  ["tinCert", "TIN_CERT", "e-TIN certificate"],
+  ["chequeLeafPhoto", "CHEQUE_LEAF_PHOTO", "Cheque leaf"],
+  ["nomineePhoto", "NOMINEE_PHOTO", "Nominee photo"],
+  ["nomineeNidFront", "NOMINEE_NID_FRONT", "Nominee NID — front"],
+  ["nomineeNidBack", "NOMINEE_NID_BACK", "Nominee NID — back"],
 ];
 
 function s(form: FormData, key: string): string {
@@ -106,19 +109,22 @@ export async function POST(req: NextRequest) {
   // 1. Upload KYC files first (need investorId for the storage key). Any bad
   //    file aborts before we write DB rows (orphan uploads are harmless).
   const docs: Array<{ type: string; fileName: string; filePath: string; mimeType: string }> = [];
-  try {
-    for (const [field, docType] of FILE_FIELDS) {
-      const f = form.get(field);
-      if (f instanceof File && f.size > 0) {
-        const r = await uploadKycFile(f, { investorId, docType });
-        docs.push({ type: docType, fileName: r.displayName, filePath: r.filePath, mimeType: r.storedMimeType });
+  for (const [field, docType, label] of FILE_FIELDS) {
+    const f = form.get(field);
+    if (!(f instanceof File) || f.size === 0) continue;
+    try {
+      const r = await uploadKycFile(f, { investorId, docType });
+      docs.push({ type: docType, fileName: r.displayName, filePath: r.filePath, mimeType: r.storedMimeType });
+    } catch (e) {
+      if (e instanceof KycUploadError) {
+        return Response.json({ ok: false, error: `${label}: ${e.message}` }, { status: e.status });
       }
+      console.error(`[agent/investors/create] ${field} upload failed`, e);
+      return Response.json(
+        { ok: false, error: `${label}: the file could not be uploaded. Try a different photo of the same document.` },
+        { status: 500 },
+      );
     }
-  } catch (e) {
-    if (e instanceof KycUploadError) {
-      return Response.json({ ok: false, error: e.message }, { status: e.status });
-    }
-    return Response.json({ ok: false, error: "A file failed to upload." }, { status: 500 });
   }
 
   const passwordHash = await hash(randomBytes(32).toString("hex"), 10);

@@ -12,24 +12,129 @@ const INVESTOR_TYPES = [
   ["GRATUITY_FUND", "Gratuity Fund"],
 ] as const;
 
+// The whole form — all nine attachments — goes up as ONE multipart POST, and a
+// Vercel function's request body is capped at 4.5 MB. Over that the platform
+// kills the upload before the route runs, so there is no server error to
+// report: `fetch` simply rejects. Agents were sending 20 MB+ of PNG NID scans
+// and watching the button sit on "Submitting…" for ever. We check the total
+// here and name the offending files, leaving margin for the text fields.
+const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+
+function mb(bytes: number): string {
+  return bytes < 1024 * 1024
+    ? `${Math.round(bytes / 1024)} KB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Every file currently chosen anywhere in the form, largest first. */
+function attachments(form: HTMLFormElement): Array<{ name: string; size: number }> {
+  const out: Array<{ name: string; size: number }> = [];
+  for (const value of new FormData(form).values()) {
+    if (value instanceof File && value.size > 0) {
+      out.push({ name: value.name, size: value.size });
+    }
+  }
+  return out.sort((a, b) => b.size - a.size);
+}
+
+// The API and the middleware answer some failures with a machine token
+// ("unauthorized"), which is useless in front of an agent. Translate.
+const MACHINE_ERRORS: Record<string, string> = {
+  unauthorized:
+    "Your session has ended. Sign in again at /agent/login in another tab, then submit this form again — your answers are still here.",
+  forbidden:
+    "This account is not allowed to submit registrations. Ask the admin to link it to your agent record.",
+  auth_unavailable:
+    "The sign-in service is temporarily unavailable. Wait a minute and submit again — nothing was saved.",
+};
+
+type CreateResponse = {
+  ok?: boolean;
+  error?: string;
+  reference?: string;
+  tempCode?: string;
+};
+
+/** Plain-language reason when the server answered without a usable JSON error. */
+function describeFailure(status: number, totalBytes: number): string {
+  if (status === 413) {
+    return `The upload was rejected as too large (${mb(totalBytes)} of attachments). Re-save the photos as JPG and attach them again. Nothing was saved.`;
+  }
+  if (status === 401) return MACHINE_ERRORS.unauthorized;
+  if (status === 403) return MACHINE_ERRORS.forbidden;
+  if (status === 503) return MACHINE_ERRORS.auth_unavailable;
+  if (status === 502 || status === 504) {
+    return `The server took too long and gave up (HTTP ${status}). This is usually too many large attachments at once — re-save the photos as JPG and try again. Nothing was saved.`;
+  }
+  return `The server answered HTTP ${status} with no reason given. Nothing was saved — please try again, and quote "HTTP ${status}" if it keeps happening.`;
+}
+
 export default function NewInvestorPage() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [doneCode, setDoneCode] = useState<string | null>(null);
+  // Live weight of the chosen files, so the cap is visible BEFORE submitting
+  // rather than discovered by a submission that goes nowhere.
+  const [totalBytes, setTotalBytes] = useState(0);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setBusy(true);
     setError(null);
-    const res = await fetch("/api/agent/investors/create", {
-      method: "POST",
-      body: new FormData(e.currentTarget),
-    });
-    const data = await res.json().catch(() => ({ ok: false, error: "Unexpected response." }));
+    const form = e.currentTarget;
+
+    const files = attachments(form);
+    const total = files.reduce((n, f) => n + f.size, 0);
+    if (total > MAX_TOTAL_BYTES) {
+      const worst = files
+        .slice(0, 4)
+        .map((f) => `${f.name} (${mb(f.size)})`)
+        .join(", ");
+      setError(
+        `The attachments come to ${mb(total)}. One registration can carry at most ${mb(MAX_TOTAL_BYTES)} in total, so this cannot be sent. Largest first: ${worst}. Re-save them as JPG — a PNG of an NID is 3–5 MB, the same picture as JPG is around 300 KB — then attach them again.`,
+      );
+      return;
+    }
+
+    setBusy(true);
+    let res: Response;
+    try {
+      res = await fetch("/api/agent/investors/create", {
+        method: "POST",
+        body: new FormData(form),
+      });
+    } catch (err) {
+      // The old code awaited this fetch unguarded, so a dropped upload left
+      // `busy` true: the button said "Submitting…" for ever and printed
+      // nothing. Never leave the agent without an answer.
+      setBusy(false);
+      setError(
+        `The registration could not be sent — the connection dropped before the server answered (${
+          err instanceof Error ? err.message : "network error"
+        }). Nothing was saved. Check you are online, then try again with smaller (JPG) attachments.`,
+      );
+      return;
+    }
+
+    // Read the body as text first. A rejected upload, a gateway timeout and a
+    // signed-out redirect all answer with HTML, and `res.json()` on those threw
+    // the status away — the one thing that says WHAT went wrong.
+    const raw = await res.text().catch(() => "");
+    let data: CreateResponse | null = null;
+    try {
+      data = JSON.parse(raw) as CreateResponse;
+    } catch {
+      // Not JSON — describeFailure() below explains it from the status.
+    }
     setBusy(false);
-    if (!res.ok || !data.ok) {
-      setError(data.error ?? "Could not submit the registration.");
+
+    if (!res.ok || !data?.ok) {
+      const reported = data?.error;
+      setError(
+        (reported && MACHINE_ERRORS[reported]) ??
+          reported ??
+          describeFailure(res.status, total),
+      );
       return;
     }
     // Prefer the bare reference (S00001-260806-K3F9); fall back to the temp
@@ -91,8 +196,23 @@ export default function NewInvestorPage() {
           Fill the investor&apos;s details and upload their documents. On submit it goes to the
           admin for approval — you don&apos;t set the investor code or send the welcome email.
         </p>
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          All the attachments together must stay under {mb(MAX_TOTAL_BYTES)}. Photograph the
+          documents or save them as <strong>JPG</strong> — a PNG screenshot of an NID is 3–5 MB on
+          its own and will not go through.
+        </p>
 
-        <form onSubmit={onSubmit} className="mt-6 space-y-6">
+        {/* onChange is form-level so every FileField is covered without
+            threading a callback through each one. Typing in a text field
+            bubbles here too, so only recount when a file slot changed. */}
+        <form
+          onSubmit={onSubmit}
+          onChange={(e) => {
+            if ((e.target as HTMLInputElement).type !== "file") return;
+            setTotalBytes(attachments(e.currentTarget).reduce((n, f) => n + f.size, 0));
+          }}
+          className="mt-6 space-y-6"
+        >
           <Section title="Identity">
             <Field name="name" label="Full name" required />
             <Select name="investorType" label="Investor type" options={INVESTOR_TYPES} />
@@ -136,8 +256,26 @@ export default function NewInvestorPage() {
             <FileField name="nomineeNidBack" label="Nominee NID — back" />
           </Section>
 
+          {totalBytes > 0 && (
+            <p
+              className={
+                totalBytes > MAX_TOTAL_BYTES
+                  ? "text-sm font-medium text-red-700 dark:text-red-300"
+                  : "text-sm text-zinc-600 dark:text-zinc-400"
+              }
+            >
+              Attachments: {mb(totalBytes)} of {mb(MAX_TOTAL_BYTES)}
+              {totalBytes > MAX_TOTAL_BYTES
+                ? " — too large to send. Re-save the photos as JPG and attach them again."
+                : null}
+            </p>
+          )}
+
           {error && (
-            <p className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+            <p
+              role="alert"
+              className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200"
+            >
               {error}
             </p>
           )}
