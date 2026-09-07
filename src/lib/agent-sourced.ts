@@ -1,14 +1,22 @@
 // Agent-sourced investors: those an agent onboarded via /agent/investors/new,
 // identified by sourcingAgentCode in the REGISTRATION KycRecord snapshot.
 //
-// Two jobs:
+// Three jobs:
 //  1. getAgentSourcedInvestors — list them for the agent's own portal, so a
 //     freshly-onboarded investor is visible even before any commission link.
-//  2. reconcileAgentInvestorLinks — once such an investor actually invests
-//     (a BUY transaction in a fund exists), create the xsystem.agent_investors
-//     link so the commission engine + the agent's list pick them up. The link
-//     can't be made at approval because it needs the fund + first-investment
-//     data, which don't exist until the investor buys.
+//  2. reconcileAgentInvestorLinks, pass A — once such an investor actually
+//     invests (a BUY transaction in a fund exists), create the
+//     xsystem.agent_investors link so the commission engine + the agent's list
+//     pick them up. The link can't be made at approval because it needs the
+//     fund + first-investment data, which don't exist until the investor buys.
+//  3. reconcileAgentInvestorLinks, pass B — backfill links that were created
+//     with zero initial units. Admin can link a SIP investor before they have
+//     bought anything (see linkInvestorToAgent), which parks a placeholder row
+//     at 0 units / 0 price. Pass A can never revisit it: it starts from the
+//     REGISTRATION KYC snapshot's sourcingAgentCode, and a hand-linked
+//     investor usually carries no such marker; it also skips any (investor,
+//     fund) pair that is already linked. So pass B works off the links
+//     themselves instead of the snapshot.
 
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma";
@@ -49,12 +57,41 @@ interface FirstBuy {
   nav: number;
 }
 
+/** First executed BUY per (investor, fund) for the given investor codes. */
+async function firstExecutedBuys(investorCodes: string[]): Promise<FirstBuy[]> {
+  if (investorCodes.length === 0) return [];
+  return prisma.$queryRawUnsafe<FirstBuy[]>(
+    `SELECT DISTINCT ON (i."investorCode", f.code)
+            i."investorCode" AS code, f.code AS "fundCode",
+            t."orderDate" AS "sourcedOn", t.units AS units, t.amount AS amount, t.nav AS nav
+     FROM public.transactions t
+     JOIN public.investors i ON i.id = t."investorId"
+     JOIN public.funds f ON f.id = t."fundId"
+     WHERE t.direction = 'BUY' AND t.status = 'EXECUTED'
+       AND i."investorCode" = ANY($1::text[])
+     ORDER BY i."investorCode", f.code, t."orderDate" ASC`,
+    investorCodes,
+  );
+}
+
+/** Unit price actually paid: the recorded NAV, else derived from the money. */
+function priceOf(b: FirstBuy): { units: number; amount: number; price: number } {
+  const units = Number(b.units) || 0;
+  const amount = Number(b.amount) || 0;
+  return { units, amount, price: Number(b.nav) || (units > 0 ? amount / units : 0) };
+}
+
 /**
  * Create agent_investors links for agent-sourced investors who have since
- * invested. Idempotent (skips existing links; a (code,fund,sourcedOn) unique
- * index backstops races). Returns how many links were created.
+ * invested, and fill in any placeholder link still sitting at zero units.
+ * Idempotent (skips existing non-zero links; a (code,fund,sourcedOn) unique
+ * index backstops races). Returns how many links were created and backfilled.
  */
-export async function reconcileAgentInvestorLinks(): Promise<{ created: number; scanned: number }> {
+export async function reconcileAgentInvestorLinks(): Promise<{
+  created: number;
+  backfilled: number;
+  scanned: number;
+}> {
   // 1. Map ACTIVE, real-code, agent-sourced investors → sourcing agent code.
   const sourced = await prisma.$queryRawUnsafe<{ code: string; agentCode: string }[]>(
     `WITH s AS MATERIALIZED (
@@ -70,7 +107,11 @@ export async function reconcileAgentInvestorLinks(): Promise<{ created: number; 
        AND status = 'ACTIVE'
        AND code NOT LIKE 'PENDING-%'`,
   );
-  if (sourced.length === 0) return { created: 0, scanned: 0 };
+  // Pass B stands on its own — it reads the links, not the snapshot — so an
+  // empty pass-A candidate list must not skip it.
+  if (sourced.length === 0) {
+    return { created: 0, backfilled: await backfillZeroUnitLinks(), scanned: 0 };
+  }
 
   const agentCodeByInvestor = new Map(sourced.map((r) => [r.code, r.agentCode]));
   const investorCodes = Array.from(agentCodeByInvestor.keys());
@@ -83,18 +124,7 @@ export async function reconcileAgentInvestorLinks(): Promise<{ created: number; 
   const agentIdByCode = new Map(agents.map((a) => [a.code, a.id]));
 
   // 3. First executed BUY per (investor, fund).
-  const firstBuys = await prisma.$queryRawUnsafe<FirstBuy[]>(
-    `SELECT DISTINCT ON (i."investorCode", f.code)
-            i."investorCode" AS code, f.code AS "fundCode",
-            t."orderDate" AS "sourcedOn", t.units AS units, t.amount AS amount, t.nav AS nav
-     FROM public.transactions t
-     JOIN public.investors i ON i.id = t."investorId"
-     JOIN public.funds f ON f.id = t."fundId"
-     WHERE t.direction = 'BUY' AND t.status = 'EXECUTED'
-       AND i."investorCode" = ANY($1::text[])
-     ORDER BY i."investorCode", f.code, t."orderDate" ASC`,
-    investorCodes,
-  );
+  const firstBuys = await firstExecutedBuys(investorCodes);
 
   // 4. Existing links, to skip.
   const existing = await prisma.agentInvestor.findMany({
@@ -109,9 +139,7 @@ export async function reconcileAgentInvestorLinks(): Promise<{ created: number; 
     const agentCode = agentCodeByInvestor.get(b.code);
     const agentId = agentCode ? agentIdByCode.get(agentCode) : undefined;
     if (!agentId) continue;
-    const units = Number(b.units) || 0;
-    const amount = Number(b.amount) || 0;
-    const price = Number(b.nav) || (units > 0 ? amount / units : 0);
+    const { units, amount, price } = priceOf(b);
     try {
       await prisma.agentInvestor.create({
         data: {
@@ -131,5 +159,47 @@ export async function reconcileAgentInvestorLinks(): Promise<{ created: number; 
     }
   }
 
-  return { created, scanned: firstBuys.length };
+  return { created, backfilled: await backfillZeroUnitLinks(), scanned: firstBuys.length };
+}
+
+/**
+ * Fill in links parked at zero initial units — the placeholder an admin
+ * creates when linking a SIP investor who has not bought yet — from that
+ * investor's first executed BUY. Returns how many rows were filled.
+ *
+ * `sourcedOn` is deliberately left alone. It records when the AGENT sourced
+ * the investor, which the admin chose on purpose and which is not the same
+ * date the money arrived; holding it still also keeps the row clear of the
+ * (investorCode, fundCode, sourcedOn) unique index. Rows carrying a non-zero
+ * figure are never touched, so a hand-entered number always wins.
+ */
+async function backfillZeroUnitLinks(): Promise<number> {
+  const placeholders = await prisma.agentInvestor.findMany({
+    where: { initialUnits: 0 },
+    select: { id: true, investorCode: true, fundCode: true },
+  });
+  if (placeholders.length === 0) return 0;
+
+  const buys = await firstExecutedBuys(
+    Array.from(new Set(placeholders.map((p) => p.investorCode))),
+  );
+  const buyByPair = new Map(buys.map((b) => [`${b.code}|${b.fundCode}`, b]));
+
+  let backfilled = 0;
+  for (const p of placeholders) {
+    const buy = buyByPair.get(`${p.investorCode}|${p.fundCode}`);
+    if (!buy) continue; // still hasn't bought — leave the placeholder standing
+    const { units, amount, price } = priceOf(buy);
+    if (units <= 0) continue; // nothing worth writing back
+    await prisma.agentInvestor.update({
+      where: { id: p.id },
+      data: {
+        initialUnits: units,
+        initialGrossAmount: amount,
+        unitPriceAtSourcing: price,
+      },
+    });
+    backfilled++;
+  }
+  return backfilled;
 }

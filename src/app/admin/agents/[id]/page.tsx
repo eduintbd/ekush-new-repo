@@ -892,27 +892,30 @@ export default async function AgentDetailPage({
                   className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
+              {/* Not required: a SIP investor has no initial purchase to
+                  record. Blank submits as 0 and the nightly reconcile fills
+                  both in from the first executed BUY. */}
               <label className="block">
                 <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                  Initial units *
+                  Initial units
                 </span>
                 <input
                   type="number"
                   step="0.0001"
+                  min="0"
                   name="initialUnits"
-                  required
                   className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
               <label className="block">
                 <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                  Unit price at sourcing *
+                  Unit price at sourcing
                 </span>
                 <input
                   type="number"
                   step="0.0001"
+                  min="0"
                   name="unitPriceAtSourcing"
-                  required
                   className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
@@ -927,6 +930,13 @@ export default async function AgentDetailPage({
                   className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
+              <p className="col-span-2 text-[10px] leading-snug text-zinc-500 sm:col-span-3">
+                Leave <span className="font-medium">initial units</span> and{" "}
+                <span className="font-medium">unit price</span> blank for a SIP, or any investor who
+                has not bought yet — the figures fill in automatically after their first purchase
+                executes. A zero link earns no commission on its own; upfront and trail are both
+                computed from actual transactions.
+              </p>
               <label className="col-span-2 flex items-center gap-2 text-xs sm:col-span-2">
                 <input type="checkbox" name="isDirectSubscription" className="rounded border-zinc-400" />
                 <span>Direct subscription (no agent commission per clause 6.5)</span>

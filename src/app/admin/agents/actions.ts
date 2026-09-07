@@ -524,6 +524,17 @@ export async function deleteAgentTerm(formData: FormData): Promise<void> {
  * Link an existing portal investor to an X-System selling agent. Creates
  * an `xsystem.agent_investors` row that the commission engine + agent
  * portal use to identify who the agent sourced.
+ *
+ * Zero initial units / unit price are allowed. A SIP investor has neither at
+ * sourcing — they buy monthly, starting after the link is made — and the old
+ * "must be positive" gate made them impossible to link at all. Nothing is at
+ * risk in permitting zero: the per-spec upfront these two columns once fed was
+ * deleted when the high-water-mark became the only upfront figure, so every
+ * taka now comes from the book replay of actual BUY/SELL transactions
+ * (see agent-commission-preview.ts). They survive purely as a record of what
+ * was sourced. A zero link therefore claims no commission on its own, and
+ * reconcileAgentInvestorLinks() fills the figures in once the first purchase
+ * executes. Negatives are still refused — those are typos, not SIPs.
  */
 export async function linkInvestorToAgent(formData: FormData): Promise<void> {
   const me = await requireRole(["admin", "checker"]);
@@ -542,8 +553,9 @@ export async function linkInvestorToAgent(formData: FormData): Promise<void> {
     redirect(`/admin/agents/${agentId}?error=Fund+must+be+EFUF%2C+EGF+or+ESRF`);
   }
   if (!sourcedOnRaw) redirect(`/admin/agents/${agentId}?error=Sourced-on+date+is+required`);
-  if (initialUnits <= 0) redirect(`/admin/agents/${agentId}?error=Initial+units+must+be+positive`);
-  if (unitPriceAtSourcing <= 0) redirect(`/admin/agents/${agentId}?error=Unit+price+at+sourcing+must+be+positive`);
+  if (initialUnits < 0) redirect(`/admin/agents/${agentId}?error=Initial+units+cannot+be+negative`);
+  if (unitPriceAtSourcing < 0) redirect(`/admin/agents/${agentId}?error=Unit+price+cannot+be+negative`);
+  if (initialGrossAmount < 0) redirect(`/admin/agents/${agentId}?error=Initial+gross+amount+cannot+be+negative`);
 
   const sourcedOn = new Date(`${sourcedOnRaw}T00:00:00.000Z`);
 
