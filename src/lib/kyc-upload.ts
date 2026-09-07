@@ -26,6 +26,11 @@ export const PDF_ALLOWED_KYC_KINDS: ReadonlySet<string> = new Set([
   "JOINT_NID_FRONT", "JOINT_NID_BACK",
   "NOMINEE_NID_FRONT", "NOMINEE_NID_BACK",
   "CHEQUE_LEAF_PHOTO",
+  // Agent-raised purchases (lib/agent-purchase.ts). The client's written
+  // instruction is normally a printed-to-PDF email, and a bank deposit slip is
+  // routinely a PDF from an app, so both must be allowed through as PDFs
+  // rather than forced to images.
+  "AGENT_PURCHASE_INSTRUCTION", "PAYMENT_SLIP",
 ]);
 
 export class KycUploadError extends Error {

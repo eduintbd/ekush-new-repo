@@ -104,9 +104,10 @@ export default async function AgentDashboardPage() {
           >
             <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Marketing →</p>
           </Link>
-          {/* The two doing-things tiles. Both were previously reachable only by
+          {/* The doing-things tiles. All three were previously reachable only by
               going through another page — onboarding was buried behind My
-              investors, and starting a SIP was not possible here at all. */}
+              investors, and neither starting a SIP nor placing a purchase was
+              possible here at all. */}
           <Link
             href="/agent/investors/new"
             className="rounded-lg border border-emerald-200 bg-white p-5 transition-colors hover:bg-emerald-50 dark:border-emerald-900 dark:bg-zinc-900 dark:hover:bg-zinc-800"
@@ -120,6 +121,13 @@ export default async function AgentDashboardPage() {
           >
             <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Start SIP →</p>
             <p className="mt-1 text-xs text-zinc-500">Create a SIP instruction for an investor</p>
+          </Link>
+          <Link
+            href="/agent/purchase"
+            className="rounded-lg border border-emerald-200 bg-white p-5 transition-colors hover:bg-emerald-50 dark:border-emerald-900 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+          >
+            <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Buy Fund →</p>
+            <p className="mt-1 text-xs text-zinc-500">Place a lump-sum purchase for an investor</p>
           </Link>
         </div>
       </div>
