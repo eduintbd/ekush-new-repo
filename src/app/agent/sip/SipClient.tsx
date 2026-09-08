@@ -15,6 +15,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { SipFundOption, SipInvestorOption } from "@/lib/agent-sip";
+import { InvestorSearchSelect } from "@/components/investor-search-select";
 import {
   addYearsKeepingDay,
   clampDayToMonth,
@@ -165,24 +166,34 @@ export function SipClient({
       <div className="space-y-5">
         {/* Investor */}
         <Card title="Investor" hint="Only investors you sourced whose account is fully open.">
-          <label className="block text-sm">
-            <span className="mb-1 block text-zinc-600 dark:text-zinc-400">Investor</span>
-            <select
+          <div className="block text-sm">
+            {/* Explicit htmlFor rather than a wrapping <label>: the picker is
+                a search box plus a select, and a wrapper would claim the
+                search box instead of the dropdown. */}
+            <label
+              htmlFor="sip-investor"
+              className="mb-1 block text-zinc-600 dark:text-zinc-400"
+            >
+              Investor
+            </label>
+            {/* Dropdown kept; the search box above it narrows the list so the
+                agent can type the code. Switching investor still resets the
+                bank selection — a bank account belongs to one investor. */}
+            <InvestorSearchSelect
+              id="sip-investor"
+              options={investors.map((i) => ({
+                code: i.investorCode,
+                label: `${i.investorCode} — ${i.name}`,
+              }))}
               value={investorCode}
-              onChange={(e) => {
-                setInvestorCode(e.target.value);
+              onChange={(code) => {
+                setInvestorCode(code);
                 setBankAccountId(null);
                 setShowBankForm(false);
               }}
-              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
-            >
-              {investors.map((i) => (
-                <option key={i.investorCode} value={i.investorCode}>
-                  {i.investorCode} — {i.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              selectClassName="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
+            />
+          </div>
           {investor?.email && (
             <p className="mt-2 text-xs text-zinc-500">{investor.email}</p>
           )}

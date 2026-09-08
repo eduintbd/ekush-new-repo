@@ -51,7 +51,7 @@ function ymd(d: Date | null | undefined): string {
 export default async function AgentStatementsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ code?: string; tab?: string }>;
+  searchParams: Promise<{ code?: string; tab?: string; q?: string }>;
 }) {
   const scope = await getAgentScope();
   const sp = await searchParams;
@@ -63,14 +63,30 @@ export default async function AgentStatementsPage({
     e.funds.add(s.fund_code);
     byCode.set(s.investor_code, e);
   }
-  const investors = Array.from(byCode.entries())
+  const allInvestors = Array.from(byCode.entries())
     .map(([code, v]) => ({ code, name: v.name, funds: Array.from(v.funds).sort() }))
     .sort((a, b) => a.code.localeCompare(b.code));
+
+  // Same search principle as the portal's /admin/investors table: one box,
+  // case-insensitive substring over code OR name. An agent with a long book
+  // types the code rather than scrolling to it. Filtering only narrows the
+  // picker — the selected investor below is unaffected, so a search never
+  // clears the statement already on screen.
+  const query = (sp.q || "").trim();
+  const investors = query
+    ? allInvestors.filter(
+        (i) =>
+          i.code.toLowerCase().includes(query.toLowerCase()) ||
+          i.name.toLowerCase().includes(query.toLowerCase()),
+      )
+    : allInvestors;
 
   // Only ever render an investor this agent actually sourced.
   const selectedCode =
     sp.code && byCode.has(sp.code) && agentOwnsCode(scope, sp.code) ? sp.code : undefined;
-  const selected = selectedCode ? investors.find((i) => i.code === selectedCode) : undefined;
+  // Resolved off the unfiltered list on purpose — searching must not blank
+  // out the statement the agent is already reading.
+  const selected = selectedCode ? allInvestors.find((i) => i.code === selectedCode) : undefined;
   const tab: TabKey = TABS.find((t) => t.key === sp.tab)?.key ?? "portfolio";
 
   const investor = selectedCode ? await getInvestorProfileByCode(selectedCode) : null;
@@ -104,16 +120,61 @@ export default async function AgentStatementsPage({
           {/* Investor picker */}
           <aside className="h-fit rounded-lg border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
-              Investor ({investors.length})
+              Investor ({investors.length}
+              {query ? ` of ${allInvestors.length}` : ""})
             </p>
-            {investors.length === 0 ? (
+
+            {/* Search — mirrors the portal's admin table toolbar: a GET form
+                on `q`, submitted with Enter, plus a Clear link. `code`/`tab`
+                ride along as hidden fields so searching keeps the statement
+                currently open. */}
+            <form method="GET" className="px-2 pb-2 pt-1">
+              {selectedCode ? (
+                <input type="hidden" name="code" value={selectedCode} />
+              ) : null}
+              <input type="hidden" name="tab" value={tab} />
+              <label
+                htmlFor="agent-statements-search"
+                className="mb-1 block text-[11px] text-zinc-500"
+              >
+                Search:
+              </label>
+              <input
+                id="agent-statements-search"
+                type="text"
+                name="q"
+                defaultValue={query}
+                placeholder="Code or name…"
+                className="block w-full rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-emerald-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+              />
+              {query ? (
+                <Link
+                  href={
+                    selectedCode
+                      ? `/agent/statements?code=${encodeURIComponent(selectedCode)}&tab=${tab}`
+                      : "/agent/statements"
+                  }
+                  className="mt-1 inline-block text-[11px] text-zinc-500 hover:text-emerald-600"
+                >
+                  Clear
+                </Link>
+              ) : null}
+            </form>
+
+            {allInvestors.length === 0 ? (
               <p className="px-2 py-2 text-xs text-zinc-500">No investors yet.</p>
+            ) : investors.length === 0 ? (
+              <p className="px-2 py-2 text-xs text-amber-600 dark:text-amber-400">
+                No investor matches “{query}”.
+              </p>
             ) : (
               <ul className="max-h-[60vh] space-y-0.5 overflow-y-auto">
                 {investors.map((inv) => (
                   <li key={inv.code}>
                     <Link
-                      href={`/agent/statements?code=${encodeURIComponent(inv.code)}&tab=${tab}`}
+                      href={`/agent/statements?code=${encodeURIComponent(inv.code)}&tab=${tab}${
+                        query ? `&q=${encodeURIComponent(query)}` : ""
+                      }`}
                       className={`block rounded px-2 py-1.5 text-sm ${
                         inv.code === selectedCode
                           ? "bg-emerald-100 font-medium text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
@@ -140,7 +201,9 @@ export default async function AgentStatementsPage({
                   {TABS.map((t) => (
                     <Link
                       key={t.key}
-                      href={`/agent/statements?code=${encodeURIComponent(selectedCode!)}&tab=${t.key}`}
+                      href={`/agent/statements?code=${encodeURIComponent(selectedCode!)}&tab=${t.key}${
+                        query ? `&q=${encodeURIComponent(query)}` : ""
+                      }`}
                       className={`px-3 py-2 text-sm ${
                         t.key === tab
                           ? "border-b-2 border-[#F27023] font-medium text-[#F27023]"

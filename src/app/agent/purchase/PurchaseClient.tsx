@@ -17,6 +17,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { PurchaseFundOption, PurchaseInvestorOption } from "@/lib/agent-purchase";
 import { bankAccountsForFund } from "@/lib/fund-bank-accounts";
+import { InvestorSearchSelect } from "@/components/investor-search-select";
 
 const STEPS = ["Information", "Payment", "Instruction", "Confirm", "Success"];
 
@@ -234,18 +235,19 @@ export function PurchaseClient({
       {/* ───── Step 0: Information ───── */}
       {step === 0 && (
         <Card title="Investment's Information">
-          <Field label="Investor">
-            <select
+          <Field label="Investor" htmlFor="purchase-investor">
+            {/* Dropdown kept; the search box above it just narrows the list,
+                so an agent with a long book can type the code instead of
+                scrolling. Same principle as the portal's investor table. */}
+            <InvestorSearchSelect
+              id="purchase-investor"
+              options={investors.map((i) => ({
+                code: i.investorCode,
+                label: `${i.investorCode} — ${i.name}`,
+              }))}
               value={investorCode}
-              onChange={(e) => setInvestorCode(e.target.value)}
-              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:[color-scheme:dark]"
-            >
-              {investors.map((i) => (
-                <option key={i.investorCode} value={i.investorCode}>
-                  {i.investorCode} — {i.name}
-                </option>
-              ))}
-            </select>
+              onChange={setInvestorCode}
+            />
             {investor && (
               <p className="mt-1 text-[11px] text-zinc-500">
                 {investor.email ?? "no email on file"}
@@ -463,21 +465,40 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 function Field({
   label,
   accent,
+  htmlFor,
   children,
 }: {
   label: string;
   accent?: boolean;
+  /**
+   * Set when the field holds more than one control — a wrapping <label>
+   * would then claim the first of them (and nesting the inner search
+   * box's own label inside it is invalid HTML). Naming the control
+   * explicitly keeps the caption pointed at the right one.
+   */
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
+  const caption = (
+    <span
+      className={`mb-1 block ${
+        accent ? "font-medium text-emerald-700 dark:text-emerald-400" : "text-zinc-600 dark:text-zinc-400"
+      }`}
+    >
+      {label}
+    </span>
+  );
+  if (htmlFor) {
+    return (
+      <div className="block text-sm">
+        <label htmlFor={htmlFor}>{caption}</label>
+        {children}
+      </div>
+    );
+  }
   return (
     <label className="block text-sm">
-      <span
-        className={`mb-1 block ${
-          accent ? "font-medium text-emerald-700 dark:text-emerald-400" : "text-zinc-600 dark:text-zinc-400"
-        }`}
-      >
-        {label}
-      </span>
+      {caption}
       {children}
     </label>
   );

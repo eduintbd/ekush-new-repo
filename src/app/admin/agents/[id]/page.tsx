@@ -32,6 +32,7 @@ import { computeAgentCommissionPreview, parseAsOf } from "@/lib/agent-commission
 import { getPayoutState, listAgentPayments } from "@/lib/commission-payout";
 import { isBlockingWarning } from "@/lib/upfront-watermark";
 import { CommissionBreakdown } from "@/components/commission-breakdown";
+import { InvestorSearchSelect } from "@/components/investor-search-select";
 import { formatBdt } from "@/lib/format";
 import {
   getAllFunds,
@@ -849,23 +850,35 @@ export default async function AgentDetailPage({
             </summary>
             <form action={linkInvestorToAgent} className="grid grid-cols-2 gap-3 p-3 text-xs sm:grid-cols-3">
               <input type="hidden" name="agentId" value={agent.id} />
-              <label className="col-span-2 block">
-                <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                  Investor *
-                </span>
-                <select
-                  name="investorCode"
-                  required
-                  className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono dark:border-zinc-700 dark:bg-zinc-900"
+              <div className="col-span-2 block">
+                {/* A <label> rather than the <span> the other fields use: the
+                    picker is now two controls, so the caption has to name the
+                    select explicitly instead of wrapping it. */}
+                <label
+                  htmlFor="link-investor"
+                  className="text-[10px] font-medium uppercase tracking-wider text-zinc-500"
                 >
-                  <option value="">— pick an investor —</option>
-                  {portalPicker.map((inv) => (
-                    <option key={inv.id} value={inv.investorCode ?? ""}>
-                      {inv.investorCode} · {inv.name ?? "(no name)"} · {inv.investorType ?? "—"}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  Investor *
+                </label>
+                {/* The dropdown carries every portal investor (thousands of
+                    options), so finding one meant scrolling. The search box
+                    narrows it by code or name; the dropdown itself stays, and
+                    filtering is client-side so the rest of this form — and
+                    the open <details> panel — survive the search. */}
+                <div className="mt-1">
+                  <InvestorSearchSelect
+                    id="link-investor"
+                    name="investorCode"
+                    required
+                    placeholderOption="— pick an investor —"
+                    options={portalPicker.map((inv) => ({
+                      code: inv.investorCode ?? "",
+                      label: `${inv.investorCode} · ${inv.name ?? "(no name)"} · ${inv.investorType ?? "—"}`,
+                    }))}
+                    selectClassName="block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+                  />
+                </div>
+              </div>
               <label className="block">
                 <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
                   Fund *
