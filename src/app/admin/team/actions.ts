@@ -72,16 +72,43 @@ export async function inviteMember(formData: FormData): Promise<void> {
   const admin = createSupabaseAdminClient();
   if (!admin) back("", "Supabase admin client unavailable.");
 
-  // Look up the auth.users row by email first. Supabase doesn't expose
-  // a direct getByEmail, but listUsers is fine at this team size.
-  const { data: list, error: listErr } = await admin.auth.admin.listUsers({
-    page: 1,
-    perPage: 200,
-  });
-  if (listErr) back("", `Supabase listUsers failed: ${listErr.message}`);
+  // Look up the auth.users row by email first. Supabase doesn't expose a
+  // direct getByEmail, so this pages through listUsers.
+  //
+  // It used to read a single page of 200 and stop, on the reasoning that the
+  // back-office team is small. That reasoning was wrong in a way that took a
+  // while to see: this Supabase Auth project is SHARED with the portal, so
+  // auth.users holds every investor and prospect too — 616 rows and climbing,
+  // against a staff list of ten.
+  //
+  // The effect was silent and looked like something else entirely. Inviting
+  // someone whose auth row sat outside the newest 200 (momin@ekushwml.com was
+  // 458th) found nothing, fell through to inviteUserByEmail, and got rejected
+  // by Supabase with "already been registered" — so the profile row was never
+  // written and the person could sign in but had no access anywhere. The
+  // existing-user branch below was written to handle exactly that case; the
+  // paging in front of it just could not see far enough to reach it.
+  const PER_PAGE = 1000; // GoTrue's ceiling per request
+  const MAX_PAGES = 50; // 50k users — a stop, not an expected bound
+  let existingUser: { id: string } | null = null;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data: list, error: listErr } = await admin.auth.admin.listUsers({
+      page,
+      perPage: PER_PAGE,
+    });
+    if (listErr) back("", `Supabase listUsers failed: ${listErr.message}`);
+    const hit = list.users.find((u) => u.email?.toLowerCase() === data.email);
+    if (hit) {
+      existingUser = { id: hit.id };
+      break;
+    }
+    // A short page is the last page. Without this the loop would keep asking
+    // for empty pages up to MAX_PAGES on every invite of a genuinely new user.
+    if (list.users.length < PER_PAGE) break;
+  }
 
   let userId: string | null = null;
-  const found = list.users.find((u) => u.email?.toLowerCase() === data.email);
+  const found = existingUser;
   if (found) {
     userId = found.id;
   } else {
