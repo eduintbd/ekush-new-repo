@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -55,6 +55,18 @@ type CreateResponse = {
   tempCode?: string;
 };
 
+// A dropped connection is the most common way this form fails, and it is
+// usually transient: the agent spends minutes filling the form, the socket
+// goes idle and dies, and the browser will not replay a POST body by itself.
+// So resend it here. Safe to do blindly because every attempt carries the
+// same submissionKey and the server keys the registration off it — a retry
+// that arrives after the first one landed is answered with the SAME
+// reference instead of creating a second investor.
+const SEND_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = [800, 2500];
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /** Plain-language reason when the server answered without a usable JSON error. */
 function describeFailure(status: number, totalBytes: number): string {
   if (status === 413) {
@@ -64,7 +76,15 @@ function describeFailure(status: number, totalBytes: number): string {
   if (status === 403) return MACHINE_ERRORS.forbidden;
   if (status === 503) return MACHINE_ERRORS.auth_unavailable;
   if (status === 502 || status === 504) {
-    return `The server took too long and gave up (HTTP ${status}). This is usually too many large attachments at once — re-save the photos as JPG and try again. Nothing was saved.`;
+    // Only blame the attachments when they are actually heavy — this used to
+    // tell agents to shrink a 400 KB upload, which sent them chasing a
+    // problem they did not have.
+    const heavy = totalBytes > MAX_TOTAL_BYTES / 2;
+    return `The server took too long and gave up (HTTP ${status}). Nothing was saved. ${
+      heavy
+        ? `The attachments come to ${mb(totalBytes)} — re-saving the photos as JPG will make this far more likely to go through.`
+        : "Press “Submit for approval” again — a repeat submission cannot create the investor twice."
+    }`;
   }
   return `The server answered HTTP ${status} with no reason given. Nothing was saved — please try again, and quote "HTTP ${status}" if it keeps happening.`;
 }
@@ -74,6 +94,15 @@ export default function NewInvestorPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [doneCode, setDoneCode] = useState<string | null>(null);
+  // "Connection dropped — trying again (2 of 3)…", so a slow retry does not
+  // look like a frozen button.
+  const [retrying, setRetrying] = useState(0);
+  // Identifies THIS filling of the form across all its send attempts. Held in
+  // a ref and minted on first submit: generating it during render would give
+  // the server and client copies different values and break hydration, and it
+  // must survive a failed attempt so the retry is recognised as the same
+  // registration. Cleared by "Register another", which genuinely is a new one.
+  const submissionKey = useRef<string | null>(null);
   // Live weight of the chosen files, so the cap is visible BEFORE submitting
   // rather than discovered by a submission that goes nowhere.
   const [totalBytes, setTotalBytes] = useState(0);
@@ -97,21 +126,38 @@ export default function NewInvestorPage() {
     }
 
     setBusy(true);
-    let res: Response;
-    try {
-      res = await fetch("/api/agent/investors/create", {
-        method: "POST",
-        body: new FormData(form),
-      });
-    } catch (err) {
+    submissionKey.current ??= crypto.randomUUID();
+
+    // Send, resending on a dropped connection. Only a `fetch` rejection is
+    // retried — that means the request never got an answer. Anything the
+    // server actually replied with, including a 500, is left alone: it will
+    // say the same thing next time.
+    let res: Response | null = null;
+    let lastNetworkError = "";
+    for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
+      // Rebuilt per attempt so the retry re-reads the files from the form
+      // rather than replaying a consumed body.
+      const body = new FormData(form);
+      body.set("submissionKey", submissionKey.current);
+      try {
+        res = await fetch("/api/agent/investors/create", { method: "POST", body });
+        break;
+      } catch (err) {
+        lastNetworkError = err instanceof Error ? err.message : "network error";
+        if (attempt === SEND_ATTEMPTS) break;
+        setRetrying(attempt + 1);
+        await sleep(RETRY_BACKOFF_MS[attempt - 1] ?? 2500);
+      }
+    }
+    setRetrying(0);
+
+    if (!res) {
       // The old code awaited this fetch unguarded, so a dropped upload left
       // `busy` true: the button said "Submitting…" for ever and printed
       // nothing. Never leave the agent without an answer.
       setBusy(false);
       setError(
-        `The registration could not be sent — the connection dropped before the server answered (${
-          err instanceof Error ? err.message : "network error"
-        }). Nothing was saved. Check you are online, then try again with smaller (JPG) attachments.`,
+        `The registration could not be sent — the connection dropped before the server answered, ${SEND_ATTEMPTS} times in a row (${lastNetworkError}). Nothing was saved and nothing was lost: your answers and files are all still on this page. Check you are online and press “Submit for approval” again — a repeat submission cannot create the investor twice.`,
       );
       return;
     }
@@ -171,7 +217,14 @@ export default function NewInvestorPage() {
           ) : null}
           <div className="mt-5 flex gap-3">
             <button
-              onClick={() => { setDoneCode(null); router.refresh(); }}
+              onClick={() => {
+                // A genuinely new registration, so it needs its own key —
+                // reusing this one would be answered as a replay of the
+                // registration just filed.
+                submissionKey.current = null;
+                setDoneCode(null);
+                router.refresh();
+              }}
               className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
             >
               Register another
@@ -271,6 +324,16 @@ export default function NewInvestorPage() {
             </p>
           )}
 
+          {retrying > 0 && (
+            <p
+              role="status"
+              className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+            >
+              The connection dropped. Sending again — attempt {retrying} of {SEND_ATTEMPTS}. Stay on
+              this page.
+            </p>
+          )}
+
           {error && (
             <p
               role="alert"
@@ -285,7 +348,11 @@ export default function NewInvestorPage() {
             disabled={busy}
             className="rounded-md bg-emerald-700 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-60"
           >
-            {busy ? "Submitting…" : "Submit for approval"}
+            {retrying > 0
+              ? `Retrying (${retrying}/${SEND_ATTEMPTS})…`
+              : busy
+                ? "Submitting…"
+                : "Submit for approval"}
           </button>
         </form>
       </div>

@@ -5,7 +5,7 @@
 // The agent never sets an investor code or triggers the welcome email — the
 // admin does that on approval (unchanged portal flow).
 
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID, randomBytes, createHash } from "crypto";
 import { hash } from "bcryptjs";
 import type { NextRequest } from "next/server";
 import { getAgentScope } from "@/lib/agent-scope";
@@ -85,24 +85,74 @@ export async function POST(req: NextRequest) {
   // alphanumerics was tried first and rejected: the filter plus the padding it
   // needed cost enough entropy to collide in a 20k sample.
   const ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-  const newRef = () =>
-    `${scope.agentCode}-${Array.from(randomBytes(5))
+  const encodeRef = (bytes: Uint8Array) =>
+    Array.from(bytes.subarray(0, 5))
       .map((b) => ALPHABET[b % ALPHABET.length])
-      .join("")}`;
+      .join("");
+  const newRef = () => `${scope.agentCode}-${encodeRef(randomBytes(5))}`;
 
-  // Confirm the code is free before doing anything else. The odds of a clash
-  // are tiny, but the cost is not: file uploads happen below, so an unchecked
-  // collision would fail the insert only after the agent had waited through
-  // nine uploads, with everything to re-enter. Checking here is one indexed
-  // lookup on a unique column.
-  let reference = newRef();
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const clash = await prisma.$queryRawUnsafe<Array<{ one: number }>>(
-      `SELECT 1 AS one FROM public.investors WHERE "investorCode" = $1 LIMIT 1`,
-      `PENDING-${reference}`,
+  // ── Idempotency ────────────────────────────────────────────────────────
+  // The client retries automatically when the connection drops, because a
+  // dropped upload is by far the most common way this form fails: agents fill
+  // it for several minutes on a phone link, and the socket is often dead by
+  // the time they press Submit. A blind retry is dangerous though — if the
+  // FIRST attempt actually reached us and only the ANSWER was lost, the
+  // retry would register the same investor twice.
+  //
+  // So the reference is derived from a per-form-fill key the client sends,
+  // instead of being random: the same fill always computes the same
+  // PENDING-<agent>-<suffix>, and investors."investorCode" is UNIQUE. That
+  // makes the unique index itself the idempotency store — no extra table, no
+  // migration on the shared portal DB, and the code stays readable down a
+  // phone.
+  const submissionKey = s(form, "submissionKey");
+  const derivedRef = submissionKey
+    ? `${scope.agentCode}-${encodeRef(
+        createHash("sha256").update(`${scope.agentId}:${submissionKey}`).digest(),
+      )}`
+    : null;
+
+  // Who already owns a reference, if anyone. Used both to spot a replay and
+  // to tell a replay apart from a genuine suffix collision.
+  async function ownerOf(code: string): Promise<string | null> {
+    const rows = await prisma.$queryRawUnsafe<Array<{ email: string }>>(
+      `SELECT u.email FROM public.investors i
+         JOIN public.users u ON u.id = i."userId"
+        WHERE i."investorCode" = $1 LIMIT 1`,
+      code,
     );
-    if (clash.length === 0) break;
+    return rows[0]?.email?.toLowerCase() ?? null;
+  }
+
+  let reference: string;
+  const replayOwner = derivedRef ? await ownerOf(`PENDING-${derivedRef}`) : null;
+  if (derivedRef && replayOwner === email) {
+    // This exact fill already landed. Answer as though it had just succeeded —
+    // same reference, so the agent sees one registration and one code.
+    return Response.json({
+      ok: true,
+      tempCode: `PENDING-${derivedRef}`,
+      reference: derivedRef,
+      agentCode: scope.agentCode,
+      replay: true,
+    });
+  } else if (derivedRef && replayOwner === null) {
+    reference = derivedRef;
+  } else {
+    // No key (an older cached page), or — at odds of 1 in 33 million — the
+    // derived suffix belongs to a different registration. Fall back to the
+    // random reference, checking it is free first: file uploads happen below,
+    // so an unchecked collision would fail the insert only after the agent had
+    // waited through nine uploads, with everything to re-enter.
     reference = newRef();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const clash = await prisma.$queryRawUnsafe<Array<{ one: number }>>(
+        `SELECT 1 AS one FROM public.investors WHERE "investorCode" = $1 LIMIT 1`,
+        `PENDING-${reference}`,
+      );
+      if (clash.length === 0) break;
+      reference = newRef();
+    }
   }
   const tempCode = `PENDING-${reference}`;
 
@@ -210,8 +260,29 @@ export async function POST(req: NextRequest) {
       );
     });
   } catch (e) {
+    // Two retries can be in flight at once — the browser gave up on the first
+    // and sent a second while the first was still writing. Both pass the
+    // pre-check above, and the unique index on "investorCode" then rejects
+    // whichever commits last. That is the idempotency guard doing its job, not
+    // a failure: re-read the row and answer with the reference that won.
+    if (derivedRef && (await ownerOf(tempCode)) === email) {
+      return Response.json({
+        ok: true,
+        tempCode,
+        reference: derivedRef,
+        agentCode: scope.agentCode,
+        replay: true,
+      });
+    }
+    const message = e instanceof Error ? e.message : "";
+    if (/users_email_key|users_email_unique/i.test(message)) {
+      return Response.json(
+        { ok: false, error: `${email} is already registered on the portal. Use the investor's own email address, or ask the admin to check the existing account.` },
+        { status: 409 },
+      );
+    }
     return Response.json(
-      { ok: false, error: e instanceof Error ? e.message : "Could not save the registration." },
+      { ok: false, error: message || "Could not save the registration." },
       { status: 500 },
     );
   }
