@@ -13,6 +13,25 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 const MAX_PDF_BYTES = 10 * 1024 * 1024; // 10 MB
 const BUCKET = "kyc-documents";
 
+// Decompression-bomb guard. The caps above are on BYTES, and bytes say nothing
+// about how much memory an image needs once decoded: a flat, low-entropy JPEG
+// can carry enormous dimensions in very few of them. sharp's own default limit
+// is 268 MP (0x3FFF²) — around 800 MB of RGB for a SINGLE image, which is
+// enough to kill the function outright, and it has always been able to do that
+// even when uploads ran strictly one at a time. 50 MP is far above any phone
+// camera or flatbed scan of an NID, and it turns the caller's concurrency into
+// a real ceiling: three in flight × 50 MP × 3 bytes ≈ 450 MB.
+const MAX_INPUT_PIXELS = 50_000_000;
+
+// libvips sizes its thread pool from the detected core count, and inside a
+// container Node reports the HOST's cores rather than the cgroup quota — so a
+// one-vCPU function can spin up a dozen threads to re-encode one image. Pinned
+// to 1 so the total thread count is exactly the caller's pool width.
+sharp.concurrency(1);
+// The operation cache never hits on one-shot re-encodes; on a warm (Fluid)
+// instance it is pure resident memory.
+sharp.cache(false);
+
 const FORBIDDEN_EXT_TOKENS: readonly string[] = [
   ".exe", ".bat", ".cmd", ".sh", ".ps1", ".js", ".vbs", ".jar",
   ".apk", ".msi", ".scr", ".com", ".php", ".jsp", ".asp", ".aspx",
@@ -116,11 +135,25 @@ export async function uploadKycFile(
     storedExt = "pdf";
   } else {
     // Re-encode to JPEG: auto-rotate on EXIF, then strip ALL metadata (GPS/EXIF).
-    outBuffer = await sharp(buffer)
-      .rotate()
-      .jpeg({ quality: 88, mozjpeg: true })
-      .withMetadata({ exif: {} })
-      .toBuffer();
+    try {
+      outBuffer = await sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS })
+        .rotate()
+        .jpeg({ quality: 88, mozjpeg: true })
+        .withMetadata({ exif: {} })
+        .toBuffer();
+    } catch (e) {
+      // Only the pixel-limit rejection is translated. Every other sharp failure
+      // keeps its existing behaviour — raw throw, caller logs it, generic 500 —
+      // because turning them all into KycUploadError would silently change
+      // status codes and lose the console.error diagnostic.
+      if (e instanceof Error && /pixel limit|Input image exceeds/i.test(e.message)) {
+        throw new KycUploadError(
+          413,
+          `Image dimensions are too large (over ${MAX_INPUT_PIXELS / 1_000_000} megapixels). Re-save it at a normal photo size and upload again.`,
+        );
+      }
+      throw e;
+    }
     storedMime = "image/jpeg";
     storedExt = "jpg";
   }

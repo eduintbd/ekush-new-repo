@@ -1,5 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "//regions": "Supabase — Postgres pooler and storage both — is in ap-northeast-1. Every route here talks to it, and the heavier ones make a dozen or more sequential round trips, so running the functions in the default US East paid that distance over and over: about five seconds of the ten that onboarding an investor used to take. hnd1 is Vercel's Tokyo region, next to the database, and it is also closer to the agents in Bangladesh than US East was. Kept here rather than in the dashboard so the choice is reviewable and travels with the repo.",
+  "regions": ["hnd1"],
   "crons": [
     {
       "path": "/api/cron/tb-check",

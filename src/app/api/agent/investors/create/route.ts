@@ -11,9 +11,18 @@ import type { NextRequest } from "next/server";
 import { getAgentScope } from "@/lib/agent-scope";
 import { prisma } from "@/lib/prisma";
 import { uploadKycFile, KycUploadError } from "@/lib/kyc-upload";
+import { mapWithConcurrency } from "@/lib/concurrency";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+// Supabase — both the Postgres pooler and the storage bucket — lives in
+// ap-northeast-1. This route makes on the order of twenty sequential round
+// trips to it, so running the function anywhere else pays that distance twenty
+// times over: from the default US East it was roughly five seconds of the ten
+// this request used to take. hnd1 is Vercel's Tokyo region, next door to the
+// database. It is also closer to the agents in Bangladesh than US East was, so
+// the client leg gets shorter too.
+export const preferredRegion = "hnd1";
 
 // (form field name → Document.type, on-screen label). Only these files are
 // accepted. The label is what a rejection quotes back: "Nominee NID — front:
@@ -156,16 +165,57 @@ export async function POST(req: NextRequest) {
   }
   const tempCode = `PENDING-${reference}`;
 
+  // Independent of the uploads, and 60-150ms of CPU on a small function.
+  // Started here and awaited after the pool so it overlaps them for free.
+  const passwordHashPromise = hash(randomBytes(32).toString("hex"), 10);
+  // A bad file makes the scan below return before this is ever awaited, and
+  // Node kills the process on an unhandled rejection. Marking it handled here
+  // costs nothing and does not swallow anything: awaiting the same promise
+  // further down still throws if it failed.
+  passwordHashPromise.catch(() => {});
+
   // 1. Upload KYC files first (need investorId for the storage key). Any bad
   //    file aborts before we write DB rows (orphan uploads are harmless).
-  const docs: Array<{ type: string; fileName: string; filePath: string; mimeType: string }> = [];
-  for (const [field, docType, label] of FILE_FIELDS) {
+  //
+  // Three at a time, not nine. The cost of each upload is mostly a round trip
+  // to storage, which overlaps; the sharp re-encode is CPU-bound and does not
+  // go faster than the function's vCPU count however many run at once. So the
+  // win saturates quickly, and past ~3 the extra width only buys peak memory,
+  // libvips contention, and a slower rejection path — a bad file at index 0
+  // still has to wait for whatever is already in flight beside it. With
+  // limitInputPixels capped in kyc-upload.ts this is a real ceiling, not a
+  // hope: 3 × 50 MP × 3 bytes ≈ 450 MB.
+  //
+  // Set to 1 to reproduce the old strictly-sequential behaviour exactly.
+  const KYC_UPLOAD_CONCURRENCY = 3;
+
+  // Only slots that actually carry a file enter the pool, so an empty input can
+  // never occupy a result index. Built in FILE_FIELDS order — both the failure
+  // scan and the `docs` array depend on that ordering.
+  const queued = FILE_FIELDS.flatMap(([field, docType, label]) => {
     const f = form.get(field);
-    if (!(f instanceof File) || f.size === 0) continue;
-    try {
-      const r = await uploadKycFile(f, { investorId, docType });
-      docs.push({ type: docType, fileName: r.displayName, filePath: r.filePath, mimeType: r.storedMimeType });
-    } catch (e) {
+    return f instanceof File && f.size > 0 ? [{ field, docType, label, file: f }] : [];
+  });
+
+  const settled = await mapWithConcurrency(queued, KYC_UPLOAD_CONCURRENCY, (q) =>
+    uploadKycFile(q.file, { investorId, docType: q.docType }),
+  );
+
+  // Everything has settled; now answer exactly as the sequential loop did. The
+  // first failure by FILE_FIELDS POSITION wins, not the first to fail in time,
+  // so the agent gets the same slot label and the same HTTP status regardless
+  // of which upload happened to lose the race.
+  //
+  // Do NOT "optimise" this by cancelling dispatch once something fails. If
+  // index 5 fails first in time and later items stop being dispatched, index 2
+  // may never have run at all, and the scan below would pick that hole ahead of
+  // the real failure — wrong label, wrong status.
+  const docs: Array<{ type: string; fileName: string; filePath: string; mimeType: string }> = [];
+  for (let i = 0; i < settled.length; i++) {
+    const r = settled[i];
+    const { field, docType, label } = queued[i];
+    if (!r.ok) {
+      const e = r.error;
       if (e instanceof KycUploadError) {
         return Response.json({ ok: false, error: `${label}: ${e.message}` }, { status: e.status });
       }
@@ -175,9 +225,15 @@ export async function POST(req: NextRequest) {
         { status: 500 },
       );
     }
+    docs.push({
+      type: docType,
+      fileName: r.value.displayName,
+      filePath: r.value.filePath,
+      mimeType: r.value.storedMimeType,
+    });
   }
 
-  const passwordHash = await hash(randomBytes(32).toString("hex"), 10);
+  const passwordHash = await passwordHashPromise;
   const dobRaw = s(form, "dateOfBirth");
   const dob = /^\d{4}-\d{2}-\d{2}$/.test(dobRaw) ? new Date(`${dobRaw}T00:00:00.000Z`) : null;
 
@@ -245,11 +301,21 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      for (const d of docs) {
+      // One statement, not one per document. Nine separate INSERTs meant nine
+      // sequential round trips to Tokyo inside the transaction, which is most
+      // of what the transaction cost. Parameters are still bound, never
+      // interpolated — only the (…) placeholder groups are built by hand.
+      if (docs.length > 0) {
+        const values = docs
+          .map((_, i) => {
+            const p = i * 6;
+            return `($${p + 1},$${p + 2},$${p + 3},$${p + 4},$${p + 5},$${p + 6}, now())`;
+          })
+          .join(", ");
         await tx.$executeRawUnsafe(
           `INSERT INTO public.documents (id, "investorId", type, "fileName", "filePath", "mimeType", "createdAt")
-           VALUES ($1,$2,$3,$4,$5,$6, now())`,
-          randomUUID(), investorId, d.type, d.fileName, d.filePath, d.mimeType,
+           VALUES ${values}`,
+          ...docs.flatMap((d) => [randomUUID(), investorId, d.type, d.fileName, d.filePath, d.mimeType]),
         );
       }
 
