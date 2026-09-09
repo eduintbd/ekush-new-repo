@@ -174,3 +174,39 @@ curl -X POST https://<host>/api/cron/quarterly-trail \
      -H "content-type: application/json" \
      -d '{"quarterStart":"2026-01-01","quarterEnd":"2026-04-01"}'
 ```
+
+---
+
+## 6. Function region
+
+`vercel.json` pins `"regions": ["hnd1"]` (Tokyo). It carries no comment because
+the config schema rejects unknown keys, so the reasoning lives here.
+
+Supabase — both the Postgres pooler
+(`aws-1-ap-northeast-1.pooler.supabase.com`) and the storage bucket — is in
+**ap-northeast-1**. Functions previously ran in the unchosen default, us-east:
+`X-Vercel-Id` read `bom1::iad1::…`. Every route talks to that database, and the
+heavier ones make many sequential round trips to it — `POST
+/api/agent/investors/create` makes roughly twenty-eight — so each one paid a
+~170ms Pacific crossing. That was about five seconds of the ten that onboarding
+an investor took.
+
+`hnd1` sits next to the database, and is also closer to the agents in
+Bangladesh than us-east was, so the client leg improved too.
+`src/app/api/agent/investors/create/route.ts` additionally exports
+`preferredRegion = "hnd1"` so the hot path stays pinned even if this file or
+the project setting changes.
+
+**If you move the Supabase project, move this too** — they must stay
+co-located, and the cost of not doing so is invisible in code review.
+
+### Verifying
+
+```bash
+curl -sS -D - -o /dev/null https://x.ekushwml.com/api/health | grep -i x-vercel-id
+# X-Vercel-Id: <edge>::hnd1::<id>   ← second segment is the function region
+```
+
+A reading of `iad1` there means the region setting is not taking effect —
+check that the Vercel project's Function Region setting is not overriding
+`vercel.json`.
