@@ -33,6 +33,7 @@ import { getPayoutState, listAgentPayments } from "@/lib/commission-payout";
 import { isBlockingWarning } from "@/lib/upfront-watermark";
 import { CommissionBreakdown } from "@/components/commission-breakdown";
 import { InvestorSearchSelect } from "@/components/investor-search-select";
+import { LinkFundFields } from "@/components/link-fund-fields";
 import { formatBdt } from "@/lib/format";
 import {
   getAllFunds,
@@ -881,21 +882,6 @@ export default async function AgentDetailPage({
               </div>
               <label className="block">
                 <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                  Fund *
-                </span>
-                <select
-                  name="fundCode"
-                  required
-                  className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
-                >
-                  <option value="">—</option>
-                  <option value="EFUF">EFUF — Ekush First Unit Fund</option>
-                  <option value="EGF">EGF — Ekush Growth Fund</option>
-                  <option value="ESRF">ESRF — Ekush Stable Return Fund</option>
-                </select>
-              </label>
-              <label className="block">
-                <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
                   Sourced on *
                 </span>
                 <input
@@ -905,44 +891,14 @@ export default async function AgentDetailPage({
                   className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
-              {/* Not required: a SIP investor has no initial purchase to
-                  record. Blank submits as 0 and the nightly reconcile fills
-                  both in from the first executed BUY. */}
-              <label className="block">
-                <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                  Initial units
-                </span>
-                <input
-                  type="number"
-                  step="0.0001"
-                  min="0"
-                  name="initialUnits"
-                  className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono dark:border-zinc-700 dark:bg-zinc-900"
-                />
-              </label>
-              <label className="block">
-                <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                  Unit price at sourcing
-                </span>
-                <input
-                  type="number"
-                  step="0.0001"
-                  min="0"
-                  name="unitPriceAtSourcing"
-                  className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono dark:border-zinc-700 dark:bg-zinc-900"
-                />
-              </label>
-              <label className="block">
-                <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-                  Initial gross amount (optional — auto if blank)
-                </span>
-                <input
-                  type="number"
-                  step="0.01"
-                  name="initialGrossAmount"
-                  className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 font-mono dark:border-zinc-700 dark:bg-zinc-900"
-                />
-              </label>
+              {/* Funds are checkboxes, one link written per tick, so an
+                  investor sourced into all three is a single submit instead of
+                  three. The initial-units / unit-price pair travels with them
+                  because it only means anything against a single fund — see
+                  the component. Neither figure is required: a SIP investor has
+                  no initial purchase, blank submits as 0, and the nightly
+                  reconcile fills both in from the first executed BUY. */}
+              <LinkFundFields />
               <p className="col-span-2 text-[10px] leading-snug text-zinc-500 sm:col-span-3">
                 Leave <span className="font-medium">initial units</span> and{" "}
                 <span className="font-medium">unit price</span> blank for a SIP, or any investor who

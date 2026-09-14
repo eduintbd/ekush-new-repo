@@ -521,9 +521,10 @@ export async function deleteAgentTerm(formData: FormData): Promise<void> {
 }
 
 /**
- * Link an existing portal investor to an X-System selling agent. Creates
- * an `xsystem.agent_investors` row that the commission engine + agent
- * portal use to identify who the agent sourced.
+ * Link an existing portal investor to an X-System selling agent. Creates one
+ * `xsystem.agent_investors` row PER TICKED FUND — the commission engine keys
+ * off (investor, fund), so an investor the agent sourced into all three funds
+ * needs three rows. Those used to be three separate submissions of this form.
  *
  * Zero initial units / unit price are allowed. A SIP investor has neither at
  * sourcing — they buy monthly, starting after the link is made — and the old
@@ -540,16 +541,28 @@ export async function linkInvestorToAgent(formData: FormData): Promise<void> {
   const me = await requireRole(["admin", "checker"]);
   const agentId = String(formData.get("agentId") ?? "").trim();
   const investorCode = String(formData.get("investorCode") ?? "").trim();
-  const fundCode = String(formData.get("fundCode") ?? "").trim();
+  // Checkboxes, so several. `fundCode` is still read as a fallback for any
+  // still-open page rendered before the checkboxes shipped — its form posts a
+  // single select and would otherwise fail validation mid-session.
+  const fundCodes = [
+    ...formData.getAll("fundCodes").map((v) => String(v).trim()),
+    ...(formData.get("fundCode") ? [String(formData.get("fundCode")).trim()] : []),
+  ].filter(Boolean);
   const sourcedOnRaw = String(formData.get("sourcedOn") ?? "").trim();
   const initialUnits = Number(formData.get("initialUnits") ?? "0") || 0;
   const initialGrossAmount = Number(formData.get("initialGrossAmount") ?? "0") || 0;
   const unitPriceAtSourcing = Number(formData.get("unitPriceAtSourcing") ?? "0") || 0;
   const isDirectSubscription = formData.get("isDirectSubscription") === "on";
 
+  const VALID_FUNDS = ["EFUF", "EGF", "ESRF"];
+  const funds = Array.from(new Set(fundCodes));
+
   if (!agentId) redirect(`/admin/agents?error=Missing+agent`);
   if (!investorCode) redirect(`/admin/agents/${agentId}?error=Investor+is+required`);
-  if (!["EFUF", "EGF", "ESRF"].includes(fundCode)) {
+  if (funds.length === 0) {
+    redirect(`/admin/agents/${agentId}?error=Pick+at+least+one+fund`);
+  }
+  if (funds.some((f) => !VALID_FUNDS.includes(f))) {
     redirect(`/admin/agents/${agentId}?error=Fund+must+be+EFUF%2C+EGF+or+ESRF`);
   }
   if (!sourcedOnRaw) redirect(`/admin/agents/${agentId}?error=Sourced-on+date+is+required`);
@@ -557,12 +570,33 @@ export async function linkInvestorToAgent(formData: FormData): Promise<void> {
   if (unitPriceAtSourcing < 0) redirect(`/admin/agents/${agentId}?error=Unit+price+cannot+be+negative`);
   if (initialGrossAmount < 0) redirect(`/admin/agents/${agentId}?error=Initial+gross+amount+cannot+be+negative`);
 
+  // Initial units and unit price describe ONE purchase in ONE fund. Copying a
+  // single figure into three links would invent holdings that were never
+  // bought, and splitting it between them would be a guess. The form disables
+  // the inputs past one fund; this refuses rather than silently discarding
+  // numbers an admin did manage to submit.
+  if (funds.length > 1 && (initialUnits > 0 || unitPriceAtSourcing > 0 || initialGrossAmount > 0)) {
+    redirect(
+      `/admin/agents/${agentId}?error=${encodeURIComponent(
+        "Initial units and unit price belong to a single fund. Link that fund on its own to record them, or clear them to link several funds at once.",
+      )}`,
+    );
+  }
+
   const sourcedOn = new Date(`${sourcedOnRaw}T00:00:00.000Z`);
 
+  let created = 0;
   try {
-    await withActor(me.id, (tx) =>
-      tx.agentInvestor.create({
-        data: {
+    // One statement, one transaction: either every ticked fund is linked or
+    // none is, so a failure halfway cannot leave the investor attached to some
+    // funds and not others. skipDuplicates absorbs a fund already linked on
+    // this same date — re-ticking it is a correction, not an error worth
+    // discarding the rest of the submission for. The unique key is
+    // (investorCode, fundCode, sourcedOn), so a genuine re-sourcing on a
+    // different date still writes its own row.
+    const res = await withActor(me.id, (tx) =>
+      tx.agentInvestor.createMany({
+        data: funds.map((fundCode) => ({
           agentId,
           investorCode,
           fundCode,
@@ -571,16 +605,26 @@ export async function linkInvestorToAgent(formData: FormData): Promise<void> {
           initialGrossAmount: initialGrossAmount || initialUnits * unitPriceAtSourcing,
           unitPriceAtSourcing,
           isDirectSubscription,
-        },
+        })),
+        skipDuplicates: true,
       }),
     );
+    created = res.count;
   } catch (e) {
     const msg = e instanceof Error ? e.message : "link failed";
     redirect(`/admin/agents/${agentId}?error=${encodeURIComponent(msg)}`);
   }
 
+  const skipped = funds.length - created;
+  const summary =
+    created === 0
+      ? `${investorCode} was already linked to ${funds.join(", ")} on that date — nothing to do.`
+      : `Linked ${investorCode} to ${funds.join(", ")}${
+          skipped > 0 ? ` (${skipped} already linked on that date)` : ""
+        }.`;
+
   revalidatePath(`/admin/agents/${agentId}`);
-  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(`Linked investor ${investorCode} to agent`)}`);
+  redirect(`/admin/agents/${agentId}?ok=${encodeURIComponent(summary)}`);
 }
 
 /**
