@@ -210,3 +210,78 @@ curl -sS -D - -o /dev/null https://x.ekushwml.com/api/health | grep -i x-vercel-
 A reading of `iad1` there means the region setting is not taking effect —
 check that the Vercel project's Function Region setting is not overriding
 `vercel.json`.
+
+---
+
+## 7. Database connection pooling
+
+`DATABASE_URL` must point at Supabase's **transaction** pooler — port **6543**,
+with `?pgbouncer=true&connection_limit=1`. `DIRECT_URL` stays on **5432**; Prisma
+uses it for migrations, which need a real session.
+
+Both are set per-project in Vercel, not in the repo. The X-System and the portal
+share one Postgres, so **both projects must carry this** — fixing one and not the
+other just moves the problem.
+
+### Why (incident, 2026-09-15)
+
+Both apps were on port 5432 — Supabase's *session* pooler — with no pooling
+parameters. In session mode every serverless instance holds its own Postgres
+connection for its whole life. The instance is cheap; the connection is not.
+
+This database allows **60** connections, 3 of them reserved for superusers.
+Two Vercel apps eventually consumed the rest:
+
+```
+max_connections=60  superuser_reserved=3  used=56  headroom=1
+```
+
+The symptom was not "the database is full". It was **staff could not log in**:
+Supabase Auth could not obtain a connection, so sign-in failed with
+`Supabase Auth did not respond within 5000ms`, `/admin/agents` returned 503, and
+the hourly TB-check cron died with Prisma `P2037`
+(`remaining connection slots are reserved for roles with the SUPERUSER
+attribute`). Nothing in the logs pointed at pooling; the visible failure was
+authentication.
+
+After moving both apps to 6543, application connections dropped from 12 to 3 and
+headroom went from 1 to 23.
+
+### If it happens again
+
+Check headroom first — this is the query that identifies it:
+
+```sql
+SELECT (SELECT setting::int FROM pg_settings WHERE name='max_connections') AS max_conn,
+       (SELECT setting::int FROM pg_settings WHERE name='superuser_reserved_connections') AS reserved,
+       count(*)::int AS used
+FROM pg_stat_activity;
+```
+
+To reclaim immediately, terminate **application** connections that are plainly
+idle — never `idle in transaction`, never `active`:
+
+```sql
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+ WHERE state = 'idle'
+   AND state_change < now() - interval '5 minutes'
+   AND pid <> pg_backend_pid()
+   AND usename IN ('postgres','wa_service','authenticator');
+```
+
+Leave `pgbouncer`, `supabase_admin` and `supabase_storage_admin` alone. Those are
+Supabase's own pools — killing platform infrastructure to relieve pressure on it
+makes the outage worse, not better.
+
+That buys time; it is not the fix. If headroom is filling while both apps are
+already on 6543, the instance has outgrown 60 connections and needs a larger
+Supabase plan.
+
+### A trap when reading these values back
+
+`vercel env pull` writes a stored trailing newline as the two characters `\` and
+`n`. A real trailing newline is stripped by the URL parser; those two characters
+are not, so the URL parses with a database literally named `postgres\n`. It still
+connects — and then quietly returns **zero rows** for every table. Decode the
+escapes before using a pulled value to build or test a connection string, or a
+healthy database will look empty.
