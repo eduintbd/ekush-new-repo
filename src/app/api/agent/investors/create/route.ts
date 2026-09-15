@@ -10,7 +10,7 @@ import { hash } from "bcryptjs";
 import type { NextRequest } from "next/server";
 import { getAgentScope } from "@/lib/agent-scope";
 import { prisma } from "@/lib/prisma";
-import { uploadKycFile, KycUploadError } from "@/lib/kyc-upload";
+import { uploadKycFile, finalizeKycUpload, KycUploadError } from "@/lib/kyc-upload";
 import { mapWithConcurrency } from "@/lib/concurrency";
 
 export const runtime = "nodejs";
@@ -45,16 +45,50 @@ function s(form: FormData, key: string): string {
 }
 
 export async function POST(req: NextRequest) {
+  // Storage keys for documents the browser uploaded directly, by form field.
+  // Empty when the caller posted multipart, in which case the files ride in
+  // the body as before.
+  const uploadedRefs: Record<string, { key: string; name: string }> = {};
+
   const scope = await getAgentScope();
   if (!scope.agentId) {
     return Response.json({ ok: false, error: "Your account is not linked to an agent record." }, { status: 403 });
   }
 
+  // The form now uploads each document straight to storage and posts JSON
+  // carrying only the keys, so this body is a couple of kilobytes instead of
+  // nine files. multipart is still accepted: a page left open from before the
+  // change, or any other caller, keeps working unchanged.
   let form: FormData;
-  try {
-    form = await req.formData();
-  } catch {
-    return Response.json({ ok: false, error: "Invalid form submission." }, { status: 400 });
+  const contentType = req.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return Response.json({ ok: false, error: "Invalid submission." }, { status: 400 });
+    }
+    // Re-shape into FormData so everything below — every s(form, …) read —
+    // stays identical for both transports.
+    form = new FormData();
+    for (const [k, v] of Object.entries(body)) {
+      if (typeof v === "string") form.set(k, v);
+    }
+    const docs = body.documents;
+    if (docs && typeof docs === "object") {
+      for (const [field, ref] of Object.entries(docs as Record<string, unknown>)) {
+        const r = ref as { key?: unknown; name?: unknown };
+        if (typeof r?.key === "string") {
+          uploadedRefs[field] = { key: r.key, name: typeof r.name === "string" ? r.name : "document" };
+        }
+      }
+    }
+  } else {
+    try {
+      form = await req.formData();
+    } catch {
+      return Response.json({ ok: false, error: "Invalid form submission." }, { status: 400 });
+    }
   }
 
   const name = s(form, "name");
@@ -192,13 +226,34 @@ export async function POST(req: NextRequest) {
   // Only slots that actually carry a file enter the pool, so an empty input can
   // never occupy a result index. Built in FILE_FIELDS order — both the failure
   // scan and the `docs` array depend on that ordering.
-  const queued = FILE_FIELDS.flatMap(([field, docType, label]) => {
+  // Two shapes, one list. `ref` is a key the browser already uploaded to
+  // kyc-inbox/; `file` is a multipart upload still in this request body. Both
+  // end up going through the identical magic-byte / size / sharp pipeline —
+  // a direct upload is never trusted just because it reached storage first.
+  type Queued = {
+    field: string;
+    docType: string;
+    label: string;
+    ref: { key: string; name: string } | null;
+    file: File | null;
+  };
+  const queued: Queued[] = FILE_FIELDS.flatMap(([field, docType, label]): Queued[] => {
+    const ref = uploadedRefs[field];
+    if (ref) return [{ field, docType, label, ref, file: null }];
     const f = form.get(field);
-    return f instanceof File && f.size > 0 ? [{ field, docType, label, file: f }] : [];
+    return f instanceof File && f.size > 0
+      ? [{ field, docType, label, ref: null, file: f }]
+      : [];
   });
 
   const settled = await mapWithConcurrency(queued, KYC_UPLOAD_CONCURRENCY, (q) =>
-    uploadKycFile(q.file, { investorId, docType: q.docType }),
+    q.ref
+      ? finalizeKycUpload(q.ref.key, {
+          investorId,
+          docType: q.docType,
+          displayName: q.ref.name,
+        })
+      : uploadKycFile(q.file as File, { investorId, docType: q.docType }),
   );
 
   // Everything has settled; now answer exactly as the sequential loop did. The

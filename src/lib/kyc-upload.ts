@@ -87,22 +87,80 @@ export interface KycUploadResult {
 /**
  * Validate + harden + store one KYC file. Throws KycUploadError on rejection.
  */
+export interface KycUploadOptions {
+  /** Owner the file is filed under — an investor id, or an agent id when pathPrefix is "agents". */
+  investorId: string;
+  docType: string;
+  /** Storage folder. Defaults to "kyc" (investor KYC); selling-agent profile docs pass "agents". */
+  pathPrefix?: string;
+  /** Which docTypes may legitimately be a PDF. Defaults to the investor KYC set. */
+  pdfAllowedKinds?: ReadonlySet<string>;
+}
+
+/** Validate + harden + store one KYC file the caller already holds in memory. */
 export async function uploadKycFile(
   file: File,
-  opts: {
-    /** Owner the file is filed under — an investor id, or an agent id when pathPrefix is "agents". */
-    investorId: string;
-    docType: string;
-    /** Storage folder. Defaults to "kyc" (investor KYC); selling-agent profile docs pass "agents". */
-    pathPrefix?: string;
-    /** Which docTypes may legitimately be a PDF. Defaults to the investor KYC set. */
-    pdfAllowedKinds?: ReadonlySet<string>;
-  },
+  opts: KycUploadOptions,
 ): Promise<KycUploadResult> {
-  const buffer = Buffer.from(await file.arrayBuffer());
+  return processKycBytes(Buffer.from(await file.arrayBuffer()), file.name ?? "", opts);
+}
+
+/**
+ * Same gate, for a file the BROWSER uploaded straight to storage.
+ *
+ * The agent onboarding form sends each document direct to the private
+ * kyc-documents bucket under `kyc-inbox/` and then posts only the keys, so
+ * nothing large crosses Vercel. That means the raw bytes land in storage
+ * BEFORE anything has inspected them, and the browser's claimed MIME type is
+ * worthless. This reads them back, runs the identical magic-byte / size / PDF
+ * / sharp-re-encode pipeline, and writes the sanitized copy to the permanent
+ * key — so a direct upload ends up exactly as locked down as a server-side
+ * one. The unsanitized original is then deleted.
+ */
+export async function finalizeKycUpload(
+  tempKey: string,
+  opts: KycUploadOptions & { displayName?: string },
+): Promise<KycUploadResult> {
+  // Only ever read from the inbox. Without this a caller could hand over the
+  // key of an already-filed document and have it re-processed, or worse point
+  // at another investor's folder.
+  if (!tempKey.startsWith("kyc-inbox/")) {
+    throw new KycUploadError(400, "Upload reference is not valid.");
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) throw new KycUploadError(500, "Storage is not configured on this deployment.");
+
+  let buffer: Buffer;
+  try {
+    const { data, error } = await admin.storage.from(BUCKET).download(tempKey);
+    if (error || !data) throw error ?? new Error("no data");
+    buffer = Buffer.from(await data.arrayBuffer());
+  } catch {
+    throw new KycUploadError(
+      400,
+      "The uploaded file could not be read back. Attach it again and resubmit.",
+    );
+  }
+
+  const result = await processKycBytes(buffer, opts.displayName ?? "document", opts);
+
+  // Best-effort. The sanitized copy is what gets served, so a leftover raw
+  // file weakens nothing — but it should be visible rather than silent.
+  try {
+    await admin.storage.from(BUCKET).remove([tempKey]);
+  } catch (err) {
+    console.warn(`[finalizeKycUpload] could not delete raw upload ${tempKey}:`, err);
+  }
+  return result;
+}
+
+async function processKycBytes(
+  buffer: Buffer,
+  rawName: string,
+  opts: KycUploadOptions,
+): Promise<KycUploadResult> {
   if (buffer.length === 0) throw new KycUploadError(400, "File is empty.");
 
-  const rawName = file.name ?? "";
   const lowerName = rawName.toLowerCase();
   for (const banned of FORBIDDEN_EXT_TOKENS) {
     if (lowerName.includes(banned)) {

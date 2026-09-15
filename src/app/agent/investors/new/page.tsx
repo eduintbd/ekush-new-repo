@@ -3,6 +3,84 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { createClient } from "@supabase/supabase-js";
+import { compressImage } from "@/lib/image-compress";
+
+// Every file slot on the form, in the order the server reports failures in.
+const FILE_FIELDS = [
+  ["photo", "Photograph"],
+  ["signature", "Signature"],
+  ["nidFront", "NID — front"],
+  ["nidBack", "NID — back"],
+  ["tinCert", "e-TIN certificate"],
+  ["chequeLeafPhoto", "Cheque leaf"],
+  ["nomineePhoto", "Nominee photo"],
+  ["nomineeNidFront", "Nominee NID — front"],
+  ["nomineeNidBack", "Nominee NID — back"],
+] as const;
+
+// Anonymous client, used only to PUT a file at a signed URL the server minted.
+// No session and no service key ever reach the browser; the signed token is
+// single-use and scoped to one object key.
+const storage = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+  { auth: { persistSession: false, autoRefreshToken: false } },
+);
+
+/** Abort rather than hang for ever if a single upload stalls. */
+async function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
+/**
+ * Shrink one document and send it STRAIGHT to storage, returning the key the
+ * registration will reference.
+ *
+ * This is the change that fixes the agent onboarding failures. The form used
+ * to bundle all nine files into one multipart POST through Vercel, which had
+ * to arrive whole or not at all — one interruption on a mobile link cost the
+ * entire registration, and it was failing at 291 KB, so size was never the
+ * problem. Nine independent uploads mean a dropped connection costs one small
+ * file, which is retried on its own.
+ *
+ * Investors registering themselves never hit this because the portal already
+ * works this way; this is the same pattern brought across.
+ */
+async function uploadOne(field: string, file: File): Promise<{ key: string; name: string }> {
+  const small = await compressImage(file);
+
+  const res = await withTimeout(
+    fetch("/api/agent/investors/upload-url", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: small.name }),
+    }),
+    30_000,
+    "authorization timed out",
+  );
+  const auth = await res.json().catch(() => ({}));
+  if (!res.ok || !auth?.ok) throw new Error(auth?.error ?? "could not authorize the upload");
+
+  const up = await withTimeout(
+    storage.storage
+      .from("kyc-documents")
+      .uploadToSignedUrl(auth.path, auth.token, small, { contentType: small.type || undefined }),
+    120_000,
+    "upload timed out",
+  );
+  if (up.error) throw new Error(up.error.message || "upload failed");
+
+  return { key: auth.path as string, name: small.name };
+}
 
 const INVESTOR_TYPES = [
   ["INDIVIDUAL", "Individual"],
@@ -12,13 +90,16 @@ const INVESTOR_TYPES = [
   ["GRATUITY_FUND", "Gratuity Fund"],
 ] as const;
 
-// The whole form — all nine attachments — goes up as ONE multipart POST, and a
-// Vercel function's request body is capped at 4.5 MB. Over that the platform
-// kills the upload before the route runs, so there is no server error to
-// report: `fetch` simply rejects. Agents were sending 20 MB+ of PNG NID scans
-// and watching the button sit on "Submitting…" for ever. We check the total
-// here and name the offending files, leaving margin for the text fields.
-const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+// The combined 4 MB cap this form used to enforce is GONE, and deliberately.
+// It existed because all nine attachments went up as one multipart POST and a
+// Vercel request body is capped at 4.5 MB. Documents now go straight to
+// storage, one at a time, never through Vercel — so the total no longer
+// matters and refusing a submission on it would be inventing a limit.
+//
+// What still applies is per FILE, enforced server-side in kyc-upload.ts:
+// 5 MB an image, 10 MB a PDF. The running total below is shown for awareness
+// only — a large scan is slow, not rejected.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 function mb(bytes: number): string {
   return bytes < 1024 * 1024
@@ -79,7 +160,7 @@ function describeFailure(status: number, totalBytes: number): string {
     // Only blame the attachments when they are actually heavy — this used to
     // tell agents to shrink a 400 KB upload, which sent them chasing a
     // problem they did not have.
-    const heavy = totalBytes > MAX_TOTAL_BYTES / 2;
+    const heavy = totalBytes > MAX_IMAGE_BYTES;
     return `The server took too long and gave up (HTTP ${status}). Nothing was saved. ${
       heavy
         ? `The attachments come to ${mb(totalBytes)} — re-saving the photos as JPG will make this far more likely to go through.`
@@ -103,8 +184,17 @@ export default function NewInvestorPage() {
   // must survive a failed attempt so the retry is recognised as the same
   // registration. Cleared by "Register another", which genuinely is a new one.
   const submissionKey = useRef<string | null>(null);
-  // Live weight of the chosen files, so the cap is visible BEFORE submitting
-  // rather than discovered by a submission that goes nowhere.
+  // Documents already safely in storage, keyed by form field. Survives a
+  // failed submit so a retry re-uploads only what actually failed. Cleared by
+  // "Register another" — a new investor must not inherit these.
+  const uploaded = useRef<Record<string, { key: string; name: string }>>({});
+  // "Uploading NID — front (3 of 9)…", so nine sequential uploads read as
+  // progress rather than a frozen button.
+  const [uploading, setUploading] = useState<{ done: number; total: number; label: string } | null>(
+    null,
+  );
+  // Live weight of the chosen files, shown so an agent can see at a glance
+  // that a 6 MB scan is about to be slow.
   const [totalBytes, setTotalBytes] = useState(0);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -112,35 +202,60 @@ export default function NewInvestorPage() {
     setError(null);
     const form = e.currentTarget;
 
-    const files = attachments(form);
-    const total = files.reduce((n, f) => n + f.size, 0);
-    if (total > MAX_TOTAL_BYTES) {
-      const worst = files
-        .slice(0, 4)
-        .map((f) => `${f.name} (${mb(f.size)})`)
-        .join(", ");
-      setError(
-        `The attachments come to ${mb(total)}. One registration can carry at most ${mb(MAX_TOTAL_BYTES)} in total, so this cannot be sent. Largest first: ${worst}. Re-save them as JPG — a PNG of an NID is 3–5 MB, the same picture as JPG is around 300 KB — then attach them again.`,
-      );
-      return;
-    }
+    const total = attachments(form).reduce((n, f) => n + f.size, 0);
 
     setBusy(true);
     submissionKey.current ??= crypto.randomUUID();
 
-    // Send, resending on a dropped connection. Only a `fetch` rejection is
-    // retried — that means the request never got an answer. Anything the
-    // server actually replied with, including a 500, is left alone: it will
-    // say the same thing next time.
+    // 1. Files first, each straight to storage, and each on its own.
+    //
+    // Uploads already done in an earlier attempt are kept in `uploaded` and
+    // skipped, so pressing Submit again after a failure only re-sends what
+    // actually failed — the agent never re-uploads eight good files because
+    // the ninth dropped.
+    const fd = new FormData(form);
+    const pending = FILE_FIELDS.filter(([field]) => {
+      const f = fd.get(field);
+      return f instanceof File && f.size > 0 && !uploaded.current[field];
+    });
+
+    for (let i = 0; i < pending.length; i++) {
+      const [field, label] = pending[i];
+      const file = fd.get(field) as File;
+      setUploading({ done: i, total: pending.length, label });
+      try {
+        uploaded.current[field] = await uploadOne(field, file);
+      } catch (err) {
+        setUploading(null);
+        setBusy(false);
+        setError(
+          `${label} could not be uploaded (${
+            err instanceof Error ? err.message : "upload failed"
+          }). Nothing was saved, and the documents that did upload are remembered — press “Submit for approval” again and only this one will be retried.`,
+        );
+        return;
+      }
+    }
+    setUploading(null);
+
+    // 2. Then the registration itself — JSON, a couple of kilobytes, carrying
+    //    only the storage keys. This is the request that used to be nine files
+    //    wide and is now small enough that a retry is nearly free.
+    const payload: Record<string, unknown> = { submissionKey: submissionKey.current };
+    for (const [k, v] of fd.entries()) {
+      if (typeof v === "string") payload[k] = v;
+    }
+    payload.documents = uploaded.current;
+
     let res: Response | null = null;
     let lastNetworkError = "";
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
-      // Rebuilt per attempt so the retry re-reads the files from the form
-      // rather than replaying a consumed body.
-      const body = new FormData(form);
-      body.set("submissionKey", submissionKey.current);
       try {
-        res = await fetch("/api/agent/investors/create", { method: "POST", body });
+        res = await fetch("/api/agent/investors/create", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
         break;
       } catch (err) {
         lastNetworkError = err instanceof Error ? err.message : "network error";
@@ -222,6 +337,9 @@ export default function NewInvestorPage() {
                 // reusing this one would be answered as a replay of the
                 // registration just filed.
                 submissionKey.current = null;
+                // The next investor's documents are their own — carrying these
+                // over would file one person's NID against another.
+                uploaded.current = {};
                 setDoneCode(null);
                 router.refresh();
               }}
@@ -250,8 +368,9 @@ export default function NewInvestorPage() {
           admin for approval — you don&apos;t set the investor code or send the welcome email.
         </p>
         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          All the attachments together must stay under {mb(MAX_TOTAL_BYTES)}. Photograph the
-          documents or save them as <strong>JPG</strong> — a PNG screenshot of an NID is 3–5 MB on
+          Each document is uploaded on its own as you submit, so one weak moment on the network
+          costs a single file rather than the whole form. Photograph the documents or save them as
+          <strong> JPG</strong> — a PNG screenshot of an NID is 3–5 MB on
           its own and will not go through.
         </p>
 
@@ -310,17 +429,19 @@ export default function NewInvestorPage() {
           </Section>
 
           {totalBytes > 0 && (
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Attachments: {mb(totalBytes)} across {FILE_FIELDS.length} slots. Large photos are
+              shrunk in your browser before they are sent.
+            </p>
+          )}
+
+          {uploading && (
             <p
-              className={
-                totalBytes > MAX_TOTAL_BYTES
-                  ? "text-sm font-medium text-red-700 dark:text-red-300"
-                  : "text-sm text-zinc-600 dark:text-zinc-400"
-              }
+              role="status"
+              className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
             >
-              Attachments: {mb(totalBytes)} of {mb(MAX_TOTAL_BYTES)}
-              {totalBytes > MAX_TOTAL_BYTES
-                ? " — too large to send. Re-save the photos as JPG and attach them again."
-                : null}
+              Uploading {uploading.label} ({uploading.done + 1} of {uploading.total})… Each document
+              is sent on its own, so a dropped connection only costs this one.
             </p>
           )}
 
@@ -348,11 +469,13 @@ export default function NewInvestorPage() {
             disabled={busy}
             className="rounded-md bg-emerald-700 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-60"
           >
-            {retrying > 0
-              ? `Retrying (${retrying}/${SEND_ATTEMPTS})…`
-              : busy
-                ? "Submitting…"
-                : "Submit for approval"}
+            {uploading
+              ? `Uploading ${uploading.done + 1}/${uploading.total}…`
+              : retrying > 0
+                ? `Retrying (${retrying}/${SEND_ATTEMPTS})…`
+                : busy
+                  ? "Submitting…"
+                  : "Submit for approval"}
           </button>
         </form>
       </div>
