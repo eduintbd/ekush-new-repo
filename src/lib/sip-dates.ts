@@ -106,5 +106,18 @@ export function debitDayLabel(debitDay: number): string {
 }
 
 export const SIP_MIN_AMOUNT = 1000;
-export const TENURE_MIN = 3;
+// Was 3. Agents asked for short mandates — an investor who wants a one- or
+// two-year commitment could not be signed up at all, and the floor was a
+// product default rather than anything the DDI or the commission model
+// requires. Both the form and createAgentSip() validate against this same
+// constant, so the client cannot offer a tenure the server would reject.
+export const TENURE_MIN = 1;
 export const TENURE_MAX = 30;
+// Offered as one-tap buttons next to the free-text year box. Not a
+// restriction — any whole number from TENURE_MIN to TENURE_MAX can be typed.
+export const TENURE_QUICK_PICKS = [1, 2, 3, 5, 10] as const;
+
+/** "1 year" / "5 years" — used wherever a tenure is shown to a person. */
+export function tenureLabel(years: number): string {
+  return `${years} year${years === 1 ? "" : "s"}`;
+}

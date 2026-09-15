@@ -25,6 +25,8 @@ import {
   SIP_MIN_AMOUNT,
   TENURE_MAX,
   TENURE_MIN,
+  TENURE_QUICK_PICKS,
+  tenureLabel,
 } from "@/lib/sip-dates";
 
 const AMOUNT_QUICK_PICKS = [1000, 2500, 5000, 10000, 25000];
@@ -257,19 +259,66 @@ export function SipClient({
             ))}
           </div>
 
-          <label className="mt-4 block text-sm">
+          {/* Tenure: type any year, tap a common one, or drag.
+              It used to be the slider alone with a floor of three years, so a
+              one- or two-year mandate simply could not be entered. The typed
+              box is the control that matters — the pills are shortcuts, not
+              the permitted set, and the slider is kept for anyone who prefers
+              to drag. All three drive the same value, and TENURE_MIN/MAX come
+              from the same constants createAgentSip() validates against, so
+              the form can never offer a tenure the server would refuse. */}
+          <div className="mt-4 text-sm">
             <span className="mb-1 block text-zinc-600 dark:text-zinc-400">
-              Tenure — {tenure} year{tenure > 1 ? "s" : ""}
+              Tenure — {tenureLabel(tenure)}
             </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="number"
+                min={TENURE_MIN}
+                max={TENURE_MAX}
+                step={1}
+                value={tenure}
+                onChange={(e) => {
+                  // Keep whatever is typed while typing — clamping mid-entry
+                  // turns "10" into "1" the moment the 1 lands. The blur below
+                  // and the server both settle it.
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) setTenure(Math.trunc(n));
+                }}
+                onBlur={(e) => {
+                  const n = Math.trunc(Number(e.target.value));
+                  if (!Number.isFinite(n) || n < TENURE_MIN) setTenure(TENURE_MIN);
+                  else if (n > TENURE_MAX) setTenure(TENURE_MAX);
+                }}
+                className="w-20 rounded-md border border-zinc-300 bg-white px-3 py-2 text-center dark:border-zinc-700 dark:bg-zinc-950"
+                aria-label={`Tenure in years, ${TENURE_MIN} to ${TENURE_MAX}`}
+              />
+              <span className="text-zinc-500">years</span>
+              {TENURE_QUICK_PICKS.map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setTenure(v)}
+                  className={`rounded-full border px-3 py-1 text-xs ${
+                    tenure === v
+                      ? "border-emerald-600 bg-emerald-600 font-medium text-white"
+                      : "border-zinc-300 text-zinc-700 hover:border-emerald-500 dark:border-zinc-700 dark:text-zinc-300"
+                  }`}
+                >
+                  {tenureLabel(v)}
+                </button>
+              ))}
+            </div>
             <input
               type="range"
               min={TENURE_MIN}
               max={TENURE_MAX}
-              value={tenure}
+              value={Math.min(Math.max(tenure, TENURE_MIN), TENURE_MAX)}
               onChange={(e) => setTenure(Number(e.target.value))}
-              className="w-full accent-emerald-600"
+              className="mt-3 w-full accent-emerald-600"
+              aria-label="Tenure slider"
             />
-          </label>
+          </div>
         </Card>
 
         {/* Debit day — the part that differs from the portal */}
@@ -439,7 +488,7 @@ export function SipClient({
           <Row label="Investor" value={investor ? `${investor.investorCode} — ${investor.name}` : "—"} />
           <Row label="Fund" value={fund?.name ?? "—"} />
           <Row label="Monthly" value={bdt(amount)} />
-          <Row label="Tenure" value={`${tenure} year${tenure > 1 ? "s" : ""}`} />
+          <Row label="Tenure" value={tenureLabel(tenure)} />
           <Row label="Debit day" value={ordinal(debitDay)} />
           <Row label="First debit" value={longDate(start)} />
           <Row label="Ends" value={longDate(end)} />
@@ -472,7 +521,7 @@ export function SipClient({
             ["Monthly amount", bdt(amount)],
             ["Debit day", debitDayLabel(debitDay)],
             ["First debit", longDate(start)],
-            ["Tenure", `${tenure} year${tenure > 1 ? "s" : ""}`],
+            ["Tenure", tenureLabel(tenure)],
           ]}
           onCancel={() => setShowDdi(false)}
           onConfirm={submit}

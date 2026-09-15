@@ -243,7 +243,7 @@ export default async function AgentDdiFormPage({
           <tbody>
             <tr><td style={S.tdLabel}>DDI START DATE</td><td style={S.tdValue}>{fmtDate(startDate)}</td></tr>
             <tr><td style={S.tdLabel}>DDI END DATE</td><td style={S.tdValue}>{fmtDate(endDate)}</td></tr>
-            <tr><td style={S.tdLabel}>SIP TENURE</td><td style={S.tdValue}>{String(tenure).padStart(2, "0")} years</td></tr>
+            <tr><td style={S.tdLabel}>SIP TENURE</td><td style={S.tdValue}>{String(tenure).padStart(2, "0")} {tenure === 1 ? "year" : "years"}</td></tr>
             <tr><td style={S.tdLabel}>DDI PULL DATE OF THE MONTH</td><td style={S.tdValue}>{debitDayLabel(debitDay)}</td></tr>
             <tr><td style={S.tdLabel}>MONTHLY DDI AMOUNT (BDT)</td><td style={S.tdValue}>BDT {amount.toLocaleString("en-IN")}</td></tr>
           </tbody>
