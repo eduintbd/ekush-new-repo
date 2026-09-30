@@ -60,10 +60,13 @@ export async function middleware(req: NextRequest) {
         { status: 503, headers: { "Retry-After": "60" } },
       );
     }
-    return NextResponse.rewrite(new URL("/service-unavailable", req.url), {
-      status: 503,
-      headers: { "Retry-After": "60", "Cache-Control": "no-store" },
-    });
+    return keepCookies(
+      NextResponse.rewrite(new URL("/service-unavailable", req.url), {
+        status: 503,
+        headers: { "Retry-After": "60", "Cache-Control": "no-store" },
+      }),
+      res,
+    );
   }
 
   if (isPublic(pathname)) return res;
@@ -73,12 +76,12 @@ export async function middleware(req: NextRequest) {
   // which surfaces as a corrupt file rather than "you are signed out".
   if (!user) {
     if (pathname.startsWith("/api/")) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+      return keepCookies(NextResponse.json({ error: "unauthorized" }, { status: 401 }), res);
     }
     const loginUrl = req.nextUrl.clone();
     loginUrl.pathname = pathname.startsWith("/agent") ? "/agent/login" : "/login";
     loginUrl.searchParams.set("next", pathname);
-    return NextResponse.redirect(loginUrl);
+    return keepCookies(NextResponse.redirect(loginUrl), res);
   }
 
   // Authenticated — gate by role from user_metadata.xsystem_role. Profile
@@ -101,19 +104,34 @@ export async function middleware(req: NextRequest) {
   const isApi = pathname.startsWith("/api/");
   /** Wrong role: APIs get a status, pages get sent somewhere useful. */
   const deny = (to: string) => {
-    if (isApi) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    if (isApi) return keepCookies(NextResponse.json({ error: "forbidden" }, { status: 403 }), res);
     const url = req.nextUrl.clone();
     url.pathname = to;
-    return NextResponse.redirect(url);
+    return keepCookies(NextResponse.redirect(url), res);
   };
 
-  if (onAgentRoute && role !== "selling_agent") return deny("/");
+  // An UNSET role is let through to the page, where requireAgent checks the
+  // Profile role — the authoritative one. xsystem_role is only stamped by the
+  // password sign-in, so a session from any other door (the set-password
+  // link) has none, and bouncing it to "/" read to the agent as being thrown
+  // out (BR0000, Sep 2026). A staff user who lands here with no stamp is still
+  // refused by requireAgent.
+  if (onAgentRoute && role !== null && role !== "selling_agent") return deny("/");
   if (!onAgentRoute && role === "selling_agent") return deny("/agent");
   // Staff route, role is staff or unset (legacy): allow. Page-level
   // requireStaff/requireRole gives the strict check.
   if (!onAgentRoute && role !== null && !STAFF_ROLES.has(role)) return deny("/");
 
   return res;
+}
+
+// A session refresh inside updateSupabaseSession rotates the refresh token and
+// writes the new cookies onto `res`. A response built from scratch here would
+// drop them, and the browser would keep the already-spent token — the next
+// request then fails as "signed out". Copy them across.
+function keepCookies<T extends NextResponse>(out: T, from: NextResponse): T {
+  for (const c of from.cookies.getAll()) out.cookies.set(c);
+  return out;
 }
 
 export const config = {

@@ -81,10 +81,15 @@ async function issueTicket(opts: {
   const token = randomBytes(32).toString("base64url");
   const ttl = opts.isReset ? TICKET_TTL_MS.reset : TICKET_TTL_MS.onboarding;
 
+  // Older links are cancelled by EXPIRING them, not by marking them redeemed:
+  // redeemedAt means "this link was used to set a password", and stamping it
+  // here made a replaced link say "already been used. If that wasn't you…" —
+  // which read like someone else had taken over the account.
+  const now = new Date();
   await prisma.$transaction([
     prisma.agentPasswordTicket.updateMany({
-      where: { email: opts.email, redeemedAt: null },
-      data: { redeemedAt: new Date() },
+      where: { email: opts.email, redeemedAt: null, expiresAt: { gt: now } },
+      data: { expiresAt: now },
     }),
     prisma.agentPasswordTicket.create({
       data: {
@@ -228,11 +233,15 @@ export async function redeemPasswordTicket(
 
   // Claim it. `redeemedAt: null` in the filter is the lock — a second request
   // that got this far updates 0 rows and is refused.
+  // The expiry is part of the lock too, so a link replaced by a newer email
+  // between the checks above and this claim can't still be spent.
   const claim = await prisma.agentPasswordTicket.updateMany({
-    where: { tokenHash, redeemedAt: null },
+    where: { tokenHash, redeemedAt: null, expiresAt: { gt: new Date() } },
     data: { redeemedAt: new Date() },
   });
-  if (claim.count === 0) return { ok: false, error: "This link has already been used." };
+  if (claim.count === 0) {
+    return { ok: false, error: "This link has already been used, or was replaced by a newer email." };
+  }
 
   // `redirectTo` only decides the Location we are about to discard — we read
   // the fragment off the 303 rather than following it — but it still has to

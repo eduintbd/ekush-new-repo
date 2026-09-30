@@ -71,6 +71,11 @@ export async function signInStaff(formData: FormData): Promise<void> {
 
 export async function signOut(): Promise<void> {
   const supabase = await createSupabaseServerClient();
-  await supabase.auth.signOut();
+  // This device only. Supabase's default is "global", which revoked every
+  // session for the user — so anyone signing out logged out their other
+  // devices, and everyone else sharing a company login (agent accounts such
+  // as BR0000 are one login per firm). Global revocation is kept where it is
+  // a security step: after a password is set, and in the MFA recovery paths.
+  await supabase.auth.signOut({ scope: "local" });
   redirect("/");
 }

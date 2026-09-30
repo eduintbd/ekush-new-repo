@@ -276,10 +276,12 @@ export async function setAgentTemporaryPassword(id: string): Promise<void> {
   }
 
   // Any outstanding emailed ticket is now stale — void it so two different
-  // credentials aren't live at once.
+  // credentials aren't live at once. Expired, not redeemed — see issueTicket
+  // in lib/agent-invite.ts: "used" must only ever mean a password was set.
+  const now = new Date();
   await prisma.agentPasswordTicket.updateMany({
-    where: { email: agent!.email, redeemedAt: null },
-    data: { redeemedAt: new Date() },
+    where: { email: agent!.email, redeemedAt: null, expiresAt: { gt: now } },
+    data: { expiresAt: now },
   });
 
   revalidatePath(`/admin/agents/${id}`);

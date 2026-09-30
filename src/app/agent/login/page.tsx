@@ -68,7 +68,22 @@ export default async function AgentLoginPage({
             disabled={!authConfigured}
           />
 
-          {sp.error && <p className="text-sm text-red-600 dark:text-red-400">{sp.error}</p>}
+          {sp.error && (
+            <p className="text-sm text-red-600 dark:text-red-400">
+              {sp.error}
+              {/* A wrong password is the one error a reset fixes — put the way
+                  out right here, not below the button. */}
+              {sp.error.startsWith("Invalid email or password") && (
+                <>
+                  {" "}
+                  <Link href="/agent/forgot-password" className="font-medium underline">
+                    Reset your password
+                  </Link>
+                  {" "}— we&apos;ll email you a link.
+                </>
+              )}
+            </p>
+          )}
 
           <button
             type="submit"

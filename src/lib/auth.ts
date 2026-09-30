@@ -61,12 +61,24 @@ export async function getProfileOutcome(): Promise<ProfileOutcome> {
   if (error && isAuthUnavailable(error)) return { status: "auth_unavailable" };
   if (!data.user) return { status: "anonymous" };
 
-  try {
-    const profile = await prisma.profile.findUnique({ where: { id: data.user.id } });
-    return profile ? { status: "ok", profile } : { status: "anonymous" };
-  } catch {
-    return { status: "anonymous" };
+  // The user IS signed in at this point. A failed profile read is a database
+  // problem, not a sign-out: treating it as "anonymous" sent agents with a
+  // valid session to the login page during the 2026-09-15 pooler outage,
+  // where an agent who had never saved their password was then stuck. Retry
+  // once, then send them to the "try again" page instead of the login form.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const profile = await prisma.profile.findUnique({ where: { id: data.user.id } });
+      return profile ? { status: "ok", profile } : { status: "anonymous" };
+    } catch (err) {
+      if (attempt === 1) {
+        console.error("[auth] profile read failed for a signed-in user:", err);
+        return { status: "auth_unavailable" };
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
   }
+  return { status: "auth_unavailable" };
 }
 
 const STAFF_ROLES: ReadonlyArray<UserRole> = ["admin", "checker", "accountant", "auditor"];

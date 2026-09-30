@@ -50,6 +50,9 @@ export const PDF_ALLOWED_KYC_KINDS: ReadonlySet<string> = new Set([
   // routinely a PDF from an app, so both must be allowed through as PDFs
   // rather than forced to images.
   "AGENT_PURCHASE_INSTRUCTION", "PAYMENT_SLIP",
+  // Agent-raised sells (lib/agent-sell.ts): the client's written authorisation
+  // to sell, and the broker's DP-40 report, which brokers issue as PDFs.
+  "AGENT_SELL_INSTRUCTION", "DP40",
 ]);
 
 export class KycUploadError extends Error {

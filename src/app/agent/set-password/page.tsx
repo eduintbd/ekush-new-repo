@@ -40,19 +40,39 @@ function ErrorNote({ children }: { children: React.ReactNode }) {
   );
 }
 
-function DeadEnd({ message }: { message: string }) {
+const PRIMARY =
+  "inline-block rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800";
+const SECONDARY =
+  "inline-block rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800";
+
+// `signInFirst`: the link was genuinely spent setting a password, so the
+// agent almost certainly has one already — send them to sign in first, not
+// round the reset loop. (BR0000 kept reopening their used invite email.)
+function DeadEnd({ message, signInFirst = false }: { message: string; signInFirst?: boolean }) {
   return (
     <div className="mt-4 space-y-3">
       <ErrorNote>{message}</ErrorNote>
-      <Link
-        href="/agent/forgot-password"
-        className="inline-block rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800"
-      >
-        Request a new link
-      </Link>
-      <Link href="/agent/login" className="block text-sm text-zinc-700 underline dark:text-zinc-300">
-        Back to sign in
-      </Link>
+      <div className="flex flex-wrap gap-2">
+        {signInFirst ? (
+          <>
+            <Link href="/agent/login" className={PRIMARY}>
+              Sign in
+            </Link>
+            <Link href="/agent/forgot-password" className={SECONDARY}>
+              Forgot password? Get a new link
+            </Link>
+          </>
+        ) : (
+          <>
+            <Link href="/agent/forgot-password" className={PRIMARY}>
+              Request a new link
+            </Link>
+            <Link href="/agent/login" className={SECONDARY}>
+              Back to sign in
+            </Link>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -107,12 +127,23 @@ export default async function AgentSetPasswordPage({
     if (state !== "valid") {
       return (
         <Shell>
+          {/* A failed attempt redirects here with the real reason in ?error=.
+              Show it first — otherwise a breakage mid-way was reported only as
+              "already used". */}
+          {sp.error && (
+            <div className="mt-4">
+              <ErrorNote>{sp.error}</ErrorNote>
+            </div>
+          )}
           <DeadEnd
+            signInFirst={state === "used" && !sp.error}
             message={
               state === "used"
-                ? "This link has already been used. If that wasn't you, request a fresh one below."
+                ? sp.error
+                  ? "This link can't be used again. Request a fresh one below."
+                  : "This link was already used to set your password. Sign in with that password — or, if you've forgotten it, get a new link."
                 : state === "expired"
-                  ? "This link has expired. Request a fresh one below."
+                  ? "This link has expired, or was replaced by a newer email. Use the newest email, or request a fresh link below."
                   : "This link is not valid. Request a fresh one below."
             }
           />
