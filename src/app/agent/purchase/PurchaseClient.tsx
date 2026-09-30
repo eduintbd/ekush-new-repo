@@ -13,18 +13,22 @@
 // Unit price and No of units stay read-only and derived from the live NAV,
 // exactly as in the portal.
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { PurchaseFundOption, PurchaseInvestorOption } from "@/lib/agent-purchase";
 import { bankAccountsForFund } from "@/lib/fund-bank-accounts";
+import { UPLOAD_ATTEMPTS, uploadKycDocument, type UploadedRef } from "@/lib/kyc-direct-upload";
 import { InvestorSearchSelect } from "@/components/investor-search-select";
 
 const STEPS = ["Information", "Payment", "Instruction", "Confirm", "Success"];
 
-// The whole form posts as one multipart body and a Vercel function caps the
-// request at 4.5 MB. Check it here and say so, rather than letting the platform
-// kill the upload and leave the agent staring at a spinner.
-const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+// The 4 MB combined cap that used to live here is GONE, and deliberately: it
+// existed because both attachments rode inside one multipart POST and a Vercel
+// request body is capped at 4.5 MB. They now go straight to storage, never
+// through Vercel, so a total no longer means anything and refusing a submit on
+// it would be inventing a limit. Per-FILE limits still apply, server-side in
+// kyc-upload.ts: 5 MB an image, 10 MB a PDF. The running total below is shown
+// for awareness only — a big scan is slow, not rejected.
 
 function bdt(n: number, decimals = 2): string {
   return n.toLocaleString("en-IN", {
@@ -66,6 +70,17 @@ export function PurchaseClient({
   const [paymentSlip, setPaymentSlip] = useState<File | null>(null);
   const [instruction, setInstruction] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  // Documents already in storage, so a retry after a failure re-sends only
+  // what actually failed. A ref, not state: it is read inside submit().
+  //
+  // The File is kept beside the key so a SWAPPED attachment is noticed: if the
+  // agent picks a different scan after a failure, reusing the old upload would
+  // silently file the document they just replaced.
+  const sent = useRef<
+    Partial<Record<"paymentSlip" | "instruction", { ref: UploadedRef; file: File }>>
+  >({});
+  const [uploading, setUploading] = useState<string | null>(null);
+  const [uploadRetry, setUploadRetry] = useState<{ label: string; attempt: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<Done | null>(null);
 
@@ -100,33 +115,63 @@ export function PurchaseClient({
   async function submit() {
     if (!investor || !fund) return;
     setError(null);
-
-    if (totalBytes > MAX_TOTAL_BYTES) {
-      setError(
-        `The two attachments come to ${mb(totalBytes)}. One order can carry at most ${mb(MAX_TOTAL_BYTES)} in total. Re-save them as JPG or a smaller PDF and attach them again.`,
-      );
-      return;
-    }
-
     setBusy(true);
-    const fd = new FormData();
-    fd.set("investorCode", investor.investorCode);
-    fd.set("fundCode", fund.code);
-    fd.set("amount", String(actualAmount));
-    fd.set("paymentSlip", paymentSlip!);
-    fd.set("instruction", instruction!);
+
+    // Both attachments go STRAIGHT to storage, one at a time and each with its
+    // own retries, instead of riding along inside this POST. Bundling them was
+    // the same all-or-nothing delivery that was costing agents whole
+    // onboarding registrations on a weak link. Already-uploaded documents are
+    // kept in `sent` so pressing Confirm again re-sends only what failed.
+    const files: Array<[key: "paymentSlip" | "instruction", label: string, file: File]> = [
+      ["paymentSlip", "The deposit slip", paymentSlip!],
+      ["instruction", "The client's instruction", instruction!],
+    ];
+    for (const [key, label, file] of files) {
+      if (sent.current[key]?.file === file) continue;
+      setUploading(label);
+      try {
+        sent.current[key] = {
+          ref: await uploadKycDocument(file, (attempt) => setUploadRetry({ label, attempt })),
+          file,
+        };
+        setUploadRetry(null);
+      } catch (e) {
+        setUploading(null);
+        setUploadRetry(null);
+        setBusy(false);
+        setError(
+          `${label} could not be uploaded (${
+            e instanceof Error ? e.message : "upload failed"
+          }). Nothing was saved — press “Confirm Order” to try again; anything already uploaded will not be sent twice.`,
+        );
+        return;
+      }
+    }
+    setUploading(null);
 
     let res: Response;
     try {
-      res = await fetch("/api/agent/purchase", { method: "POST", body: fd });
+      res = await fetch("/api/agent/purchase", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          investorCode: investor.investorCode,
+          fundCode: fund.code,
+          amount: actualAmount,
+          documents: {
+            paymentSlip: sent.current.paymentSlip?.ref,
+            instruction: sent.current.instruction?.ref,
+          },
+        }),
+      });
     } catch (e) {
-      // Never leave the button spinning: a killed upload rejects here, and an
+      // Never leave the button spinning: a killed request rejects here, and an
       // unguarded await would strand the agent with no message at all.
       setBusy(false);
       setError(
         `The order could not be sent — the connection dropped before the server answered (${
           e instanceof Error ? e.message : "network error"
-        }). Nothing was saved. Check you are online and try again.`,
+        }). Nothing was saved. Your documents are already uploaded, so pressing “Confirm Order” again only resends the order itself.`,
       );
       return;
     }
@@ -196,6 +241,8 @@ export function PurchaseClient({
           </a>
           <button
             onClick={() => {
+              // A different order — its evidence is its own.
+              sent.current = {};
               setDone(null);
               setStep(0);
               setFundCode("");
@@ -222,6 +269,26 @@ export function PurchaseClient({
   return (
     <div className="space-y-5">
       <Stepper current={step} />
+
+      {uploading && (
+        <p
+          role="status"
+          className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
+        >
+          Uploading {uploading}… Each document is sent on its own, so a dropped connection only
+          costs this one.
+        </p>
+      )}
+
+      {uploadRetry && (
+        <p
+          role="status"
+          className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+        >
+          The connection dropped while sending {uploadRetry.label}. Trying again — attempt{" "}
+          {uploadRetry.attempt} of {UPLOAD_ATTEMPTS}. Stay on this page.
+        </p>
+      )}
 
       {error && (
         <p
@@ -364,24 +431,16 @@ export function PurchaseClient({
           </Field>
 
           {totalBytes > 0 && (
-            <p
-              className={
-                totalBytes > MAX_TOTAL_BYTES
-                  ? "text-sm font-medium text-red-700 dark:text-red-300"
-                  : "text-sm text-zinc-600 dark:text-zinc-400"
-              }
-            >
-              Attachments: {mb(totalBytes)} of {mb(MAX_TOTAL_BYTES)}
-              {totalBytes > MAX_TOTAL_BYTES
-                ? " — too large to send. Re-save them smaller and attach again."
-                : null}
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Attachments: {mb(totalBytes)} across 2 slots. Large photos are shrunk in your browser,
+              and each is sent on its own, so a dropped connection only costs that one.
             </p>
           )}
 
           <Actions
             back={() => setStep(1)}
             next="Next Step"
-            nextDisabled={!instruction || totalBytes > MAX_TOTAL_BYTES}
+            nextDisabled={!instruction}
             onNext={() => setStep(3)}
           />
         </Card>

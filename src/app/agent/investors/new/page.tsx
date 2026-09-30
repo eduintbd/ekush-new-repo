@@ -1,10 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@supabase/supabase-js";
-import { compressImage } from "@/lib/image-compress";
+import { UPLOAD_ATTEMPTS, uploadKycDocument, type UploadedRef } from "@/lib/kyc-direct-upload";
 
 // Every file slot on the form, in the order the server reports failures in.
 const FILE_FIELDS = [
@@ -19,67 +18,42 @@ const FILE_FIELDS = [
   ["nomineeNidBack", "Nominee NID — back"],
 ] as const;
 
-// Anonymous client, used only to PUT a file at a signed URL the server minted.
-// No session and no service key ever reach the browser; the signed token is
-// single-use and scoped to one object key.
-const storage = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
-  { auth: { persistSession: false, autoRefreshToken: false } },
-);
+// Documents already uploaded are remembered across a page RELOAD, not just
+// across a failed submit. A browser will not let us restore the files chosen
+// in a file input, so without this an agent who reloads re-picks all nine and
+// re-sends the ones already sitting in storage — which is how 658 orphaned raw
+// documents accumulated. sessionStorage keeps the keys; the slots then render
+// as "Already uploaded" instead of demanding the file again.
+const STORE_KEY = "agent-onboarding-uploads";
+// Long enough to survive a lunch break, short enough that a forgotten tab
+// cannot file yesterday's documents against today's investor.
+const STORE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
-/** Abort rather than hang for ever if a single upload stalls. */
-async function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
-  });
+type StoredDocs = Record<string, UploadedRef>;
+
+function loadStoredDocs(): StoredDocs {
   try {
-    return await Promise.race([work, timeout]);
-  } finally {
-    clearTimeout(timer!);
+    const raw = sessionStorage.getItem(STORE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as { savedAt?: number; docs?: StoredDocs };
+    if (!parsed?.savedAt || Date.now() - parsed.savedAt > STORE_MAX_AGE_MS) {
+      sessionStorage.removeItem(STORE_KEY);
+      return {};
+    }
+    return parsed.docs ?? {};
+  } catch {
+    return {};
   }
 }
 
-/**
- * Shrink one document and send it STRAIGHT to storage, returning the key the
- * registration will reference.
- *
- * This is the change that fixes the agent onboarding failures. The form used
- * to bundle all nine files into one multipart POST through Vercel, which had
- * to arrive whole or not at all — one interruption on a mobile link cost the
- * entire registration, and it was failing at 291 KB, so size was never the
- * problem. Nine independent uploads mean a dropped connection costs one small
- * file, which is retried on its own.
- *
- * Investors registering themselves never hit this because the portal already
- * works this way; this is the same pattern brought across.
- */
-async function uploadOne(field: string, file: File): Promise<{ key: string; name: string }> {
-  const small = await compressImage(file);
-
-  const res = await withTimeout(
-    fetch("/api/agent/investors/upload-url", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: small.name }),
-    }),
-    30_000,
-    "authorization timed out",
-  );
-  const auth = await res.json().catch(() => ({}));
-  if (!res.ok || !auth?.ok) throw new Error(auth?.error ?? "could not authorize the upload");
-
-  const up = await withTimeout(
-    storage.storage
-      .from("kyc-documents")
-      .uploadToSignedUrl(auth.path, auth.token, small, { contentType: small.type || undefined }),
-    120_000,
-    "upload timed out",
-  );
-  if (up.error) throw new Error(up.error.message || "upload failed");
-
-  return { key: auth.path as string, name: small.name };
+function saveStoredDocs(docs: StoredDocs): void {
+  try {
+    if (Object.keys(docs).length === 0) sessionStorage.removeItem(STORE_KEY);
+    else sessionStorage.setItem(STORE_KEY, JSON.stringify({ savedAt: Date.now(), docs }));
+  } catch {
+    // Private mode, or quota. Uploading still works; it just will not survive
+    // a reload, which is exactly where we were before.
+  }
 }
 
 const INVESTOR_TYPES = [
@@ -187,7 +161,15 @@ export default function NewInvestorPage() {
   // Documents already safely in storage, keyed by form field. Survives a
   // failed submit so a retry re-uploads only what actually failed. Cleared by
   // "Register another" — a new investor must not inherit these.
-  const uploaded = useRef<Record<string, { key: string; name: string }>>({});
+  const uploaded = useRef<StoredDocs>({});
+  // A ref cannot drive rendering, and the slots must show what is already
+  // stored, so the same map is mirrored into state. Written only through
+  // remember/forget/clearUploads below, never directly, so the ref, the render
+  // and sessionStorage can never disagree.
+  const [storedDocs, setStoredDocs] = useState<StoredDocs>({});
+  // "Connection dropped — retrying NID — front (2 of 3)…" while a single
+  // document is being re-attempted, so a retry does not look like a freeze.
+  const [uploadRetry, setUploadRetry] = useState<{ label: string; attempt: number } | null>(null);
   // "Uploading NID — front (3 of 9)…", so nine sequential uploads read as
   // progress rather than a frozen button.
   const [uploading, setUploading] = useState<{ done: number; total: number; label: string } | null>(
@@ -196,6 +178,38 @@ export default function NewInvestorPage() {
   // Live weight of the chosen files, shown so an agent can see at a glance
   // that a 6 MB scan is about to be slow.
   const [totalBytes, setTotalBytes] = useState(0);
+
+  // Rehydrate after mount only — reading sessionStorage during render would
+  // give the server and client different HTML and break hydration.
+  useEffect(() => {
+    const docs = loadStoredDocs();
+    if (Object.keys(docs).length > 0) {
+      uploaded.current = docs;
+      setStoredDocs(docs);
+    }
+  }, []);
+
+  function remember(field: string, ref: UploadedRef): void {
+    uploaded.current = { ...uploaded.current, [field]: ref };
+    setStoredDocs(uploaded.current);
+    saveStoredDocs(uploaded.current);
+  }
+
+  /** Agent wants to swap a document out — drop the stored one and show the picker again. */
+  function forget(field: string): void {
+    const { [field]: _dropped, ...rest } = uploaded.current;
+    uploaded.current = rest;
+    setStoredDocs(rest);
+    saveStoredDocs(rest);
+  }
+
+  /** After a filed registration, and before a new one. One investor's
+   *  documents must never carry over to the next. */
+  function clearUploads(): void {
+    uploaded.current = {};
+    setStoredDocs({});
+    saveStoredDocs({});
+  }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -224,14 +238,27 @@ export default function NewInvestorPage() {
       const file = fd.get(field) as File;
       setUploading({ done: i, total: pending.length, label });
       try {
-        uploaded.current[field] = await uploadOne(field, file);
+        remember(
+          field,
+          await uploadKycDocument(file, (attempt) => setUploadRetry({ label, attempt })),
+        );
+        setUploadRetry(null);
       } catch (err) {
         setUploading(null);
+        setUploadRetry(null);
         setBusy(false);
+        // Say how many are genuinely stored. The old text claimed uploads were
+        // "remembered" even when the very first one had failed and there were
+        // none, which read as though work had been saved when it had not.
+        const stored = Object.keys(uploaded.current).length;
         setError(
           `${label} could not be uploaded (${
             err instanceof Error ? err.message : "upload failed"
-          }). Nothing was saved, and the documents that did upload are remembered — press “Submit for approval” again and only this one will be retried.`,
+          }). Nothing was saved. ${
+            stored > 0
+              ? `${stored} of ${FILE_FIELDS.length} documents are already stored and will not be sent again — press “Submit for approval” to retry only what is left.`
+              : `No documents got through, so this is the connection rather than the file — check you are online and press “Submit for approval” again. This slot is simply the first in the queue, not the problem.`
+          }`,
         );
         return;
       }
@@ -300,6 +327,9 @@ export default function NewInvestorPage() {
     }
     // Prefer the bare reference (S00001-260806-K3F9); fall back to the temp
     // code for a server that predates it.
+    // Filed. These documents now belong to a real registration; keeping the
+    // keys would let a reload attach them to somebody else.
+    clearUploads();
     setDoneCode(data.reference ?? data.tempCode ?? "");
   }
 
@@ -339,7 +369,7 @@ export default function NewInvestorPage() {
                 submissionKey.current = null;
                 // The next investor's documents are their own — carrying these
                 // over would file one person's NID against another.
-                uploaded.current = {};
+                clearUploads();
                 setDoneCode(null);
                 router.refresh();
               }}
@@ -404,11 +434,11 @@ export default function NewInvestorPage() {
           </Section>
 
           <Section title="Documents">
-            <FileField name="photo" label="Photograph (passport size)" />
-            <FileField name="signature" label="Signature" />
-            <FileField name="nidFront" label="NID — front" />
-            <FileField name="nidBack" label="NID — back" />
-            <FileField name="tinCert" label="e-TIN certificate (image or PDF)" />
+            <FileField name="photo" label="Photograph (passport size)" uploadedName={storedDocs["photo"]?.name} onReplace={() => forget("photo")} />
+            <FileField name="signature" label="Signature" uploadedName={storedDocs["signature"]?.name} onReplace={() => forget("signature")} />
+            <FileField name="nidFront" label="NID — front" uploadedName={storedDocs["nidFront"]?.name} onReplace={() => forget("nidFront")} />
+            <FileField name="nidBack" label="NID — back" uploadedName={storedDocs["nidBack"]?.name} onReplace={() => forget("nidBack")} />
+            <FileField name="tinCert" label="e-TIN certificate (image or PDF)" uploadedName={storedDocs["tinCert"]?.name} onReplace={() => forget("tinCert")} />
           </Section>
 
           <Section title="Bank account (optional)">
@@ -416,16 +446,16 @@ export default function NewInvestorPage() {
             <Field name="branchName" label="Branch" />
             <Field name="accountNumber" label="Account number" />
             <Field name="routingNumber" label="Routing number" />
-            <FileField name="chequeLeafPhoto" label="Cheque leaf (image or PDF)" />
+            <FileField name="chequeLeafPhoto" label="Cheque leaf (image or PDF)" uploadedName={storedDocs["chequeLeafPhoto"]?.name} onReplace={() => forget("chequeLeafPhoto")} />
           </Section>
 
           <Section title="Nominee (optional)">
             <Field name="nomineeName" label="Nominee name" />
             <Field name="nomineeRelationship" label="Relationship" />
             <Field name="nomineeNidNumber" label="Nominee NID" />
-            <FileField name="nomineePhoto" label="Nominee photo" />
-            <FileField name="nomineeNidFront" label="Nominee NID — front" />
-            <FileField name="nomineeNidBack" label="Nominee NID — back" />
+            <FileField name="nomineePhoto" label="Nominee photo" uploadedName={storedDocs["nomineePhoto"]?.name} onReplace={() => forget("nomineePhoto")} />
+            <FileField name="nomineeNidFront" label="Nominee NID — front" uploadedName={storedDocs["nomineeNidFront"]?.name} onReplace={() => forget("nomineeNidFront")} />
+            <FileField name="nomineeNidBack" label="Nominee NID — back" uploadedName={storedDocs["nomineeNidBack"]?.name} onReplace={() => forget("nomineeNidBack")} />
           </Section>
 
           {totalBytes > 0 && (
@@ -442,6 +472,17 @@ export default function NewInvestorPage() {
             >
               Uploading {uploading.label} ({uploading.done + 1} of {uploading.total})… Each document
               is sent on its own, so a dropped connection only costs this one.
+            </p>
+          )}
+
+          {uploadRetry && (
+            <p
+              role="status"
+              className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+            >
+              The connection dropped while sending {uploadRetry.label}. Trying that document again
+              — attempt {uploadRetry.attempt} of {UPLOAD_ATTEMPTS}. Everything already uploaded is
+              safe. Stay on this page.
             </p>
           )}
 
@@ -541,7 +582,35 @@ function Select({
   );
 }
 
-function FileField({ name, label }: { name: string; label: string }) {
+function FileField({
+  name,
+  label,
+  uploadedName,
+  onReplace,
+}: {
+  name: string;
+  label: string;
+  /** Set when this document is already in storage from an earlier attempt. */
+  uploadedName?: string;
+  onReplace?: () => void;
+}) {
+  // Already stored: show it as done rather than an empty picker. A browser
+  // cannot repopulate a file input after a reload, so an empty box here would
+  // tell the agent to find and send the file a second time when it is already
+  // safely uploaded.
+  if (uploadedName) {
+    return (
+      <div className="block text-sm">
+        <span className="mb-1 block text-zinc-600 dark:text-zinc-400">{label}</span>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+          <span className="truncate">Uploaded &#10003; {uploadedName}</span>
+          <button type="button" onClick={onReplace} className="shrink-0 underline">
+            Replace
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
     <label className="block text-sm">
       <span className="mb-1 block text-zinc-600 dark:text-zinc-400">{label}</span>

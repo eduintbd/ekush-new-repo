@@ -1,27 +1,32 @@
-// POST /api/agent/investors/upload-url — mint a one-time signed URL so the
-// browser uploads one KYC document straight to the private kyc-documents
-// bucket, instead of bundling all nine into the registration POST.
+// POST /api/agent/kyc/upload-url — mint a one-time signed URL so the browser
+// uploads one KYC document straight to the private kyc-documents bucket,
+// instead of bundling attachments into the submission itself.
 //
-// WHY THIS EXISTS. Agents were losing whole registrations to "Failed to
-// fetch". The form sent nine files as ONE multipart POST through Vercel, which
-// had to arrive complete or not at all; on a Bangladeshi mobile link that
-// single long upload is the fragile part, and one interruption cost every
-// field and every file. It failed at 291 KB — size was never the issue, the
-// all-or-nothing delivery was.
+// Shared by all three agent flows: onboarding, Buy Fund and Sell. It was
+// originally /api/agent/investors/upload-url and served onboarding alone; that
+// path still exists and delegates here, so a browser tab left open on the old
+// page keeps working.
+//
+// WHY THIS EXISTS. Agents were losing whole submissions to "Failed to fetch".
+// A form sent every file as ONE multipart POST through Vercel, which had to
+// arrive complete or not at all; on a Bangladeshi mobile link that single long
+// upload is the fragile part, and one interruption cost every field and every
+// file. It failed at 291 KB — size was never the issue, the all-or-nothing
+// delivery was.
 //
 // Investors registering themselves on the portal never hit this, because the
 // portal already solved it exactly this way (see its
 // /api/auth/register/blob-upload): compress in the browser, send each file
-// direct to storage, then post JSON carrying only the keys. This is that
-// pattern brought over to the agent flow. A dropped connection now costs one
-// small file, retried on its own, instead of the whole registration.
+// direct to storage, then post JSON carrying only the keys. A dropped
+// connection now costs one small file, which lib/kyc-direct-upload.ts retries
+// on its own.
 //
-// Unlike the portal's version this one is NOT public: agent onboarding is
-// behind a login, so the agent session is required. The real content gate is
-// still server-side — finalizeKycUpload() reads each file back, magic-byte
-// checks it, re-encodes through sharp and writes the sanitized copy. Files
-// here land under `kyc-inbox/` and are deleted once finalized, so an
-// unsanitized upload never persists.
+// Unlike the portal's version this one is NOT public: agent flows are behind a
+// login, so the agent session is required. The real content gate is still
+// server-side — finalizeKycUpload() reads each file back, magic-byte checks
+// it, re-encodes through sharp and writes the sanitized copy. Files here land
+// under `kyc-inbox/` and are deleted once finalized, so an unsanitized upload
+// never persists.
 
 import { randomUUID } from "crypto";
 import type { NextRequest } from "next/server";

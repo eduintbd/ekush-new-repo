@@ -13,7 +13,7 @@
 
 import { NextResponse } from "next/server";
 import { getAgentScope } from "@/lib/agent-scope";
-import { uploadKycFile, KycUploadError } from "@/lib/kyc-upload";
+import { finalizeKycUpload, uploadKycFile, KycUploadError } from "@/lib/kyc-upload";
 import {
   createAgentPurchase,
   listPurchaseInvestors,
@@ -30,23 +30,59 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "Not linked to an agent record." }, { status: 403 });
   }
 
-  let form: FormData;
-  try {
-    form = await req.formData();
-  } catch {
-    return NextResponse.json({ error: "Invalid form submission." }, { status: 400 });
+  // Two shapes accepted, on purpose.
+  //
+  //   JSON      — the browser already put both documents in kyc-inbox/ and
+  //               sends only their keys. This is what the form does now, and
+  //               it is why a dropped connection costs one small file rather
+  //               than the whole order.
+  //   multipart — the files ride in this request, as they used to.
+  //
+  // The old shape stays supported so a browser tab left open on the previous
+  // bundle keeps working, and so a rollback is client-side only. Neither path
+  // is trusted more than the other: both go through the identical magic-byte,
+  // size, PDF-allowlist and sharp re-encode gate below.
+  type Ref = { key: string; name: string };
+  let investorCode: string;
+  let fundCode: string;
+  let amount: number;
+  let slip: File | null = null;
+  let instruction: File | null = null;
+  let slipRef: Ref | null = null;
+  let instructionRef: Ref | null = null;
+
+  if ((req.headers.get("content-type") ?? "").includes("application/json")) {
+    const body = (await req.json().catch(() => ({}))) as {
+      investorCode?: string;
+      fundCode?: string;
+      amount?: unknown;
+      documents?: { paymentSlip?: Ref; instruction?: Ref };
+    };
+    investorCode = String(body.investorCode ?? "").trim();
+    fundCode = String(body.fundCode ?? "").trim();
+    amount = Number(body.amount ?? 0);
+    slipRef = body.documents?.paymentSlip ?? null;
+    instructionRef = body.documents?.instruction ?? null;
+  } else {
+    let form: FormData;
+    try {
+      form = await req.formData();
+    } catch {
+      return NextResponse.json({ error: "Invalid form submission." }, { status: 400 });
+    }
+    investorCode = String(form.get("investorCode") ?? "").trim();
+    fundCode = String(form.get("fundCode") ?? "").trim();
+    amount = Number(form.get("amount") ?? "0");
+    const s1 = form.get("paymentSlip");
+    const s2 = form.get("instruction");
+    slip = s1 instanceof File && s1.size > 0 ? s1 : null;
+    instruction = s2 instanceof File && s2.size > 0 ? s2 : null;
   }
 
-  const investorCode = String(form.get("investorCode") ?? "").trim();
-  const fundCode = String(form.get("fundCode") ?? "").trim();
-  const amount = Number(form.get("amount") ?? "0");
-  const slip = form.get("paymentSlip");
-  const instruction = form.get("instruction");
-
-  if (!(slip instanceof File) || slip.size === 0) {
+  if (!slip && !slipRef) {
     return NextResponse.json({ error: "The bank deposit slip is required." }, { status: 400 });
   }
-  if (!(instruction instanceof File) || instruction.size === 0) {
+  if (!instruction && !instructionRef) {
     return NextResponse.json(
       { error: "The client's written instruction to purchase is required." },
       { status: 400 },
@@ -78,17 +114,30 @@ export async function POST(req: Request): Promise<NextResponse> {
   let paymentSlipPath: string;
   let instructionUpload: { filePath: string; fileName: string; mimeType: string };
   try {
-    const slipUp = await uploadKycFile(slip, {
-      investorId,
-      docType: "PAYMENT_SLIP",
-      pathPrefix: "payment-slips",
-    });
+    const slipUp = slipRef
+      ? await finalizeKycUpload(slipRef.key, {
+          investorId,
+          docType: "PAYMENT_SLIP",
+          pathPrefix: "payment-slips",
+          displayName: slipRef.name,
+        })
+      : await uploadKycFile(slip as File, {
+          investorId,
+          docType: "PAYMENT_SLIP",
+          pathPrefix: "payment-slips",
+        });
     paymentSlipPath = slipUp.filePath;
 
-    const insUp = await uploadKycFile(instruction, {
-      investorId,
-      docType: "AGENT_PURCHASE_INSTRUCTION",
-    });
+    const insUp = instructionRef
+      ? await finalizeKycUpload(instructionRef.key, {
+          investorId,
+          docType: "AGENT_PURCHASE_INSTRUCTION",
+          displayName: instructionRef.name,
+        })
+      : await uploadKycFile(instruction as File, {
+          investorId,
+          docType: "AGENT_PURCHASE_INSTRUCTION",
+        });
     instructionUpload = {
       filePath: insUp.filePath,
       fileName: insUp.displayName,
