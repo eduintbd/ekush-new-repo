@@ -44,9 +44,20 @@ function isPublic(pathname: string): boolean {
   );
 }
 
+// Requests that never carry or need a session: skip the auth call entirely.
+function needsNoSession(pathname: string): boolean {
+  return (
+    pathname === "/service-unavailable" ||
+    pathname.startsWith("/api/health") ||
+    pathname.startsWith("/api/cron/")
+  );
+}
+
 export async function middleware(req: NextRequest) {
-  const { res, user, authUnavailable } = await updateSupabaseSession(req);
   const { pathname } = req.nextUrl;
+  if (needsNoSession(pathname)) return NextResponse.next();
+
+  const { res, user, authUnavailable } = await updateSupabaseSession(req);
 
   // Auth service unreachable (2026-08-28 GoTrue outage). We cannot tell a
   // valid session from an expired one, so redirecting to a login page would
@@ -137,6 +148,6 @@ function keepCookies<T extends NextResponse>(out: T, from: NextResponse): T {
 export const config = {
   matcher: [
     // All routes except Next.js internals + static assets
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|woff2?)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?|css|js|map|txt)$).*)",
   ],
 };
