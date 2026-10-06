@@ -2,6 +2,7 @@
 // Supabase Auth owns identity; the Profile row owns role + activation;
 // Supabase MFA owns the AAL elevation for admin/accountant.
 
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
@@ -39,7 +40,24 @@ export type ProfileOutcome =
   | { status: "anonymous" }
   | { status: "auth_unavailable" };
 
-export async function getProfileOutcome(): Promise<ProfileOutcome> {
+type ClaimsOutcome =
+  | { status: "ok"; claims: { sub: string; aal?: string } }
+  | { status: "anonymous" }
+  | { status: "auth_unavailable" };
+
+/**
+ * The signed-in user's verified JWT claims, once per request.
+ *
+ * getClaims() checks the token's signature and expiry locally against the
+ * project's published ES256 key, so it is not a round trip to Supabase Auth
+ * the way getUser() is. 2026-10-06: the portal and this app share one Nano
+ * Supabase project, and getUser() on every guard (layout + page + each
+ * require*()) was most of the /auth/v1/user traffic that overloaded it. The
+ * middleware still calls getUser() on each real navigation, and the role and
+ * activation come from the Profile row below, so nothing here relies on
+ * possibly-stale token metadata.
+ */
+const getClaimsOutcome = cache(async function getClaimsOutcome(): Promise<ClaimsOutcome> {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
     return { status: "anonymous" };
   }
@@ -50,7 +68,7 @@ export async function getProfileOutcome(): Promise<ProfileOutcome> {
     return { status: "anonymous" };
   }
 
-  const result = await withAuthDeadline(supabase.auth.getUser());
+  const result = await withAuthDeadline(supabase.auth.getClaims());
   if (result.status === "timeout") return { status: "auth_unavailable" };
   if (result.status === "error") {
     if (isAuthUnavailable(result.error)) return { status: "auth_unavailable" };
@@ -59,7 +77,15 @@ export async function getProfileOutcome(): Promise<ProfileOutcome> {
 
   const { data, error } = result.value;
   if (error && isAuthUnavailable(error)) return { status: "auth_unavailable" };
-  if (!data.user) return { status: "anonymous" };
+  if (error || !data?.claims?.sub) return { status: "anonymous" };
+  return { status: "ok", claims: { sub: data.claims.sub, aal: data.claims.aal as string | undefined } };
+});
+
+/** Cached per request: layout, page and every require*() share one lookup. */
+export const getProfileOutcome = cache(async function getProfileOutcome(): Promise<ProfileOutcome> {
+  const claims = await getClaimsOutcome();
+  if (claims.status !== "ok") return claims;
+  const data = { user: { id: claims.claims.sub } };
 
   // The user IS signed in at this point. A failed profile read is a database
   // problem, not a sign-out: treating it as "anonymous" sent agents with a
@@ -79,7 +105,7 @@ export async function getProfileOutcome(): Promise<ProfileOutcome> {
     }
   }
   return { status: "auth_unavailable" };
-}
+});
 
 const STAFF_ROLES: ReadonlyArray<UserRole> = ["admin", "checker", "accountant", "auditor"];
 
@@ -150,7 +176,16 @@ export async function requireRole(roles: ReadonlyArray<UserRole>): Promise<Curre
   return p;
 }
 
+/** A verified token at aal2 means MFA was completed this session — and
+ *  aal2 is impossible without a verified factor — so the factor list (a
+ *  getUser() round trip inside listFactors) is only needed below aal2. */
+async function isSteppedByToken(): Promise<boolean> {
+  const c = await getClaimsOutcome();
+  return c.status === "ok" && c.claims.aal === "aal2";
+}
+
 async function enforceMfa(challengePath: string): Promise<void> {
+  if (await isSteppedByToken()) return;
   const supabase = await createSupabaseServerClient();
   const status = await getMfaStatus(supabase);
   if (!hasVerifiedFactor(status)) {
@@ -162,6 +197,7 @@ async function enforceMfa(challengePath: string): Promise<void> {
 }
 
 async function enforceMfaOptional(challengePath: string): Promise<void> {
+  if (await isSteppedByToken()) return;
   const supabase = await createSupabaseServerClient();
   const status = await getMfaStatus(supabase);
   if (hasVerifiedFactor(status) && !isStepped(status)) {
